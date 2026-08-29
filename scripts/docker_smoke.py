@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import urllib.error
 import urllib.request
 
 from mcp import Client
@@ -25,6 +26,24 @@ def check_health() -> None:
     assert payload["version"] == EXPECTED_VERSION["version"], payload
 
 
+def check_rebinding_protection() -> None:
+    request = urllib.request.Request(
+        f"{BASE_URL}/mcp",
+        data=b"{}",
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Host": "untrusted.example",
+        },
+    )
+    try:
+        urllib.request.urlopen(request, timeout=5)
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 421, exc
+    else:
+        raise AssertionError("MCP transport accepted an untrusted Host header")
+
+
 async def check_mcp() -> None:
     async with Client(f"{BASE_URL}/mcp") as client:
         tools = await client.list_tools()
@@ -38,6 +57,7 @@ async def check_mcp() -> None:
 
 def main() -> None:
     check_health()
+    check_rebinding_protection()
     asyncio.run(check_mcp())
     print("DOCKER_SMOKE_PASS")
 
