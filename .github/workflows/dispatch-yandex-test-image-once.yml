@@ -1,4 +1,4 @@
-name: Dispatch approved Yandex TEST image once
+name: Dispatch OIDC subject diagnostic once
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Dispatch exact approved manual publish workflow
+      - name: Dispatch OIDC diagnostic workflow
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -31,18 +31,8 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
-            'https://api.github.com/repos/alexpmtk-afk/birzha-mcp-forecast/actions/workflows/publish-yandex-test-image.yml/dispatches' \
-            -d '{"ref":"main","inputs":{"approval":"PUBLISH_APPROVED_IMAGE"}}')"
+            'https://api.github.com/repos/alexpmtk-afk/birzha-mcp-forecast/actions/workflows/diagnose-yandex-oidc-subject.yml/dispatches' \
+            -d '{"ref":"main"}')"
           [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]] || { echo "Workflow dispatch failed with HTTP ${HTTP_CODE}" >&2; exit 1; }
-          if [[ -s "$RESPONSE_FILE" ]]; then
-            python - "$RESPONSE_FILE" <<'PY'
-          import json, sys
-          from pathlib import Path
-          data=json.loads(Path(sys.argv[1]).read_text())
-          print('workflow_run_id=' + str(data.get('workflow_run_id','accepted')))
-          print('WORKFLOW_DISPATCH_ACCEPTED')
-          PY
-          else
-            echo 'WORKFLOW_DISPATCH_ACCEPTED'
-          fi
+          echo 'OIDC_DIAGNOSTIC_DISPATCH_ACCEPTED'
           rm -f "$RESPONSE_FILE"
