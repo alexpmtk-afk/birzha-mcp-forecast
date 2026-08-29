@@ -1,0 +1,320 @@
+name: Publish Yandex TEST image
+
+on:
+  workflow_dispatch:
+    inputs:
+      approval:
+        description: "Explicit publish approval gate"
+        required: true
+        type: choice
+        default: DO_NOT_PUBLISH
+        options:
+          - DO_NOT_PUBLISH
+          - PUBLISH_APPROVED_IMAGE
+
+permissions:
+  contents: read
+
+env:
+  APPROVED_SOURCE_SHA: e8463b8a034b2a7ed92ac06894ce960d9fa3a021
+  REGISTRY_ID: crpk5qvf4p7kcqil2u3v
+  PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
+  IMAGE_NAME: birzha-mcp-forecast
+  EXPECTED_YC_CLI_VERSION: "1.22.0"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Guard manual approval and capture workflow control SHA
+        shell: bash
+        env:
+          APPROVAL_INPUT: ${{ inputs.approval }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "workflow_dispatch" ]]; then
+            echo "Refusing non-manual invocation" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "Refusing publish workflow outside refs/heads/main" >&2
+            exit 1
+          fi
+          if [[ "${APPROVAL_INPUT}" != "PUBLISH_APPROVED_IMAGE" ]]; then
+            echo "Explicit PUBLISH_APPROVED_IMAGE approval was not supplied" >&2
+            exit 1
+          fi
+          echo "WORKFLOW_CONTROL_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+
+      - name: Checkout exact approved application source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.APPROVED_SOURCE_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Assert exact source and immutable target coordinates
+        shell: bash
+        run: |
+          set -euo pipefail
+          ACTUAL_SOURCE_SHA="$(git rev-parse HEAD)"
+          if [[ "$ACTUAL_SOURCE_SHA" != "$APPROVED_SOURCE_SHA" ]]; then
+            echo "Checked-out source SHA does not match the approved source SHA" >&2
+            exit 1
+          fi
+          if [[ "$REGISTRY_ID" != "crpk5qvf4p7kcqil2u3v" ]]; then
+            echo "Unexpected Registry ID" >&2
+            exit 1
+          fi
+          if [[ "$PUBLISHER_SERVICE_ACCOUNT_ID" != "ajessiopotr4eq1g2c2v" ]]; then
+            echo "Unexpected publisher service account ID" >&2
+            exit 1
+          fi
+          TARGET_IMAGE="cr.yandex/${REGISTRY_ID}/${IMAGE_NAME}:git-${APPROVED_SOURCE_SHA}"
+          EXPECTED_TARGET="cr.yandex/crpk5qvf4p7kcqil2u3v/birzha-mcp-forecast:git-e8463b8a034b2a7ed92ac06894ce960d9fa3a021"
+          if [[ "$TARGET_IMAGE" != "$EXPECTED_TARGET" ]]; then
+            echo "Target image does not match the approved immutable tag" >&2
+            exit 1
+          fi
+          echo "TARGET_IMAGE=$TARGET_IMAGE" >> "$GITHUB_ENV"
+          echo "LOCAL_IMAGE=birzha-mcp-forecast:source-${APPROVED_SOURCE_SHA}" >> "$GITHUB_ENV"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
+
+      - name: Run pytest acceptance
+        run: python -m pytest -q
+
+      - name: Compile Python sources
+        run: python -m compileall -q src tests scripts
+
+      - name: Build Docker image from exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull \
+            --label "org.opencontainers.image.revision=${APPROVED_SOURCE_SHA}" \
+            -t "$LOCAL_IMAGE" .
+
+      - name: Run Docker acceptance container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -d \
+            --name birzha-mcp-forecast-publish-smoke \
+            -p 8080:8080 \
+            "$LOCAL_IMAGE"
+
+      - name: Verify health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs birzha-mcp-forecast-publish-smoke
+          exit 1
+
+      - name: Verify MCP transport, tools, version and Host rejection
+        run: python scripts/docker_smoke.py
+
+      - name: Stop acceptance container before authentication
+        run: docker stop birzha-mcp-forecast-publish-smoke
+
+      - name: Install exact Yandex Cloud CLI binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          YC_DIR="$RUNNER_TEMP/yc-cli"
+          YC_BIN="$YC_DIR/yc"
+          mkdir -p "$YC_DIR"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 5 \
+            "https://storage.yandexcloud.net/yandexcloud-yc/release/${EXPECTED_YC_CLI_VERSION}/linux/amd64/yc" \
+            --output "$YC_BIN"
+          chmod 0755 "$YC_BIN"
+          ACTUAL_YC_VERSION="$($YC_BIN version --semantic)"
+          if [[ "$ACTUAL_YC_VERSION" != "$EXPECTED_YC_CLI_VERSION" ]]; then
+            echo "Unexpected Yandex Cloud CLI version" >&2
+            exit 1
+          fi
+          echo "YC_BIN=$YC_BIN" >> "$GITHUB_ENV"
+
+      - name: Authenticate as dedicated publisher, push and resolve Yandex digest
+        id: publish_image
+        shell: bash
+        env:
+          YC_PUBLISHER_KEY_JSON: ${{ secrets.BIRZHA_YC_PUBLISHER_KEY_JSON }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${YC_PUBLISHER_KEY_JSON:-}" ]]; then
+            echo "Dedicated publisher credential secret is not configured" >&2
+            exit 1
+          fi
+
+          KEY_FILE="$RUNNER_TEMP/birzha-publisher-key.json"
+          YC_PROFILE_HOME="$RUNNER_TEMP/yc-profile-home"
+          DOCKER_CONFIG_DIR="$RUNNER_TEMP/docker-config"
+          mkdir -p "$YC_PROFILE_HOME" "$DOCKER_CONFIG_DIR"
+          chmod 0700 "$YC_PROFILE_HOME" "$DOCKER_CONFIG_DIR"
+          umask 077
+          printf '%s' "$YC_PUBLISHER_KEY_JSON" > "$KEY_FILE"
+          chmod 0600 "$KEY_FILE"
+
+          ACTUAL_SA_ID="$(python - "$KEY_FILE" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          data = json.loads(Path(sys.argv[1]).read_text())
+          print(data.get("service_account_id", ""))
+          PY
+          )"
+          if [[ "$ACTUAL_SA_ID" != "$PUBLISHER_SERVICE_ACCOUNT_ID" ]]; then
+            echo "Credential does not belong to the approved publisher service account" >&2
+            exit 1
+          fi
+
+          HOME="$YC_PROFILE_HOME" "$YC_BIN" config profile create publisher-ci >/dev/null
+          HOME="$YC_PROFILE_HOME" "$YC_BIN" config set service-account-key "$KEY_FILE" >/dev/null
+          IAM_TOKEN="$(HOME="$YC_PROFILE_HOME" "$YC_BIN" iam create-token --no-user-output)"
+          if [[ -z "$IAM_TOKEN" ]]; then
+            echo "Failed to obtain Yandex IAM token" >&2
+            exit 1
+          fi
+          echo "::add-mask::$IAM_TOKEN"
+
+          printf '%s' "$IAM_TOKEN" | \
+            docker --config "$DOCKER_CONFIG_DIR" login \
+              --username iam \
+              --password-stdin \
+              cr.yandex >/dev/null
+          unset IAM_TOKEN
+
+          docker tag "$LOCAL_IMAGE" "$TARGET_IMAGE"
+          docker --config "$DOCKER_CONFIG_DIR" push "$TARGET_IMAGE"
+
+          IMAGE_ID="$(
+            HOME="$YC_PROFILE_HOME" "$YC_BIN" container image list \
+              --registry-id "$REGISTRY_ID" \
+              --repository-name "$REGISTRY_ID/$IMAGE_NAME" \
+              --format json |
+            python -c 'import json,sys; tag="git-" + sys.argv[1]; items=json.load(sys.stdin); matches=[x for x in items if tag in (x.get("tags") or [])]; print(matches[0].get("id", "") if len(matches)==1 else "")' "$APPROVED_SOURCE_SHA"
+          )"
+          if [[ -z "$IMAGE_ID" ]]; then
+            echo "Could not resolve exactly one pushed image from Yandex Registry" >&2
+            exit 1
+          fi
+
+          YANDEX_DIGEST="$(
+            HOME="$YC_PROFILE_HOME" "$YC_BIN" container image get "$IMAGE_ID" --format json |
+            python -c 'import json,sys; print(json.load(sys.stdin).get("digest", ""))'
+          )"
+          if [[ ! "$YANDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Yandex Registry did not return a valid sha256 digest" >&2
+            exit 1
+          fi
+
+          echo "image_id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
+          echo "yandex_digest=$YANDEX_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup publisher authentication material
+        id: cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_FILE="$RUNNER_TEMP/birzha-publisher-key.json"
+          YC_PROFILE_HOME="$RUNNER_TEMP/yc-profile-home"
+          DOCKER_CONFIG_DIR="$RUNNER_TEMP/docker-config"
+
+          if [[ -f "$DOCKER_CONFIG_DIR/config.json" ]]; then
+            docker --config "$DOCKER_CONFIG_DIR" logout cr.yandex >/dev/null
+          fi
+          rm -f "$KEY_FILE"
+          rm -rf "$YC_PROFILE_HOME" "$DOCKER_CONFIG_DIR"
+
+          if [[ -e "$KEY_FILE" || -e "$YC_PROFILE_HOME" || -e "$DOCKER_CONFIG_DIR" ]]; then
+            echo "Credential cleanup verification failed" >&2
+            exit 1
+          fi
+          echo "cleanup=PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Write non-secret publish evidence
+        if: success()
+        shell: bash
+        env:
+          YANDEX_DIGEST: ${{ steps.publish_image.outputs.yandex_digest }}
+          CLEANUP_STATUS: ${{ steps.cleanup.outputs.cleanup }}
+        run: |
+          set -euo pipefail
+          if [[ "$CLEANUP_STATUS" != "PASS" ]]; then
+            echo "Cleanup was not proven" >&2
+            exit 1
+          fi
+          EVIDENCE_DIR="$RUNNER_TEMP/publish-evidence"
+          mkdir -p "$EVIDENCE_DIR"
+          python - "$EVIDENCE_DIR/image-publish-evidence.json" <<'PY'
+          import json
+          import os
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          evidence = {
+              "schema_version": "BIRZHA_MCP_IMAGE_PUBLISH_EVIDENCE_V1",
+              "source_commit_sha": os.environ["APPROVED_SOURCE_SHA"],
+              "workflow_control_sha": os.environ["WORKFLOW_CONTROL_SHA"],
+              "registry_id": os.environ["REGISTRY_ID"],
+              "publisher_service_account_id": os.environ["PUBLISHER_SERVICE_ACCOUNT_ID"],
+              "image_tag": os.environ["TARGET_IMAGE"],
+              "yandex_image_digest": os.environ["YANDEX_DIGEST"],
+              "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+              "acceptance": {
+                  "pytest": "PASS",
+                  "compile": "PASS",
+                  "docker_build": "PASS",
+                  "docker_run": "PASS",
+                  "healthz": "PASS",
+                  "mcp_transport": "PASS",
+                  "tools_list": "PASS",
+                  "system_version": "PASS",
+                  "untrusted_host_421": "PASS",
+              },
+              "cleanup": {
+                  "docker_logout": "PASS",
+                  "publisher_key_file_removed": True,
+                  "docker_config_removed": True,
+                  "yc_profile_removed": True,
+                  "iam_token_persisted": False,
+              },
+          }
+          Path(sys.argv[1]).write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Upload non-secret publish evidence
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: birzha-yandex-test-image-publish-evidence
+          path: ${{ runner.temp }}/publish-evidence/image-publish-evidence.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Final runner cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker stop birzha-mcp-forecast-publish-smoke >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/birzha-publisher-key.json"
+          rm -rf "$RUNNER_TEMP/yc-profile-home" "$RUNNER_TEMP/docker-config"
