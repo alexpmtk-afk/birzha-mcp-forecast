@@ -10,8 +10,10 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from birzha.config import Settings
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
+settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
 
 
@@ -29,11 +31,15 @@ async def healthz(_: Request) -> JSONResponse:
     return JSONResponse({"status": "ok", "service": SERVICE_NAME, "version": VERSION})
 
 
-# Cloud Run terminates traffic behind a managed reverse proxy. The MCP SDK's
-# localhost-only DNS-rebinding default would otherwise reject the public Host header.
-# This M1 skeleton is intentionally unauthenticated and must not be considered a
-# production security posture; auth/host validation is a separate M1 gate.
-transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+# DNS-rebinding protection remains enabled for all HTTP MCP traffic.
+# Local development accepts localhost/127.0.0.1. Remote deployment must explicitly
+# supply the observed Yandex API Gateway Host header through MCP_ALLOWED_HOSTS.
+# Origins are denied when present unless explicitly listed in MCP_ALLOWED_ORIGINS.
+transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=list(settings.mcp_allowed_hosts),
+    allowed_origins=list(settings.mcp_allowed_origins),
+)
 
 app = mcp.streamable_http_app(
     json_response=True,
