@@ -1,0 +1,5 @@
+"""Immutable build-time service metadata for MCP-M1."""
+
+SERVICE_NAME = "BIRZHA MCP FORECAST"
+VERSION = "0.1.0"
+ARCHITECTURE_VERSION = "BIRZHA_MCP_FORECAST_V0_2"
