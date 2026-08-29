@@ -12,7 +12,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -31,4 +31,32 @@ jobs:
         run: python -m pytest -q
 
       - name: Compile Python sources
-        run: python -m compileall -q src tests
+        run: python -m compileall -q src tests scripts
+
+      - name: Build Docker image
+        run: docker build --pull -t birzha-mcp-forecast:ci .
+
+      - name: Run Docker container
+        run: docker run --rm -d --name birzha-mcp-forecast-ci -p 8080:8080 birzha-mcp-forecast:ci
+
+      - name: Wait for health endpoint
+        run: |
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs birzha-mcp-forecast-ci
+          exit 1
+
+      - name: Verify Docker health and MCP transport
+        run: python scripts/docker_smoke.py
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker logs birzha-mcp-forecast-ci || true
+
+      - name: Stop Docker container
+        if: always()
+        run: docker stop birzha-mcp-forecast-ci || true
