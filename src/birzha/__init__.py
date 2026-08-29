@@ -1,0 +1,5 @@
+"""BIRZHA MCP Forecast System."""
+
+from .version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
+
+__all__ = ["ARCHITECTURE_VERSION", "SERVICE_NAME", "VERSION"]
