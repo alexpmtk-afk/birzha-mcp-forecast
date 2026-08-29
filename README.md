@@ -12,7 +12,7 @@ MCP-M1 proves only the transport/runtime foundation:
 - Streamable HTTP endpoint at `/mcp`
 - liveness endpoint at `/healthz`
 - MCP tool `system.version`
-- Docker/Cloud Run compatible entry point
+- Docker image suitable for the selected remote container runtime
 
 ## Local run
 
@@ -53,13 +53,34 @@ Expected structured result:
 }
 ```
 
+## Transport security
+
+DNS-rebinding protection is enabled. Local development accepts only localhost/127.0.0.1.
+Remote deployment must explicitly set `MCP_ALLOWED_HOSTS` to the Host header that is actually
+observed through the Yandex API Gateway path. If an Origin header is expected, it must be explicitly
+listed in `MCP_ALLOWED_ORIGINS`.
+
+No permanent ChatGPT-to-MCP authentication scheme is introduced in M1.3. The first remote TEST is
+restricted to the harmless `system.version` tool while the standard MCP-compatible authorization
+flow is evaluated separately.
+
 ## Architecture rule
 
 The `birzha.mcp` package is an adapter layer only. Instrument resolution, market data,
 Snapshot, Data Quality, features, models, Journal and Outcome will live outside it.
 
-## MCP-M1.1 acceptance target
+## MCP-M1 acceptance path
 
 ```text
-ChatGPT -> MCP Streamable HTTP -> BIRZHA backend -> system.version -> structured result
+Git commit
+-> Docker image
+-> Yandex Container Registry
+-> private Yandex Serverless Container
+-> Yandex API Gateway
+-> /healthz
+-> /mcp
+-> MCP discovery/tools/list
+-> system.version
 ```
+
+MOEX, ALGOPACK and Forecast logic are deliberately outside this gate.
