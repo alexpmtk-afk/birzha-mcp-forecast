@@ -1,0 +1,2 @@
+MCP-M1.1 CI verification marker.
+This file exists only to trigger pull_request CI and will not be merged into main.
