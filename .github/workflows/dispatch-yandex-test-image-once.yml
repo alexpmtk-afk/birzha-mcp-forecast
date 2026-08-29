@@ -1,4 +1,4 @@
-name: Dispatch OIDC subject diagnostic once
+name: Dispatch corrected Yandex TEST image once
 
 on:
   push:
@@ -16,14 +16,14 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Dispatch OIDC diagnostic workflow
+      - name: Dispatch corrected manual publish workflow
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Refusing dispatch outside main" >&2; exit 1; }
-          [[ "$GITHUB_REPOSITORY" == "alexpmtk-afk/birzha-mcp-forecast" ]] || { echo "Unexpected repository" >&2; exit 1; }
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$GITHUB_REPOSITORY" == "alexpmtk-afk/birzha-mcp-forecast" ]]
           RESPONSE_FILE="$RUNNER_TEMP/dispatch-response.json"
           HTTP_CODE="$(curl --proto '=https' --tlsv1.2 --silent --show-error --fail-with-body \
             -o "$RESPONSE_FILE" -w '%{http_code}' \
@@ -31,8 +31,8 @@ jobs:
             -H 'Accept: application/vnd.github+json' \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
-            'https://api.github.com/repos/alexpmtk-afk/birzha-mcp-forecast/actions/workflows/diagnose-yandex-oidc-subject.yml/dispatches' \
-            -d '{"ref":"main"}')"
-          [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]] || { echo "Workflow dispatch failed with HTTP ${HTTP_CODE}" >&2; exit 1; }
-          echo 'OIDC_DIAGNOSTIC_DISPATCH_ACCEPTED'
+            'https://api.github.com/repos/alexpmtk-afk/birzha-mcp-forecast/actions/workflows/publish-yandex-test-image-v2.yml/dispatches' \
+            -d '{"ref":"main","inputs":{"approval":"PUBLISH_APPROVED_IMAGE"}}')"
+          [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]]
+          echo 'CORRECTED_PUBLISH_DISPATCH_ACCEPTED'
           rm -f "$RESPONSE_FILE"
