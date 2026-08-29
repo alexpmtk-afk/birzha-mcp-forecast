@@ -56,9 +56,16 @@ Expected structured result:
 ## Transport security
 
 DNS-rebinding protection is enabled. Local development accepts only localhost/127.0.0.1.
-Remote deployment must explicitly set `MCP_ALLOWED_HOSTS` to the Host header that is actually
-observed through the Yandex API Gateway path. If an Origin header is expected, it must be explicitly
-listed in `MCP_ALLOWED_ORIGINS`.
+Remote deployment must explicitly set `MCP_ALLOWED_HOSTS` from the real Yandex API Gateway domain.
+For the final Gateway binding, list exactly two Host values:
+
+```text
+<gateway-domain>,<gateway-domain>:*
+```
+
+The `:*` form is a wildcard for the port only; it is not a wildcard for sibling or arbitrary
+`*.apigw.yandexcloud.net` domains. If an Origin header is expected, it must be explicitly listed in
+`MCP_ALLOWED_ORIGINS`.
 
 No permanent ChatGPT-to-MCP authentication scheme is introduced in M1.3. The first remote TEST is
 restricted to the harmless `system.version` tool while the standard MCP-compatible authorization
