@@ -129,12 +129,9 @@ jobs:
       - name: Obtain GitHub OIDC JWT and exchange for Yandex IAM token
         id: oidc
         shell: bash
-        env:
-          OIDC_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          OIDC_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
           set -euo pipefail
-          [[ -n "${OIDC_REQUEST_URL:-}" && -n "${OIDC_REQUEST_TOKEN:-}" ]] || { echo "GitHub OIDC endpoint unavailable" >&2; exit 1; }
+          [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]] || { echo "GitHub OIDC endpoint unavailable" >&2; exit 1; }
 
           ENCODED_AUDIENCE="$(python - <<'PY'
           import os, urllib.parse
@@ -142,10 +139,10 @@ jobs:
           PY
           )"
           SEP='?'
-          [[ "$OIDC_REQUEST_URL" == *'?'* ]] && SEP='&'
+          [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] && SEP='&'
           OIDC_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
-            -H "Authorization: Bearer ${OIDC_REQUEST_TOKEN}" \
-            "${OIDC_REQUEST_URL}${SEP}audience=${ENCODED_AUDIENCE}")"
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${SEP}audience=${ENCODED_AUDIENCE}")"
           OIDC_JWT="$(python -c 'import json,sys; print(json.load(sys.stdin).get("value", ""))' <<< "$OIDC_RESPONSE")"
           [[ -n "$OIDC_JWT" ]] || { echo "GitHub did not return an OIDC JWT" >&2; exit 1; }
           echo "::add-mask::$OIDC_JWT"
@@ -157,7 +154,7 @@ jobs:
           payload += '=' * (-len(payload) % 4)
           claims=json.loads(base64.urlsafe_b64decode(payload))
           if claims.get('sub') != os.environ['EXPECTED_OIDC_SUBJECT']:
-              raise SystemExit('OIDC subject does not match the exact main-branch federated credential')
+              raise SystemExit('OIDC subject does not match exact main-branch credential')
           if claims.get('aud') != os.environ['OIDC_AUDIENCE']:
               raise SystemExit('OIDC audience mismatch')
           if claims.get('repository') != 'alexpmtk-afk/birzha-mcp-forecast':
@@ -183,30 +180,33 @@ jobs:
           printf '%s' "$IAM_TOKEN" > "$RUNNER_TEMP/yandex-iam-token"
           chmod 0600 "$RUNNER_TEMP/yandex-iam-token"
           echo "expires_in=$EXPIRES_IN" >> "$GITHUB_OUTPUT"
-          unset OIDC_JWT IAM_TOKEN OIDC_RESPONSE TOKEN_RESPONSE OIDC_REQUEST_TOKEN
+          unset OIDC_JWT IAM_TOKEN OIDC_RESPONSE TOKEN_RESPONSE
 
       - name: Assert Registry is pristine and approved tag does not exist
         shell: bash
         run: |
           set -euo pipefail
           IAM_TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
-          REGISTRY_JSON="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+          BEFORE_JSON="$RUNNER_TEMP/registry-before.json"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
             -H "Authorization: Bearer ${IAM_TOKEN}" \
-            "${REGISTRY_API}/images?registryId=${REGISTRY_ID}&pageSize=1000")"
-          python - <<'PY' <<< "$REGISTRY_JSON"
+            "${REGISTRY_API}/images?registryId=${REGISTRY_ID}&pageSize=1000" \
+            -o "$BEFORE_JSON"
+          python - "$BEFORE_JSON" <<'PY'
           import json, os, sys
-          data=json.load(sys.stdin)
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
           images=data.get('images') or []
           if data.get('nextPageToken'):
               raise SystemExit('Registry image list unexpectedly paginated')
+          tags=[t for image in images for t in (image.get('tags') or [])]
+          if os.environ['TARGET_TAG'] in tags:
+              raise SystemExit('Approved immutable tag already exists; refusing overwrite')
           if images:
-              tags=[t for image in images for t in (image.get('tags') or [])]
-              if os.environ['TARGET_TAG'] in tags:
-                  raise SystemExit('Approved immutable tag already exists; refusing overwrite')
               raise SystemExit(f'Registry is not pristine: expected 0 images, found {len(images)}')
           print('REGISTRY_PRISTINE_AND_TAG_ABSENT_PASS')
           PY
-          unset IAM_TOKEN REGISTRY_JSON
+          unset IAM_TOKEN
 
       - name: Docker login and push exact immutable tag
         shell: bash
@@ -228,12 +228,16 @@ jobs:
         run: |
           set -euo pipefail
           IAM_TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
-          LIST_JSON="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+          AFTER_JSON="$RUNNER_TEMP/registry-after.json"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
             -H "Authorization: Bearer ${IAM_TOKEN}" \
-            "${REGISTRY_API}/images?registryId=${REGISTRY_ID}&pageSize=1000")"
-          read -r IMAGE_ID YANDEX_DIGEST CREATED_AT <<< "$(python - <<'PY' <<< "$LIST_JSON"
+            "${REGISTRY_API}/images?registryId=${REGISTRY_ID}&pageSize=1000" \
+            -o "$AFTER_JSON"
+
+          METADATA="$(python - "$AFTER_JSON" <<'PY'
           import json, os, sys
-          data=json.load(sys.stdin)
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
           images=data.get('images') or []
           if data.get('nextPageToken'):
               raise SystemExit('Registry image list unexpectedly paginated after push')
@@ -250,16 +254,20 @@ jobs:
           print(image.get('id',''), digest, image.get('createdAt',''))
           PY
           )"
+          read -r IMAGE_ID YANDEX_DIGEST CREATED_AT <<< "$METADATA"
           [[ -n "$IMAGE_ID" && "$YANDEX_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid image metadata" >&2; exit 1; }
 
-          GET_JSON="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+          GET_JSON="$RUNNER_TEMP/registry-image-get.json"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
             -H "Authorization: Bearer ${IAM_TOKEN}" \
-            "${REGISTRY_API}/images/${IMAGE_ID}")"
-          python - "$IMAGE_ID" "$YANDEX_DIGEST" <<'PY' <<< "$GET_JSON"
+            "${REGISTRY_API}/images/${IMAGE_ID}" \
+            -o "$GET_JSON"
+          python - "$GET_JSON" "$IMAGE_ID" "$YANDEX_DIGEST" <<'PY'
           import json, os, sys
-          data=json.load(sys.stdin)
-          image_id=sys.argv[1]
-          digest=sys.argv[2]
+          from pathlib import Path
+          data=json.loads(Path(sys.argv[1]).read_text())
+          image_id=sys.argv[2]
+          digest=sys.argv[3]
           assert data.get('id') == image_id, data
           assert data.get('digest') == digest, data
           assert data.get('name') == os.environ['TARGET_REPOSITORY'], data
@@ -269,7 +277,7 @@ jobs:
           echo "image_id=$IMAGE_ID" >> "$GITHUB_OUTPUT"
           echo "digest=$YANDEX_DIGEST" >> "$GITHUB_OUTPUT"
           echo "created_at=$CREATED_AT" >> "$GITHUB_OUTPUT"
-          unset IAM_TOKEN LIST_JSON GET_JSON
+          unset IAM_TOKEN METADATA
 
       - name: Cleanup authentication material
         id: cleanup
@@ -357,5 +365,8 @@ jobs:
         shell: bash
         run: |
           docker stop birzha-mcp-forecast-publish-smoke >/dev/null 2>&1 || true
-          rm -f "$RUNNER_TEMP/yandex-iam-token"
+          rm -f "$RUNNER_TEMP/yandex-iam-token" \
+            "$RUNNER_TEMP/registry-before.json" \
+            "$RUNNER_TEMP/registry-after.json" \
+            "$RUNNER_TEMP/registry-image-get.json"
           rm -rf "$RUNNER_TEMP/docker-config"
