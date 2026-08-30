@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from birzha.providers.moex_iss import MoexIssClient
 
@@ -10,15 +10,17 @@ from birzha.providers.moex_iss import MoexIssClient
 class MoexTradingCalendar:
     """Return actual exchange trading dates for one MOEX board.
 
-    The ISS ``.../boards/{board}/dates`` route describes the available history
-    interval; it is not a row-per-session calendar.  To obtain actual sessions
-    we read the board history rows over the requested range and deduplicate the
-    TRADEDATE field.  This is slower than an interval lookup but is causal and
-    uses official exchange history rather than inferred weekdays.
+    ISS ``.../boards/{board}/dates`` describes the available history interval,
+    not a row-per-session calendar.  We therefore probe the official board
+    history for candidate weekdays and accept a date only when MOEX returns a
+    history row for that exact date.  Weekdays are merely request candidates;
+    the exchange response is the source of truth, so holidays remain excluded.
+    The query asks for one TRADEDATE row only, keeping the safety budget small.
     """
 
     def __init__(self, client: MoexIssClient) -> None:
         self._client = client
+        self._cache: dict[tuple[str, str, str, date], bool] = {}
 
     def dates(
         self,
@@ -31,59 +33,39 @@ class MoexTradingCalendar:
     ) -> tuple[date, ...]:
         if from_date > till_date:
             raise ValueError("from_date must not be after till_date")
+        result: list[date] = []
+        current = from_date
+        while current <= till_date:
+            if current.weekday() < 5 and self._is_exchange_session(
+                engine=engine, market=market, board=board, day=current
+            ):
+                result.append(current)
+            current += timedelta(days=1)
+        return tuple(result)
 
+    def _is_exchange_session(self, *, engine: str, market: str, board: str, day: date) -> bool:
+        key = (engine, market, board, day)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
         path = f"/history/engines/{engine}/markets/{market}/boards/{board}/securities.json"
-        base_params = {
-            "iss.meta": "off",
-            "iss.only": "history,history.cursor",
-            "history.columns": "TRADEDATE",
-            "from": from_date.isoformat(),
-            "till": till_date.isoformat(),
-        }
-        result: set[date] = set()
-        start = 0
-        while True:
-            payload = self._client._request(  # noqa: SLF001 - provider-internal collaboration
-                path,
-                {**base_params, "start": start},
-            ).json()
-            page = self._client._table(payload, "history")  # noqa: SLF001
-            for row in page:
-                raw = row.get("TRADEDATE") or row.get("tradedate")
-                if not raw:
-                    continue
-                try:
-                    day = date.fromisoformat(str(raw)[:10])
-                except ValueError:
-                    continue
-                if from_date <= day <= till_date:
-                    result.add(day)
-
-            cursor_rows = (
-                self._client._table(payload, "history.cursor")  # noqa: SLF001
-                if "history.cursor" in payload
-                else []
-            )
-            if cursor_rows:
-                cursor = cursor_rows[0]
-                total = _integer(cursor, "TOTAL") or _integer(cursor, "total") or (start + len(page))
-                page_size = _integer(cursor, "PAGESIZE") or _integer(cursor, "pagesize") or len(page)
-                if start + len(page) >= total or page_size <= 0 or not page:
-                    break
-                start += page_size
-                continue
-            if not page:
+        payload = self._client._request(  # noqa: SLF001 - provider-internal collaboration
+            path,
+            {
+                "iss.meta": "off",
+                "iss.only": "history",
+                "history.columns": "TRADEDATE",
+                "date": day.isoformat(),
+                "limit": 1,
+                "start": 0,
+            },
+        ).json()
+        rows = self._client._table(payload, "history")  # noqa: SLF001
+        is_session = False
+        for row in rows:
+            raw = row.get("TRADEDATE") or row.get("tradedate")
+            if raw and str(raw)[:10] == day.isoformat():
+                is_session = True
                 break
-            start += len(page)
-            if len(page) < 100:
-                break
-
-        return tuple(sorted(result))
-
-
-def _integer(row: dict[str, object], key: str) -> int | None:
-    value = row.get(key)
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None
+        self._cache[key] = is_session
+        return is_session
