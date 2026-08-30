@@ -1,0 +1,44 @@
+name: Real MOEX Validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "scripts/run_live_validation.py"
+      - ".github/workflows/real-moex-validation.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-moex-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Run bounded real MOEX validation
+        run: python scripts/run_live_validation.py
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: real-moex-validation-evidence
+          path: artifacts/real_moex_validation.json
+          if-no-files-found: error
+          retention-days: 30
