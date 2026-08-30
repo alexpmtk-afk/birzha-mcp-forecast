@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
 from birzha.providers.moex_analytics import MoexAnalyticsClient, MoexAnalyticsError
+
+
+MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
 
 
 @dataclass(slots=True)
@@ -31,10 +35,23 @@ class MarketFlowService:
         from_date: str | None = None,
         till_date: str | None = None,
         lookback_days: int = 5,
+        cutoff_at: str | None = None,
     ) -> MarketFlowSnapshot:
+        """Build flow using only records that existed on or before ``cutoff_at``.
+
+        ``cutoff_at`` is the causal forecast T0. Rows whose exchange timestamp is
+        later than T0 are excluded. Rows without a parseable timestamp are also
+        excluded when a cutoff is requested; unknown time is never assumed safe.
+        """
+
         if lookback_days <= 0:
             raise ValueError("lookback_days must be > 0")
-        till = date.fromisoformat(till_date) if till_date else date.today()
+        cutoff = _parse_timestamp(cutoff_at) if cutoff_at else None
+        if cutoff_at and cutoff is None:
+            raise ValueError("cutoff_at must be a parseable exchange timestamp")
+
+        default_till = cutoff.date() if cutoff is not None else datetime.now(MOEX_TIMEZONE).date()
+        till = date.fromisoformat(till_date) if till_date else default_till
         start = date.fromisoformat(from_date) if from_date else till - timedelta(days=lookback_days)
         if start > till:
             raise ValueError("from_date must not be after till_date")
@@ -61,6 +78,10 @@ class MarketFlowService:
         except MoexAnalyticsError as exc:
             futoi_rows = []
             warnings.append(f"FUTOI_UNAVAILABLE:{exc}")
+
+        if cutoff is not None:
+            trade_rows = _causal_rows(trade_rows, cutoff)
+            futoi_rows = _causal_rows(futoi_rows, cutoff)
 
         if not trade_rows:
             warnings.append("ALGOPACK_TRADESTATS_EMPTY")
@@ -95,6 +116,10 @@ class MarketFlowService:
         latest_by_group = _latest_futoi_by_group(futoi_rows)
         individuals = _client_oi(latest_by_group.get("FIZ"), "FIZ")
         legal_entities = _client_oi(latest_by_group.get("YUR"), "YUR")
+        observed = [dt for row in [*trade_rows, *futoi_rows] if (dt := _row_datetime(row)) is not None]
+        as_of = max(observed).isoformat() if observed else None
+        if cutoff is not None and as_of is not None:
+            assert _parse_timestamp(as_of) is not None and _parse_timestamp(as_of) <= cutoff
 
         quality = "PASS" if not warnings else "DEGRADED"
         return MarketFlowSnapshot(
@@ -102,6 +127,7 @@ class MarketFlowService:
             secid=instrument.secid,
             from_date=start.isoformat(),
             till_date=till.isoformat(),
+            as_of=as_of,
             source="MOEX_ALGOPACK+FUTOI",
             intervals=len(trade_rows),
             buy_volume=_round_or_none(buy_volume),
@@ -120,6 +146,49 @@ class MarketFlowService:
             data_quality=quality,
             warnings=tuple(warnings),
         )
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    raw = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=MOEX_TIMEZONE)
+    return parsed.astimezone(MOEX_TIMEZONE)
+
+
+def _row_datetime(row: dict[str, Any]) -> datetime | None:
+    tradedate = str(row.get("tradedate") or row.get("TRADEDATE") or "").strip()
+    tradetime = str(
+        row.get("tradetime")
+        or row.get("TRADETIME")
+        or row.get("systime")
+        or row.get("SYSTIME")
+        or ""
+    ).strip()
+    if tradedate and tradetime:
+        candidate = f"{tradedate}T{tradetime}"
+        parsed = _parse_timestamp(candidate)
+        if parsed is not None:
+            return parsed
+    for key in ("systime", "SYSTIME", "timestamp", "TIMESTAMP"):
+        parsed = _parse_timestamp(str(row.get(key) or ""))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _causal_rows(rows: list[dict[str, Any]], cutoff: datetime) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        observed = _row_datetime(row)
+        if observed is not None and observed <= cutoff:
+            result.append(row)
+    return result
 
 
 def _number(value: object) -> float | None:
@@ -168,16 +237,22 @@ def _add(left: float | None, right: float | None) -> float | None:
 
 def _row_time_key(row: dict[str, Any]) -> tuple[str, str, int]:
     return (
-        str(row.get("tradedate") or ""),
-        str(row.get("tradetime") or row.get("SYSTIME") or row.get("systime") or ""),
-        _int_or_none(row.get("seqnum")) or 0,
+        str(row.get("tradedate") or row.get("TRADEDATE") or ""),
+        str(
+            row.get("tradetime")
+            or row.get("TRADETIME")
+            or row.get("SYSTIME")
+            or row.get("systime")
+            or ""
+        ),
+        _int_or_none(row.get("seqnum") or row.get("SEQNUM")) or 0,
     )
 
 
 def _latest_futoi_by_group(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for row in sorted(rows, key=_row_time_key):
-        group = str(row.get("clgroup") or "").upper()
+        group = str(row.get("clgroup") or row.get("CLGROUP") or "").upper()
         if group in {"FIZ", "YUR"}:
             result[group] = row
     return result
@@ -186,17 +261,15 @@ def _latest_futoi_by_group(rows: list[dict[str, Any]]) -> dict[str, dict[str, An
 def _client_oi(row: dict[str, Any] | None, group: str) -> ClientOpenInterest | None:
     if row is None:
         return None
-    tradedate = str(row.get("tradedate") or "")
-    tradetime = str(row.get("tradetime") or "")
-    observed_at = f"{tradedate}T{tradetime}" if tradedate and tradetime else str(row.get("systime") or "") or None
+    observed = _row_datetime(row)
     return ClientOpenInterest(
         client_group=group,
-        net_position=_round_or_none(_number(row.get("pos"))),
-        long_position=_round_or_none(_number(row.get("pos_long"))),
-        short_position=_round_or_none(_number(row.get("pos_short"))),
-        long_accounts=_int_or_none(row.get("pos_long_num")),
-        short_accounts=_int_or_none(row.get("pos_short_num")),
-        observed_at=observed_at,
+        net_position=_round_or_none(_number(row.get("pos") or row.get("POS"))),
+        long_position=_round_or_none(_number(row.get("pos_long") or row.get("POS_LONG"))),
+        short_position=_round_or_none(_number(row.get("pos_short") or row.get("POS_SHORT"))),
+        long_accounts=_int_or_none(row.get("pos_long_num") or row.get("POS_LONG_NUM")),
+        short_accounts=_int_or_none(row.get("pos_short_num") or row.get("POS_SHORT_NUM")),
+        observed_at=observed.isoformat() if observed else None,
     )
 
 
