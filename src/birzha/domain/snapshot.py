@@ -1,4 +1,4 @@
-"""Causal Market Snapshot v2 draft domain contract."""
+"""Causal Market Snapshot v2 domain contract."""
 
 from __future__ import annotations
 
@@ -27,6 +27,36 @@ class TimeframeState:
 
 
 @dataclass(frozen=True, slots=True)
+class TimeframeQuality:
+    timeframe: str
+    candles: int
+    minimum_required: int
+    latest_completed_end: str | None
+    status: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class DataQualityContract:
+    version: str
+    status: str
+    timeframes: tuple[TimeframeQuality, ...]
+    flow_status: str
+    reasons: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "version": self.version,
+            "status": self.status,
+            "timeframes": [item.to_dict() for item in self.timeframes],
+            "flow_status": self.flow_status,
+            "reasons": list(self.reasons),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class MarketSnapshot:
     symbol: str
     secid: str
@@ -38,6 +68,7 @@ class MarketSnapshot:
     data_quality: str
     warnings: tuple[str, ...]
     flow: MarketFlowSnapshot | None = None
+    quality_contract: DataQualityContract | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -50,5 +81,6 @@ class MarketSnapshot:
             "m15": self.m15.to_dict(),
             "flow": self.flow.to_dict() if self.flow else None,
             "data_quality": self.data_quality,
+            "quality_contract": self.quality_contract.to_dict() if self.quality_contract else None,
             "warnings": list(self.warnings),
         }

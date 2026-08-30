@@ -10,8 +10,16 @@ from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.flow import MarketFlowSnapshot
 from birzha.domain.market import Candle, CandleSeries, Instrument
-from birzha.domain.snapshot import MarketSnapshot, TimeframeState
+from birzha.domain.snapshot import (
+    DataQualityContract,
+    MarketSnapshot,
+    TimeframeQuality,
+    TimeframeState,
+)
 from birzha.providers.moex_analytics import MoexAnalyticsClient
+
+
+DATA_QUALITY_CONTRACT_VERSION = "DATA_QUALITY_CONTRACT_V2"
 
 
 @dataclass(slots=True)
@@ -65,11 +73,24 @@ class MarketSnapshotService:
 
         warnings: list[str] = []
         minimums = {"D1": 50, "H1": 50, "M15": 50}
+        timeframe_quality: list[TimeframeQuality] = []
         for series in (d1, h1, m15):
-            if series.count < minimums[series.timeframe]:
+            minimum = minimums[series.timeframe]
+            status = "PASS" if series.count >= minimum else "DEGRADED"
+            if status != "PASS":
                 warnings.append(f"{series.timeframe}: insufficient_history={series.count}")
+            timeframe_quality.append(
+                TimeframeQuality(
+                    timeframe=series.timeframe,
+                    candles=series.count,
+                    minimum_required=minimum,
+                    latest_completed_end=series.candles[-1].end if series.candles else None,
+                    status=status,
+                )
+            )
 
         flow_snapshot: MarketFlowSnapshot | None = None
+        flow_status = "NOT_REQUESTED"
         if self.flow is not None:
             flow_snapshot = self.flow.build_for_instrument(
                 instrument,
@@ -81,9 +102,23 @@ class MarketSnapshotService:
                 raise ValueError("flow contract does not match candle contract")
             if flow_snapshot.as_of is not None and _timestamp(flow_snapshot.as_of) > _timestamp(causal_t0):
                 raise ValueError("flow data is later than Market Snapshot T0")
+            flow_status = flow_snapshot.data_quality
             warnings.extend(f"FLOW:{warning}" for warning in flow_snapshot.warnings)
 
-        quality = "PASS" if not warnings else "DEGRADED"
+        quality = (
+            "PASS"
+            if all(item.status == "PASS" for item in timeframe_quality)
+            and flow_status in {"PASS", "NOT_REQUESTED"}
+            and not warnings
+            else "DEGRADED"
+        )
+        quality_contract = DataQualityContract(
+            version=DATA_QUALITY_CONTRACT_VERSION,
+            status=quality,
+            timeframes=tuple(timeframe_quality),
+            flow_status=flow_status,
+            reasons=tuple(warnings),
+        )
         source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
         return MarketSnapshot(
             symbol=symbol,
@@ -95,6 +130,7 @@ class MarketSnapshotService:
             m15=_state(m15),
             flow=flow_snapshot,
             data_quality=quality,
+            quality_contract=quality_contract,
             warnings=tuple(warnings),
         )
 
@@ -104,16 +140,6 @@ def _load_m15(
     instrument: Instrument,
     till: date,
 ) -> CandleSeries:
-    """Load enough M15 history without over-fetching minute data.
-
-    M15 is causally aggregated from M1. All current M15 features use at most the
-    latest 50 completed bars, so the normal request starts with seven calendar
-    days. If an exchange closure or sparse history leaves fewer than 50 bars,
-    the provider safely expands to the previous 20-day bound. The feature values
-    are unchanged whenever the shorter request already contains the same latest
-    50 bars.
-    """
-
     series: CandleSeries | None = None
     for lookback_days in (7, 20):
         series = market_data.candles_for_instrument(
