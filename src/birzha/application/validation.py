@@ -9,6 +9,7 @@ from statistics import fmean
 from birzha.application.forecast import ForecastService
 from birzha.application.market_data import MarketDataService
 from birzha.application.outcome import OutcomeService
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.forecast import ForecastRecord
 from birzha.domain.outcome import HorizonOutcome
 from birzha.domain.validation import HorizonValidationMetrics, WalkForwardReport
@@ -26,10 +27,11 @@ class WalkForwardValidator:
 
     @classmethod
     def default(cls) -> "WalkForwardValidator":
-        market_data = MarketDataService.default()
+        shared_control = ProcessUpstreamControlPlane()
+        market_data = MarketDataService.default(control_plane=shared_control)
         return cls(
             market_data=market_data,
-            forecasts=ForecastService.default(),
+            forecasts=ForecastService.default(control_plane=shared_control),
             calendar=MoexTradingCalendar(market_data.provider),
         )
 
@@ -52,8 +54,6 @@ class WalkForwardValidator:
             raise ValueError("max_points must be between 1 and 60")
 
         sessions = self._session_dates(symbol, start=start, end=end)
-        # Require the full longest horizon to mature inside the requested test
-        # period. This keeps all horizon metrics on the same ex-ante sample.
         eligible = sessions[:-20] if len(sessions) > 20 else ()
         selected = tuple(eligible[::step_sessions][:max_points])
 
@@ -84,7 +84,7 @@ class WalkForwardValidator:
                     completed += 1
                     for horizon in record.horizons:
                         pairs.append((record, by_horizon[horizon.sessions]))
-                except Exception as exc:  # one bad date must not destroy the whole validation run
+                except Exception as exc:
                     failures.append(f"{forecast_day.isoformat()}:{type(exc).__name__}:{exc}")
         finally:
             forecast_store.close()
@@ -138,8 +138,6 @@ class WalkForwardValidator:
         while cursor <= end:
             instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
             if instrument.secid in seen_contracts:
-                # A repeated contract after its last returned history date would
-                # otherwise loop forever. Move beyond the probe date and retry.
                 cursor = resolved_day + timedelta(days=1)
                 continue
             seen_contracts.add(instrument.secid)
@@ -169,8 +167,6 @@ class WalkForwardValidator:
         historical = self.market_data.historical_future_resolver
         assert historical is not None
         probe = start
-        # Long exchange closures are rare; 14 calendar days is deliberately
-        # bounded so invalid symbols fail instead of causing an unbounded scan.
         for _ in range(14):
             if probe > end:
                 break
