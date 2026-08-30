@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 
 from birzha.application.flow import MarketFlowService
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.flow import MarketFlowSnapshot
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
@@ -19,11 +20,19 @@ class MarketSnapshotService:
     flow: MarketFlowService | None = None
 
     @classmethod
-    def default(cls) -> "MarketSnapshotService":
-        market_data = MarketDataService.default()
+    def default(
+        cls,
+        *,
+        control_plane: ProcessUpstreamControlPlane | None = None,
+    ) -> "MarketSnapshotService":
+        shared_control = control_plane or ProcessUpstreamControlPlane()
+        market_data = MarketDataService.default(control_plane=shared_control)
         return cls(
             market_data=market_data,
-            flow=MarketFlowService(market_data=market_data, analytics=MoexAnalyticsClient()),
+            flow=MarketFlowService(
+                market_data=market_data,
+                analytics=MoexAnalyticsClient(control_plane=shared_control),
+            ),
         )
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
