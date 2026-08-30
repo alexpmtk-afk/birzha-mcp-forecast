@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import _flow_adjustment, build_forecast_from_snapshot
@@ -22,8 +23,9 @@ INSTRUMENT = Instrument(
 
 @dataclass
 class FakeMarketData:
-    def resolve(self, symbol: str) -> Instrument:
+    def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
         assert symbol == "Si"
+        assert as_of == date(2026, 8, 28)
         return INSTRUMENT
 
 
