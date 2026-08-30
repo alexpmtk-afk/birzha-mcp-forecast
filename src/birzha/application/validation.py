@@ -9,7 +9,6 @@ from statistics import fmean
 from birzha.application.forecast import ForecastService
 from birzha.application.market_data import MarketDataService
 from birzha.application.outcome import OutcomeService
-from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.forecast import ForecastRecord
 from birzha.domain.outcome import HorizonOutcome
 from birzha.domain.validation import HorizonValidationMetrics, WalkForwardReport
@@ -27,11 +26,10 @@ class WalkForwardValidator:
 
     @classmethod
     def default(cls) -> "WalkForwardValidator":
-        shared_control = ProcessUpstreamControlPlane()
-        market_data = MarketDataService.default(control_plane=shared_control)
+        market_data = MarketDataService.default()
         return cls(
             market_data=market_data,
-            forecasts=ForecastService.default(control_plane=shared_control),
+            forecasts=ForecastService.default(),
             calendar=MoexTradingCalendar(market_data.provider),
         )
 
@@ -136,7 +134,15 @@ class WalkForwardValidator:
         cursor = start
         seen_contracts: set[str] = set()
         while cursor <= end:
-            instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
+            try:
+                instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
+            except MoexIssError:
+                # If we already collected valid sessions, reaching a trailing
+                # weekend/holiday after the last actual session is normal and
+                # must terminate the calendar rather than fail the whole run.
+                if sessions:
+                    break
+                raise
             if instrument.secid in seen_contracts:
                 cursor = resolved_day + timedelta(days=1)
                 continue
