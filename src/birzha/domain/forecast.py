@@ -36,6 +36,7 @@ class ForecastRecord:
     reasons: tuple[str, ...]
     warnings: tuple[str, ...]
     validation_status: str
+    reference_price: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -52,4 +53,5 @@ class ForecastRecord:
             "reasons": list(self.reasons),
             "warnings": list(self.warnings),
             "validation_status": self.validation_status,
+            "reference_price": self.reference_price,
         }
