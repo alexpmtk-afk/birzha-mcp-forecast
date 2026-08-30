@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.providers.moex_iss import MoexIssClient
+from birzha.providers.moex_resolver import MoexDirectInstrumentResolver
 
 
 MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
@@ -16,14 +17,27 @@ MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
 @dataclass(slots=True)
 class MarketDataService:
     provider: MoexIssClient
+    direct_resolver: MoexDirectInstrumentResolver | None = None
 
     @classmethod
     def default(cls) -> "MarketDataService":
-        return cls(provider=MoexIssClient())
+        provider = MoexIssClient()
+        return cls(
+            provider=provider,
+            direct_resolver=MoexDirectInstrumentResolver(provider),
+        )
 
     def resolve(self, symbol: str) -> Instrument:
-        # First production slice: futures root resolution. Cross-asset routing is
-        # added in MCP-M3B without changing the domain contract.
+        """Resolve an exact listed SECID first, otherwise a futures root.
+
+        There are deliberately no SBER/Si branches here. Routing is based on
+        whether MOEX itself recognizes the input as a directly listed security.
+        """
+
+        if self.direct_resolver is not None:
+            direct = self.direct_resolver.resolve(symbol)
+            if direct is not None and direct.asset_class != "unknown":
+                return direct
         return self.provider.resolve_active_future(symbol)
 
     def candles_for_instrument(
@@ -36,9 +50,6 @@ class MarketDataService:
         completed_only: bool = True,
         now: datetime | None = None,
     ) -> CandleSeries:
-        # Provider responses can contain the currently forming native candle.
-        # Always fetch it explicitly and derive completion against MOEX local
-        # time in the application layer before any snapshot/forecast can see it.
         raw = self.provider.fetch_candles(
             instrument,
             timeframe=timeframe,
@@ -105,8 +116,6 @@ def _normalize_completion(candle: Candle, *, now: datetime | None = None) -> Can
     try:
         end = datetime.fromisoformat(candle.end.replace("Z", "+00:00"))
     except ValueError:
-        # Fail closed: if exchange time cannot be parsed, the candle must not be
-        # treated as completed for causal analysis.
         return replace(candle, completed=False)
 
     if end.tzinfo is None:
