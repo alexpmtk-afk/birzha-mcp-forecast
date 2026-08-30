@@ -1,11 +1,13 @@
-"""Causal Market Snapshot builder from real MOEX candles."""
+"""Causal Market Snapshot builder from real MOEX candles and optional flow data."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from birzha.application.flow import MarketFlowService
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
+from birzha.domain.flow import MarketFlowSnapshot
 from birzha.domain.market import Candle, CandleSeries
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 
@@ -13,10 +15,18 @@ from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 @dataclass(slots=True)
 class MarketSnapshotService:
     market_data: MarketDataService
+    flow: MarketFlowService | None = None
 
     @classmethod
     def default(cls) -> "MarketSnapshotService":
-        return cls(market_data=MarketDataService.default())
+        market_data = MarketDataService.default()
+        return cls(
+            market_data=market_data,
+            flow=MarketFlowService(
+                market_data=market_data,
+                analytics=MarketFlowService.default().analytics,
+            ),
+        )
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
         till = (
@@ -62,18 +72,44 @@ class MarketSnapshotService:
             if series.count < minimums[series.timeframe]:
                 warnings.append(f"{series.timeframe}: insufficient_history={series.count}")
 
+        flow_snapshot: MarketFlowSnapshot | None = None
+        if self.flow is not None:
+            flow_snapshot = self.flow.build_for_instrument(
+                instrument,
+                till_date=till.isoformat(),
+                lookback_days=5,
+                cutoff_at=causal_t0,
+            )
+            if flow_snapshot.secid != instrument.secid:
+                raise ValueError("flow contract does not match candle contract")
+            if flow_snapshot.as_of is not None and not _timestamp_leq(flow_snapshot.as_of, causal_t0):
+                raise ValueError("flow data is later than Market Snapshot T0")
+            warnings.extend(f"FLOW:{warning}" for warning in flow_snapshot.warnings)
+
         quality = "PASS" if not warnings else "DEGRADED"
+        source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
         return MarketSnapshot(
             symbol=symbol,
             secid=instrument.secid,
             as_of=causal_t0,
-            source="MOEX_ISS",
+            source=source,
             d1=_state(d1),
             h1=_state(h1),
             m15=_state(m15),
+            flow=flow_snapshot,
             data_quality=quality,
             warnings=tuple(warnings),
         )
+
+
+def _timestamp_leq(left: str, right: str) -> bool:
+    def parse(value: str) -> datetime:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=MOEX_TIMEZONE)
+        return parsed.astimezone(MOEX_TIMEZONE)
+
+    return parse(left) <= parse(right)
 
 
 def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
