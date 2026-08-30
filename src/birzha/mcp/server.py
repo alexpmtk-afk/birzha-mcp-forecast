@@ -1,7 +1,7 @@
 """BIRZHA MCP server surface.
 
-MCP remains a thin interface: market, flow, snapshot, forecast, outcome and
-persistence logic lives in application/storage layers.
+MCP remains a thin interface: market, flow, snapshot, forecast, outcome,
+validation and persistence logic lives in application/storage layers.
 """
 
 from __future__ import annotations
@@ -17,7 +17,9 @@ from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.outcome import OutcomeService
 from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.validation import WalkForwardValidator
 from birzha.config import Settings
+from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
@@ -32,6 +34,11 @@ _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
 _outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)
 _outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)
+_validator = WalkForwardValidator(
+    market_data=_market,
+    forecasts=_forecast,
+    calendar=MoexTradingCalendar(_market.provider),
+)
 
 
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
@@ -91,14 +98,25 @@ def forecast_list(limit: int = 20, symbol: str | None = None) -> dict[str, objec
 
 
 @mcp.tool(name="outcome.evaluate", description="Evaluate a stored forecast against future completed MOEX trading sessions and append newly matured 5/10/20-session outcomes without modifying the forecast.")
-def outcome_evaluate(forecast_id: str) -> dict[str, object]:
-    return _outcomes.evaluate(forecast_id).to_dict()
+def outcome_evaluate(forecast_id: str, evaluation_date: str | None = None) -> dict[str, object]:
+    return _outcomes.evaluate(forecast_id, evaluation_date=evaluation_date).to_dict()
 
 
 @mcp.tool(name="outcome.list", description="List append-only matured outcomes already recorded for one forecast.")
 def outcome_list(forecast_id: str) -> dict[str, object]:
     records = _outcome_store.list_for_forecast(forecast_id)
     return {"forecast_id": forecast_id, "count": len(records), "outcomes": [item.to_dict() for item in records]}
+
+
+@mcp.tool(name="validation.walk_forward", description="Run a causal historical walk-forward validation over official MOEX trading sessions. Historical futures roots are resolved to the contract that was liquid on each forecast date.")
+def validation_walk_forward(symbol: str, start_date: str, end_date: str, step_sessions: int = 5, max_points: int = 24) -> dict[str, object]:
+    return _validator.run(
+        symbol,
+        start_date=start_date,
+        end_date=end_date,
+        step_sessions=step_sessions,
+        max_points=max_points,
+    ).to_dict()
 
 
 @mcp.custom_route("/healthz", methods=["GET"])

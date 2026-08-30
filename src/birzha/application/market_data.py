@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from birzha.domain.market import Candle, CandleSeries, Instrument
+from birzha.providers.moex_history import MoexHistoricalFutureResolver
 from birzha.providers.moex_iss import MoexIssClient
 from birzha.providers.moex_resolver import MoexDirectInstrumentResolver
 
@@ -18,6 +19,7 @@ MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
 class MarketDataService:
     provider: MoexIssClient
     direct_resolver: MoexDirectInstrumentResolver | None = None
+    historical_future_resolver: MoexHistoricalFutureResolver | None = None
 
     @classmethod
     def default(cls) -> "MarketDataService":
@@ -25,20 +27,26 @@ class MarketDataService:
         return cls(
             provider=provider,
             direct_resolver=MoexDirectInstrumentResolver(provider),
+            historical_future_resolver=MoexHistoricalFutureResolver(provider),
         )
 
-    def resolve(self, symbol: str) -> Instrument:
-        """Resolve an exact listed SECID first, otherwise a futures root.
+    def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
+        """Resolve exact SECID first, otherwise the correct futures root contract.
 
-        There are deliberately no SBER/Si branches here. Routing is based on
-        whether MOEX itself recognizes the input as a directly listed security.
+        For historical dates, futures roots are resolved from the MOEX ISS
+        history endpoint for that date. This is mandatory for causal backtests.
         """
-
         if self.direct_resolver is not None:
             direct = self.direct_resolver.resolve(symbol)
             if direct is not None and direct.asset_class != "unknown":
                 return direct
-        return self.provider.resolve_active_future(symbol)
+        if as_of is not None and self.historical_future_resolver is not None:
+            today = datetime.now(MOEX_TIMEZONE).date()
+            if as_of < today:
+                return self.historical_future_resolver.resolve(symbol, as_of)
+        if as_of is None:
+            return self.provider.resolve_active_future(symbol)
+        return self.provider.resolve_active_future(symbol, as_of=as_of)
 
     def candles_for_instrument(
         self,
@@ -76,7 +84,8 @@ class MarketDataService:
         till_date: str,
         completed_only: bool = True,
     ) -> CandleSeries:
-        instrument = self.resolve(symbol)
+        as_of = date.fromisoformat(till_date[:10])
+        instrument = self.resolve(symbol, as_of=as_of)
         return self.candles_for_instrument(
             instrument,
             timeframe=timeframe,
@@ -112,16 +121,13 @@ def _normalize_completion(candle: Candle, *, now: datetime | None = None) -> Can
         observed_now = observed_now.replace(tzinfo=MOEX_TIMEZONE)
     else:
         observed_now = observed_now.astimezone(MOEX_TIMEZONE)
-
     try:
         end = datetime.fromisoformat(candle.end.replace("Z", "+00:00"))
     except ValueError:
         return replace(candle, completed=False)
-
     if end.tzinfo is None:
         end = end.replace(tzinfo=MOEX_TIMEZONE)
     else:
         end = end.astimezone(MOEX_TIMEZONE)
-
     completed = bool(candle.completed and end <= observed_now)
     return replace(candle, completed=completed)
