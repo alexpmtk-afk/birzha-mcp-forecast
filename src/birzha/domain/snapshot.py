@@ -7,6 +7,9 @@ from dataclasses import asdict, dataclass
 from birzha.domain.flow import MarketFlowSnapshot
 
 
+MARKET_SNAPSHOT_CONTRACT_VERSION = "MARKET_SNAPSHOT_V2"
+
+
 @dataclass(frozen=True, slots=True)
 class TimeframeState:
     timeframe: str
@@ -69,9 +72,11 @@ class MarketSnapshot:
     warnings: tuple[str, ...]
     flow: MarketFlowSnapshot | None = None
     quality_contract: DataQualityContract | None = None
+    contract_version: str = MARKET_SNAPSHOT_CONTRACT_VERSION
 
     def to_dict(self) -> dict[str, object]:
         return {
+            "contract_version": self.contract_version,
             "symbol": self.symbol,
             "secid": self.secid,
             "as_of": self.as_of,
