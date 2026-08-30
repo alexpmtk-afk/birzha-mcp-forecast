@@ -23,46 +23,20 @@ class MarketSnapshotService:
         market_data = MarketDataService.default()
         return cls(
             market_data=market_data,
-            flow=MarketFlowService(
-                market_data=market_data,
-                analytics=MoexAnalyticsClient(),
-            ),
+            flow=MarketFlowService(market_data=market_data, analytics=MoexAnalyticsClient()),
         )
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
         till = date.fromisoformat(as_of_date) if as_of_date else datetime.now(MOEX_TIMEZONE).date()
-        instrument = self.market_data.resolve(symbol)
+        instrument = self.market_data.resolve(symbol, as_of=till)
 
-        d1 = self.market_data.candles_for_instrument(
-            instrument,
-            timeframe="D1",
-            from_date=(till - timedelta(days=260)).isoformat(),
-            till_date=till.isoformat(),
-            completed_only=True,
-        )
-        h1 = self.market_data.candles_for_instrument(
-            instrument,
-            timeframe="H1",
-            from_date=(till - timedelta(days=60)).isoformat(),
-            till_date=till.isoformat(),
-            completed_only=True,
-        )
-        m15 = self.market_data.candles_for_instrument(
-            instrument,
-            timeframe="M15",
-            from_date=(till - timedelta(days=20)).isoformat(),
-            till_date=till.isoformat(),
-            completed_only=True,
-        )
+        d1 = self.market_data.candles_for_instrument(instrument, timeframe="D1", from_date=(till - timedelta(days=260)).isoformat(), till_date=till.isoformat(), completed_only=True)
+        h1 = self.market_data.candles_for_instrument(instrument, timeframe="H1", from_date=(till - timedelta(days=60)).isoformat(), till_date=till.isoformat(), completed_only=True)
+        m15 = self.market_data.candles_for_instrument(instrument, timeframe="M15", from_date=(till - timedelta(days=20)).isoformat(), till_date=till.isoformat(), completed_only=True)
 
         last_ends = [series.candles[-1].end for series in (d1, h1, m15) if series.candles]
         if not last_ends:
             raise ValueError("no completed candles available for snapshot")
-
-        # T0 is the latest completed observation available to the system. Each
-        # timeframe may legitimately end earlier (e.g. D1 vs current H1/M15);
-        # causal correctness requires every included observation <= T0, not that
-        # all timeframes be artificially truncated to the oldest last bar.
         causal_t0 = max(last_ends, key=_timestamp)
         d1 = _cut_at(d1, causal_t0)
         h1 = _cut_at(h1, causal_t0)
@@ -76,12 +50,7 @@ class MarketSnapshotService:
 
         flow_snapshot: MarketFlowSnapshot | None = None
         if self.flow is not None:
-            flow_snapshot = self.flow.build_for_instrument(
-                instrument,
-                till_date=till.isoformat(),
-                lookback_days=5,
-                cutoff_at=causal_t0,
-            )
+            flow_snapshot = self.flow.build_for_instrument(instrument, till_date=till.isoformat(), lookback_days=5, cutoff_at=causal_t0)
             if flow_snapshot.secid != instrument.secid:
                 raise ValueError("flow contract does not match candle contract")
             if flow_snapshot.as_of is not None and _timestamp(flow_snapshot.as_of) > _timestamp(causal_t0):
@@ -91,16 +60,9 @@ class MarketSnapshotService:
         quality = "PASS" if not warnings else "DEGRADED"
         source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
         return MarketSnapshot(
-            symbol=symbol,
-            secid=instrument.secid,
-            as_of=causal_t0,
-            source=source,
-            d1=_state(d1),
-            h1=_state(h1),
-            m15=_state(m15),
-            flow=flow_snapshot,
-            data_quality=quality,
-            warnings=tuple(warnings),
+            symbol=symbol, secid=instrument.secid, as_of=causal_t0, source=source,
+            d1=_state(d1), h1=_state(h1), m15=_state(m15), flow=flow_snapshot,
+            data_quality=quality, warnings=tuple(warnings),
         )
 
 
@@ -113,11 +75,7 @@ def _timestamp(value: str) -> datetime:
 
 def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
     boundary = _timestamp(t0)
-    candles = tuple(
-        candle
-        for candle in series.candles
-        if candle.completed and _timestamp(candle.end) <= boundary
-    )
+    candles = tuple(candle for candle in series.candles if candle.completed and _timestamp(candle.end) <= boundary)
     return CandleSeries(instrument=series.instrument, timeframe=series.timeframe, candles=candles)
 
 
@@ -126,18 +84,10 @@ def _state(series: CandleSeries) -> TimeframeState:
     closes = [c.close for c in candles if c.close is not None]
     volumes = [c.volume for c in candles if c.volume is not None]
     return TimeframeState(
-        timeframe=series.timeframe,
-        candles=len(candles),
-        last_close=closes[-1] if closes else None,
-        return_5=_return_n(closes, 5),
-        return_10=_return_n(closes, 10),
-        return_20=_return_n(closes, 20),
-        sma_20=_sma(closes, 20),
-        sma_50=_sma(closes, 50),
-        efficiency_ratio_20=_efficiency_ratio(closes, 20),
-        atr_14_pct=_atr_pct(candles, 14),
-        volume_ratio_20=_volume_ratio(volumes, 20),
-        trend_score=_trend_score(closes),
+        timeframe=series.timeframe, candles=len(candles), last_close=closes[-1] if closes else None,
+        return_5=_return_n(closes, 5), return_10=_return_n(closes, 10), return_20=_return_n(closes, 20),
+        sma_20=_sma(closes, 20), sma_50=_sma(closes, 50), efficiency_ratio_20=_efficiency_ratio(closes, 20),
+        atr_14_pct=_atr_pct(candles, 14), volume_ratio_20=_volume_ratio(volumes, 20), trend_score=_trend_score(closes),
     )
 
 
