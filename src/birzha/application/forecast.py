@@ -82,6 +82,13 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
     digest = hashlib.sha256(
         json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:24]
+    reference_price = (
+        snapshot.m15.last_close
+        if snapshot.m15.last_close is not None
+        else snapshot.h1.last_close
+        if snapshot.h1.last_close is not None
+        else snapshot.d1.last_close
+    )
 
     return ForecastRecord(
         forecast_id=f"fcst_{digest}",
@@ -97,30 +104,20 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
         reasons=tuple(reasons),
         warnings=tuple(warnings),
         validation_status="UNVALIDATED_BASELINE",
+        reference_price=reference_price,
     )
 
 
 def _combined_score(snapshot: MarketSnapshot) -> float:
-    # Long horizon leads. Intraday frames refine timing but cannot dominate D1.
-    score = (
-        0.55 * snapshot.d1.trend_score
-        + 0.30 * snapshot.h1.trend_score
-        + 0.15 * snapshot.m15.trend_score
-    )
-
+    score = 0.55 * snapshot.d1.trend_score + 0.30 * snapshot.h1.trend_score + 0.15 * snapshot.m15.trend_score
     aligned = 0
     for state in (snapshot.d1, snapshot.h1, snapshot.m15):
         if state.return_5 is not None:
             aligned += 1 if state.return_5 > 0 else -1 if state.return_5 < 0 else 0
     score += 0.25 * aligned
-
     er = snapshot.d1.efficiency_ratio_20
     if er is not None and er < 0.2:
         score *= 0.7
-
-    # Flow is a conservative refinement, not the main driver. Aggressive-volume
-    # Delta contributes at most +/-0.45 score units. OI contributes only as a
-    # confirmation/weakening signal for the observed price move.
     score += _flow_adjustment(snapshot)
     return score
 
@@ -129,50 +126,30 @@ def _flow_adjustment(snapshot: MarketSnapshot) -> float:
     flow = snapshot.flow
     if flow is None:
         return 0.0
-
     adjustment = 0.0
     if flow.volume_delta_ratio is not None:
         clipped = max(-0.30, min(0.30, flow.volume_delta_ratio))
         adjustment += 1.5 * clipped
-
     price = flow.price_change_pct
     oi_open = flow.algopack_oi_open
     oi_change = flow.algopack_oi_change
     if price not in {None, 0.0} and oi_open not in {None, 0.0} and oi_change not in {None, 0.0}:
         price_sign = 1.0 if price > 0 else -1.0
-        if oi_change > 0:
-            adjustment += 0.30 * price_sign
-        else:
-            adjustment -= 0.10 * price_sign
-
+        adjustment += 0.30 * price_sign if oi_change > 0 else -0.10 * price_sign
     return max(-0.75, min(0.75, adjustment))
 
 
 def _reasons(snapshot: MarketSnapshot, score: float) -> list[str]:
     reasons = [f"combined_directional_score={score:.4f}"]
     for state in (snapshot.d1, snapshot.h1, snapshot.m15):
-        reasons.append(
-            f"{state.timeframe}:trend_score={state.trend_score:.4f},"
-            f"return20={_fmt(state.return_20)},er20={_fmt(state.efficiency_ratio_20)}"
-        )
+        reasons.append(f"{state.timeframe}:trend_score={state.trend_score:.4f},return20={_fmt(state.return_20)},er20={_fmt(state.efficiency_ratio_20)}")
     if snapshot.d1.atr_14_pct is not None:
         reasons.append(f"D1:atr14_pct={snapshot.d1.atr_14_pct * 100:.3f}")
     if snapshot.flow is not None:
         flow = snapshot.flow
-        reasons.append(
-            "FLOW:"
-            f"delta_ratio={_fmt(flow.volume_delta_ratio)},"
-            f"price_change_pct={_fmt(flow.price_change_pct)},"
-            f"oi_change={_fmt(flow.algopack_oi_change)},"
-            f"adjustment={_flow_adjustment(snapshot):.4f},"
-            f"as_of={flow.as_of or 'NULL'}"
-        )
+        reasons.append("FLOW:" f"delta_ratio={_fmt(flow.volume_delta_ratio)}," f"price_change_pct={_fmt(flow.price_change_pct)}," f"oi_change={_fmt(flow.algopack_oi_change)}," f"adjustment={_flow_adjustment(snapshot):.4f}," f"as_of={flow.as_of or 'NULL'}")
         if flow.individuals is not None or flow.legal_entities is not None:
-            reasons.append(
-                "FUTOI:"
-                f"individuals_net={_fmt(flow.individuals.net_position if flow.individuals else None)},"
-                f"legal_net={_fmt(flow.legal_entities.net_position if flow.legal_entities else None)}"
-            )
+            reasons.append("FUTOI:" f"individuals_net={_fmt(flow.individuals.net_position if flow.individuals else None)}," f"legal_net={_fmt(flow.legal_entities.net_position if flow.legal_entities else None)}")
     return reasons
 
 
