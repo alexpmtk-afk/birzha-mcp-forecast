@@ -136,7 +136,16 @@ class WalkForwardValidator:
         cursor = start
         seen_contracts: set[str] = set()
         while cursor <= end:
-            instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
+            try:
+                instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
+            except MoexIssError:
+                # A trailing weekend/holiday after the last collected futures
+                # session is normal. Once valid sessions exist, terminate the
+                # requested calendar instead of treating closed tail days as a
+                # missing-contract failure.
+                if sessions:
+                    break
+                raise
             if instrument.secid in seen_contracts:
                 cursor = resolved_day + timedelta(days=1)
                 continue
