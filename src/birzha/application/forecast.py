@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass
 
 from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.domain.snapshot import MarketSnapshot
 
@@ -25,8 +26,13 @@ class ForecastService:
     snapshots: MarketSnapshotService
 
     @classmethod
-    def default(cls) -> "ForecastService":
-        return cls(snapshots=MarketSnapshotService.default())
+    def default(
+        cls,
+        *,
+        control_plane: ProcessUpstreamControlPlane | None = None,
+    ) -> "ForecastService":
+        shared_control = control_plane or ProcessUpstreamControlPlane()
+        return cls(snapshots=MarketSnapshotService.default(control_plane=shared_control))
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> ForecastRecord:
         snapshot = self.snapshots.build(symbol, as_of_date=as_of_date)
