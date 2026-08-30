@@ -70,6 +70,8 @@ def test_snapshot_t0_is_latest_completed_observation_not_oldest_timeframe_end() 
 
     snapshot = service.build("Si", as_of_date="2026-08-28")
 
+    assert snapshot.contract_version == "MARKET_SNAPSHOT_V2"
+    assert snapshot.to_dict()["contract_version"] == "MARKET_SNAPSHOT_V2"
     assert snapshot.as_of == "2026-08-28 13:14:59"
     assert snapshot.d1.candles > 0
     assert snapshot.h1.candles > 0
