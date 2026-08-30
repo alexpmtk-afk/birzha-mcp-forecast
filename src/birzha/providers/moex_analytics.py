@@ -1,9 +1,6 @@
 """Real MOEX ALGOPACK TradeStats and FUTOI provider.
 
-Paths and field semantics follow the official MOEX Algo client/documentation:
-- /datashop/algopack/fo/tradestats/{secid}
-- /analyticalproducts/futoi/securities/{root_symbol}
-
+Paths and field semantics follow the official MOEX Algo client/documentation.
 All outbound attempts pass through the mandatory BIRZHA request governor.
 """
 
@@ -12,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -171,9 +168,10 @@ class MoexAnalyticsClient:
         till_date: str,
         latest: bool = False,
     ) -> list[dict[str, Any]]:
-        """Return raw five-minute futures TradeStats rows for one contract."""
+        """Return raw five-minute TradeStats rows for a supported asset class."""
 
-        path = f"/datashop/algopack/fo/tradestats/{instrument.secid}.json"
+        market_code = _algopack_market_code(instrument)
+        path = f"/datashop/algopack/{market_code}/tradestats/{instrument.secid}.json"
         params: dict[str, object] = {
             "iss.meta": "off",
             "from": from_date,
@@ -197,8 +195,10 @@ class MoexAnalyticsClient:
         from_date: str,
         till_date: str,
     ) -> list[dict[str, Any]]:
-        """Return raw intraday open-interest rows split by client group."""
+        """Return intraday open-interest rows split by client group for futures."""
 
+        if instrument.asset_class != "future":
+            raise MoexAnalyticsError("FUTOI is only applicable to futures instruments")
         root = (instrument.root_symbol or instrument.symbol).strip()
         if not root:
             raise ValueError("instrument root symbol is required for FUTOI")
@@ -215,3 +215,15 @@ class MoexAnalyticsClient:
             table="futoi",
             authenticated_policy=False,
         )
+
+
+def _algopack_market_code(instrument: Instrument) -> str:
+    if instrument.asset_class == "future":
+        return "fo"
+    if instrument.asset_class == "equity":
+        return "eq"
+    if instrument.asset_class == "fx":
+        return "fx"
+    raise MoexAnalyticsError(
+        f"ALGOPACK TradeStats is not configured for asset_class={instrument.asset_class!r}"
+    )

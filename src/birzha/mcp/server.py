@@ -36,17 +36,28 @@ def system_version() -> dict[str, str]:
 
 
 @mcp.tool(
+    name="market.resolve_instrument",
+    description=(
+        "Resolve a directly listed MOEX instrument such as SBER or the current "
+        "liquid futures contract for a root such as Si."
+    ),
+)
+def market_resolve_instrument(symbol: str) -> dict[str, object]:
+    return _market.resolve(symbol).to_dict()
+
+
+@mcp.tool(
     name="market.resolve_active_future",
-    description="Resolve the current liquid MOEX futures contract for a root symbol such as Si.",
+    description="Backward-compatible resolver for the current liquid MOEX futures root such as Si.",
 )
 def market_resolve_active_future(symbol: str) -> dict[str, object]:
-    return _market.resolve(symbol).to_dict()
+    return _market.provider.resolve_active_future(symbol).to_dict()
 
 
 @mcp.tool(
     name="market.candles",
     description=(
-        "Load real MOEX candles for the currently resolved futures contract. "
+        "Load real MOEX candles for a resolved futures or equity instrument. "
         "Supported timeframes: M1, M10, M15, H1, D1, W1, MN1."
     ),
 )
@@ -68,7 +79,7 @@ def market_candles(
 
 @mcp.tool(
     name="market.recent_candles",
-    description="Load recent real MOEX candles by lookback days for the current futures contract.",
+    description="Load recent real MOEX candles by lookback days for a supported instrument.",
 )
 def market_recent_candles(
     symbol: str,
@@ -87,8 +98,8 @@ def market_recent_candles(
 @mcp.tool(
     name="market.flow",
     description=(
-        "Build real MOEX futures flow analytics from ALGOPACK TradeStats and FUTOI: "
-        "aggressive buy/sell volume, volume delta, value delta and client open interest."
+        "Build real MOEX flow analytics from ALGOPACK TradeStats and, for futures, FUTOI: "
+        "aggressive buy/sell volume, volume delta, value delta and open interest."
     ),
 )
 def market_flow(
@@ -109,7 +120,7 @@ def market_flow(
     name="market.snapshot",
     description=(
         "Build a causal D1/H1/M15 Market Snapshot from real MOEX price, volume, "
-        "ALGOPACK Delta and FUTOI data at one forecast T0."
+        "ALGOPACK Delta and applicable OI data at one forecast T0."
     ),
 )
 def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
@@ -120,7 +131,7 @@ def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, obj
     name="forecast.build",
     description=(
         "Build an explainable ex-ante BIRZHA baseline forecast for approximately "
-        "5, 10 and 20 trading sessions using causal price, Delta and OI evidence."
+        "5, 10 and 20 trading sessions using causal price, Delta and applicable OI evidence."
     ),
 )
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
