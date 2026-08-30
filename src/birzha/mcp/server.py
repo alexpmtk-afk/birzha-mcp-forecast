@@ -24,14 +24,14 @@ from birzha.providers.moex_analytics import MoexAnalyticsClient
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
+from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
 settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
 
 # One composition-root control plane is shared by every MOEX/ALGOPACK adapter in
-# this server process. This is required so concurrent MCP tools cannot multiply
-# the process-local upstream request rate by constructing independent limiters.
+# this server process. This prevents concurrent tools from multiplying request rate.
 _upstream_control = ProcessUpstreamControlPlane()
 _market = MarketDataService.default(control_plane=_upstream_control)
 _flow = MarketFlowService(
@@ -40,10 +40,19 @@ _flow = MarketFlowService(
 )
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
-_journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
-_outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
-_journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)
-_outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)
+
+_ydb_runtime: YdbRuntime | None = None
+if settings.state_backend == "ydb":
+    assert settings.ydb_connection_string is not None
+    _ydb_runtime = YdbRuntime.connect(settings.ydb_connection_string)
+    _journal_store = YdbForecastJournal(_ydb_runtime.pool)
+    _outcome_store = YdbOutcomeJournal(_ydb_runtime.pool)
+else:
+    _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
+    _outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
+
+_journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
+_outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
 _validator = WalkForwardValidator(
     market_data=_market,
     forecasts=_forecast,
@@ -120,18 +129,17 @@ def outcome_list(forecast_id: str) -> dict[str, object]:
 
 @mcp.tool(name="validation.walk_forward", description="Run a causal historical walk-forward validation over official MOEX trading sessions. Historical futures roots are resolved to the contract that was liquid on each forecast date.")
 def validation_walk_forward(symbol: str, start_date: str, end_date: str, step_sessions: int = 5, max_points: int = 24) -> dict[str, object]:
-    return _validator.run(
-        symbol,
-        start_date=start_date,
-        end_date=end_date,
-        step_sessions=step_sessions,
-        max_points=max_points,
-    ).to_dict()
+    return _validator.run(symbol, start_date=start_date, end_date=end_date, step_sessions=step_sessions, max_points=max_points).to_dict()
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "service": SERVICE_NAME, "version": VERSION})
+    return JSONResponse({
+        "status": "ok",
+        "service": SERVICE_NAME,
+        "version": VERSION,
+        "state_backend": settings.state_backend,
+    })
 
 
 transport_security = TransportSecuritySettings(
