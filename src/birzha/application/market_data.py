@@ -44,6 +44,8 @@ class MarketDataService:
             today = datetime.now(MOEX_TIMEZONE).date()
             if as_of < today:
                 return self.historical_future_resolver.resolve(symbol, as_of)
+        if as_of is None:
+            return self.provider.resolve_active_future(symbol)
         return self.provider.resolve_active_future(symbol, as_of=as_of)
 
     def candles_for_instrument(
