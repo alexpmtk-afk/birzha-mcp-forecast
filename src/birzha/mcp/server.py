@@ -22,6 +22,7 @@ from birzha.config import Settings
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
+from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
 settings = Settings.from_env()
@@ -30,10 +31,17 @@ _market = MarketDataService.default()
 _flow = MarketFlowService.default()
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
-_journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
-_outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
-_journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)
-_outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)
+_ydb_runtime: YdbRuntime | None = None
+if settings.state_backend == "ydb":
+    assert settings.ydb_connection_string is not None
+    _ydb_runtime = YdbRuntime.connect(settings.ydb_connection_string)
+    _journal_store = YdbForecastJournal(_ydb_runtime.pool)
+    _outcome_store = YdbOutcomeJournal(_ydb_runtime.pool)
+else:
+    _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
+    _outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
+_journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
+_outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
 _validator = WalkForwardValidator(
     market_data=_market,
     forecasts=_forecast,
@@ -121,7 +129,12 @@ def validation_walk_forward(symbol: str, start_date: str, end_date: str, step_se
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "service": SERVICE_NAME, "version": VERSION})
+    return JSONResponse({
+        "status": "ok",
+        "service": SERVICE_NAME,
+        "version": VERSION,
+        "state_backend": settings.state_backend,
+    })
 
 
 transport_security = TransportSecuritySettings(
