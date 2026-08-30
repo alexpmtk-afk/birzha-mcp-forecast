@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta
 from birzha.application.flow import MarketFlowService
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.domain.flow import MarketFlowSnapshot
-from birzha.domain.market import Candle, CandleSeries
+from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 from birzha.providers.moex_analytics import MoexAnalyticsClient
 
@@ -30,9 +30,21 @@ class MarketSnapshotService:
         till = date.fromisoformat(as_of_date) if as_of_date else datetime.now(MOEX_TIMEZONE).date()
         instrument = self.market_data.resolve(symbol, as_of=till)
 
-        d1 = self.market_data.candles_for_instrument(instrument, timeframe="D1", from_date=(till - timedelta(days=260)).isoformat(), till_date=till.isoformat(), completed_only=True)
-        h1 = self.market_data.candles_for_instrument(instrument, timeframe="H1", from_date=(till - timedelta(days=60)).isoformat(), till_date=till.isoformat(), completed_only=True)
-        m15 = self.market_data.candles_for_instrument(instrument, timeframe="M15", from_date=(till - timedelta(days=20)).isoformat(), till_date=till.isoformat(), completed_only=True)
+        d1 = self.market_data.candles_for_instrument(
+            instrument,
+            timeframe="D1",
+            from_date=(till - timedelta(days=260)).isoformat(),
+            till_date=till.isoformat(),
+            completed_only=True,
+        )
+        h1 = self.market_data.candles_for_instrument(
+            instrument,
+            timeframe="H1",
+            from_date=(till - timedelta(days=60)).isoformat(),
+            till_date=till.isoformat(),
+            completed_only=True,
+        )
+        m15 = _load_m15(self.market_data, instrument, till)
 
         last_ends = [series.candles[-1].end for series in (d1, h1, m15) if series.candles]
         if not last_ends:
@@ -50,7 +62,12 @@ class MarketSnapshotService:
 
         flow_snapshot: MarketFlowSnapshot | None = None
         if self.flow is not None:
-            flow_snapshot = self.flow.build_for_instrument(instrument, till_date=till.isoformat(), lookback_days=5, cutoff_at=causal_t0)
+            flow_snapshot = self.flow.build_for_instrument(
+                instrument,
+                till_date=till.isoformat(),
+                lookback_days=5,
+                cutoff_at=causal_t0,
+            )
             if flow_snapshot.secid != instrument.secid:
                 raise ValueError("flow contract does not match candle contract")
             if flow_snapshot.as_of is not None and _timestamp(flow_snapshot.as_of) > _timestamp(causal_t0):
@@ -60,10 +77,47 @@ class MarketSnapshotService:
         quality = "PASS" if not warnings else "DEGRADED"
         source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
         return MarketSnapshot(
-            symbol=symbol, secid=instrument.secid, as_of=causal_t0, source=source,
-            d1=_state(d1), h1=_state(h1), m15=_state(m15), flow=flow_snapshot,
-            data_quality=quality, warnings=tuple(warnings),
+            symbol=symbol,
+            secid=instrument.secid,
+            as_of=causal_t0,
+            source=source,
+            d1=_state(d1),
+            h1=_state(h1),
+            m15=_state(m15),
+            flow=flow_snapshot,
+            data_quality=quality,
+            warnings=tuple(warnings),
         )
+
+
+def _load_m15(
+    market_data: MarketDataService,
+    instrument: Instrument,
+    till: date,
+) -> CandleSeries:
+    """Load enough M15 history without over-fetching minute data.
+
+    M15 is causally aggregated from M1. All current M15 features use at most the
+    latest 50 completed bars, so the normal request starts with seven calendar
+    days. If an exchange closure or sparse history leaves fewer than 50 bars,
+    the provider safely expands to the previous 20-day bound. The feature values
+    are unchanged whenever the shorter request already contains the same latest
+    50 bars.
+    """
+
+    series: CandleSeries | None = None
+    for lookback_days in (7, 20):
+        series = market_data.candles_for_instrument(
+            instrument,
+            timeframe="M15",
+            from_date=(till - timedelta(days=lookback_days)).isoformat(),
+            till_date=till.isoformat(),
+            completed_only=True,
+        )
+        if series.count >= 50:
+            return series
+    assert series is not None
+    return series
 
 
 def _timestamp(value: str) -> datetime:
@@ -75,7 +129,11 @@ def _timestamp(value: str) -> datetime:
 
 def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
     boundary = _timestamp(t0)
-    candles = tuple(candle for candle in series.candles if candle.completed and _timestamp(candle.end) <= boundary)
+    candles = tuple(
+        candle
+        for candle in series.candles
+        if candle.completed and _timestamp(candle.end) <= boundary
+    )
     return CandleSeries(instrument=series.instrument, timeframe=series.timeframe, candles=candles)
 
 
@@ -84,10 +142,18 @@ def _state(series: CandleSeries) -> TimeframeState:
     closes = [c.close for c in candles if c.close is not None]
     volumes = [c.volume for c in candles if c.volume is not None]
     return TimeframeState(
-        timeframe=series.timeframe, candles=len(candles), last_close=closes[-1] if closes else None,
-        return_5=_return_n(closes, 5), return_10=_return_n(closes, 10), return_20=_return_n(closes, 20),
-        sma_20=_sma(closes, 20), sma_50=_sma(closes, 50), efficiency_ratio_20=_efficiency_ratio(closes, 20),
-        atr_14_pct=_atr_pct(candles, 14), volume_ratio_20=_volume_ratio(volumes, 20), trend_score=_trend_score(closes),
+        timeframe=series.timeframe,
+        candles=len(candles),
+        last_close=closes[-1] if closes else None,
+        return_5=_return_n(closes, 5),
+        return_10=_return_n(closes, 10),
+        return_20=_return_n(closes, 20),
+        sma_20=_sma(closes, 20),
+        sma_50=_sma(closes, 50),
+        efficiency_ratio_20=_efficiency_ratio(closes, 20),
+        atr_14_pct=_atr_pct(candles, 14),
+        volume_ratio_20=_volume_ratio(volumes, 20),
+        trend_score=_trend_score(closes),
     )
 
 
@@ -106,7 +172,7 @@ def _sma(values: list[float], n: int) -> float | None:
 def _efficiency_ratio(values: list[float], n: int) -> float | None:
     if len(values) <= n:
         return None
-    window = values[-(n + 1):]
+    window = values[-(n + 1) :]
     direction = abs(window[-1] - window[0])
     noise = sum(abs(b - a) for a, b in zip(window, window[1:]))
     return direction / noise if noise else 0.0
@@ -117,7 +183,7 @@ def _atr_pct(candles: list[Candle], n: int) -> float | None:
     if len(usable) < n + 1:
         return None
     trs: list[float] = []
-    for prev, cur in zip(usable[-(n + 1):-1], usable[-n:]):
+    for prev, cur in zip(usable[-(n + 1) : -1], usable[-n:]):
         assert cur.high is not None and cur.low is not None and prev.close is not None
         trs.append(max(cur.high - cur.low, abs(cur.high - prev.close), abs(cur.low - prev.close)))
     last_close = usable[-1].close
@@ -129,7 +195,7 @@ def _atr_pct(candles: list[Candle], n: int) -> float | None:
 def _volume_ratio(values: list[float], n: int) -> float | None:
     if len(values) < n + 1:
         return None
-    baseline = sum(values[-(n + 1):-1]) / n
+    baseline = sum(values[-(n + 1) : -1]) / n
     return values[-1] / baseline if baseline else None
 
 

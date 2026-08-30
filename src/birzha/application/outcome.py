@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.domain.forecast import ForecastRecord
+from birzha.domain.market import Instrument
 from birzha.domain.outcome import HorizonOutcome, OutcomeEvaluation
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
@@ -23,8 +24,8 @@ class OutcomeService:
         forecast = self.forecasts.get(forecast_id)
         if forecast is None:
             raise KeyError(f"forecast not found: {forecast_id}")
-        instrument = self._exact_instrument(forecast)
         t0 = _parse_time(forecast.created_at_t0)
+        instrument = self._exact_instrument(forecast, t0=t0)
         start_date = (t0.date() - timedelta(days=7)).isoformat()
         cutoff = date.fromisoformat(evaluation_date) if evaluation_date else datetime.now(MOEX_TIMEZONE).date()
         if cutoff < t0.date():
@@ -106,14 +107,35 @@ class OutcomeService:
             status=status,
         )
 
-    def _exact_instrument(self, forecast: ForecastRecord):
+    def _exact_instrument(self, forecast: ForecastRecord, *, t0: datetime) -> Instrument:
+        """Recover the immutable instrument as it existed at forecast T0.
+
+        Current-security lookup is sufficient for still-listed equities. Expired
+        futures may disappear from the current securities resolver, so they must
+        be reconstructed through the historical futures resolver at the original
+        forecast date. The recovered SECID must exactly match the SECID persisted
+        in the immutable Forecast Record; otherwise evaluation fails closed.
+        """
+
         resolver = self.market_data.direct_resolver
-        if resolver is None:
-            raise ValueError("direct instrument resolver is required for outcomes")
-        instrument = resolver.resolve(forecast.secid)
-        if instrument is None:
-            raise ValueError(f"stored SECID is no longer resolvable on MOEX: {forecast.secid}")
-        return instrument
+        if resolver is not None:
+            instrument = resolver.resolve(forecast.secid)
+            if instrument is not None:
+                if instrument.secid != forecast.secid:
+                    raise ValueError("current resolver returned a different SECID than the Forecast Record")
+                return instrument
+
+        historical = self.market_data.historical_future_resolver
+        if historical is not None:
+            instrument = historical.resolve(forecast.symbol, t0.date())
+            if instrument.secid != forecast.secid:
+                raise ValueError(
+                    "historical contract at forecast T0 does not match stored SECID: "
+                    f"stored={forecast.secid}, resolved={instrument.secid}"
+                )
+            return instrument
+
+        raise ValueError(f"stored SECID is no longer resolvable on MOEX: {forecast.secid}")
 
 
 def _parse_time(value: str) -> datetime:

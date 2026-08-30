@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from statistics import fmean
 
 from birzha.application.forecast import ForecastService
@@ -13,6 +13,7 @@ from birzha.domain.forecast import ForecastRecord
 from birzha.domain.outcome import HorizonOutcome
 from birzha.domain.validation import HorizonValidationMetrics, WalkForwardReport
 from birzha.providers.moex_calendar import MoexTradingCalendar
+from birzha.providers.moex_iss import MoexIssError
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 
@@ -50,10 +51,7 @@ class WalkForwardValidator:
         if max_points <= 0 or max_points > 60:
             raise ValueError("max_points must be between 1 and 60")
 
-        engine, market, board = self._calendar_route(symbol)
-        sessions = self.calendar.dates(
-            engine=engine, market=market, board=board, from_date=start, till_date=end
-        )
+        sessions = self._session_dates(symbol, start=start, end=end)
         # Require the full longest horizon to mature inside the requested test
         # period. This keeps all horizon metrics on the same ex-ante sample.
         eligible = sessions[:-20] if len(sessions) > 20 else ()
@@ -114,15 +112,77 @@ class WalkForwardValidator:
             status=status,
         )
 
-    def _calendar_route(self, symbol: str) -> tuple[str, str, str]:
+    def _session_dates(self, symbol: str, *, start: date, end: date) -> tuple[date, ...]:
+        """Build a real-session calendar from exact securities, including rolls."""
+
         resolver = self.market_data.direct_resolver
         if resolver is not None:
             direct = resolver.resolve(symbol)
             if direct is not None and direct.asset_class != "unknown":
-                return direct.engine, direct.market, direct.board
-        # A non-direct symbol is a futures root in the current application
-        # contract. No symbol-specific rule is used here.
-        return "futures", "forts", "RFUD"
+                return self.calendar.dates(
+                    engine=direct.engine,
+                    market=direct.market,
+                    board=direct.board,
+                    security=direct.secid,
+                    from_date=start,
+                    till_date=end,
+                )
+
+        historical = self.market_data.historical_future_resolver
+        if historical is None:
+            raise RuntimeError("historical futures resolver is required for walk-forward validation")
+
+        sessions: set[date] = set()
+        cursor = start
+        seen_contracts: set[str] = set()
+        while cursor <= end:
+            instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
+            if instrument.secid in seen_contracts:
+                # A repeated contract after its last returned history date would
+                # otherwise loop forever. Move beyond the probe date and retry.
+                cursor = resolved_day + timedelta(days=1)
+                continue
+            seen_contracts.add(instrument.secid)
+            contract_dates = self.calendar.dates(
+                engine=instrument.engine,
+                market=instrument.market,
+                board=instrument.board,
+                security=instrument.secid,
+                from_date=resolved_day,
+                till_date=end,
+            )
+            relevant = tuple(day for day in contract_dates if day >= cursor)
+            if not relevant:
+                cursor = resolved_day + timedelta(days=1)
+                continue
+            sessions.update(relevant)
+            last = relevant[-1]
+            if last >= end:
+                break
+            cursor = last + timedelta(days=1)
+
+        return tuple(sorted(day for day in sessions if start <= day <= end))
+
+    def _resolve_future_on_or_after(
+        self, symbol: str, start: date, end: date
+    ) -> tuple[object, date]:
+        historical = self.market_data.historical_future_resolver
+        assert historical is not None
+        probe = start
+        # Long exchange closures are rare; 14 calendar days is deliberately
+        # bounded so invalid symbols fail instead of causing an unbounded scan.
+        for _ in range(14):
+            if probe > end:
+                break
+            if probe.weekday() < 5:
+                try:
+                    return historical.resolve(symbol, probe), probe
+                except MoexIssError:
+                    pass
+            probe += timedelta(days=1)
+        raise MoexIssError(
+            f"No historical MOEX futures session found for {symbol!r} on or after {start.isoformat()}"
+        )
 
 
 def summarize_walk_forward(

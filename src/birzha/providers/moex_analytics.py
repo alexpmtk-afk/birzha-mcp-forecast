@@ -132,10 +132,21 @@ class MoexAnalyticsClient:
         table: str,
         authenticated_policy: bool,
         page_limit: int = 1000,
+        max_pages: int = 50,
     ) -> list[dict[str, Any]]:
+        """Read bounded analytical pages and fail closed if pagination stalls.
+
+        A remote endpoint must never be able to keep BIRZHA in an unbounded loop
+        by returning the same full page for successive ``start`` offsets. Both a
+        page-count ceiling and a repeated-page fingerprint guard are enforced.
+        """
+
+        if max_pages <= 0:
+            raise ValueError("max_pages must be > 0")
         rows: list[dict[str, Any]] = []
         start = 0
-        while True:
+        previous_fingerprint: str | None = None
+        for page_number in range(max_pages):
             payload = self._request(
                 base=base,
                 path=path,
@@ -143,22 +154,34 @@ class MoexAnalyticsClient:
                 authenticated_policy=authenticated_policy,
             ).json()
             page = self._table(payload, table)
-            rows.extend(page)
             if not page:
-                break
+                return rows
+
+            fingerprint = json.dumps(page, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if previous_fingerprint is not None and fingerprint == previous_fingerprint:
+                raise MoexAnalyticsError(
+                    f"MOEX analytics pagination stalled for {path}: repeated page at start={start}"
+                )
+            previous_fingerprint = fingerprint
+            rows.extend(page)
+
             cursor_rows = self._table(payload, f"{table}.cursor")
             if cursor_rows:
                 cursor = cursor_rows[0]
                 total = int(cursor.get("TOTAL") or cursor.get("total") or len(rows))
                 page_size = int(cursor.get("PAGESIZE") or cursor.get("pagesize") or len(page))
                 if len(rows) >= total or page_size <= 0:
-                    break
+                    return rows
                 start += page_size
-            else:
-                if len(page) < page_limit:
-                    break
-                start += len(page)
-        return rows
+                continue
+
+            if len(page) < page_limit:
+                return rows
+            start += len(page)
+
+        raise MoexAnalyticsError(
+            f"MOEX analytics pagination exceeded safe max_pages={max_pages} for {path}"
+        )
 
     def fetch_tradestats(
         self,
