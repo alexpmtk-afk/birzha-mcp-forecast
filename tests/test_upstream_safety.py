@@ -4,13 +4,16 @@ from dataclasses import dataclass, field
 
 import pytest
 
+from birzha.application.upstream_control import UpstreamRequestGovernor
 from birzha.upstream.moex import (
     MOEX_AUTHENTICATED_POLICY,
     MOEX_ISS_PUBLIC_POLICY,
     policy_for_moex,
 )
 from birzha.upstream.safety import (
+    ProcessPacingGate,
     SafeRequestExecutor,
+    UnsafeUpstreamConfiguration,
     UpstreamPolicy,
     UpstreamRateLimited,
     UpstreamRequestBudgetExceeded,
@@ -36,32 +39,47 @@ class FakeResponse:
     headers: dict[str, str] = field(default_factory=dict)
 
 
-def test_moex_default_policies_are_conservative() -> None:
-    assert MOEX_ISS_PUBLIC_POLICY.min_interval_seconds == 0.5
-    assert MOEX_AUTHENTICATED_POLICY.min_interval_seconds == 1.0
-    assert policy_for_moex(authenticated=False) is MOEX_ISS_PUBLIC_POLICY
-    assert policy_for_moex(authenticated=True) is MOEX_AUTHENTICATED_POLICY
+class FakeDistributedGate(ProcessPacingGate):
+    scope = "distributed"
 
 
-def test_executor_spaces_requests() -> None:
-    clock = FakeClock()
-    executor = SafeRequestExecutor(
-        UpstreamPolicy(min_interval_seconds=0.5, max_requests_per_operation=10),
-        clock=clock,
+def executor_for(policy: UpstreamPolicy, clock: FakeClock, *, distributed: bool = False) -> SafeRequestExecutor:
+    gate_cls = FakeDistributedGate if distributed else ProcessPacingGate
+    gate = gate_cls(clock=clock, sleeper=clock.sleep)
+    return SafeRequestExecutor(
+        policy,
+        gate=gate,
         sleeper=clock.sleep,
         jitter=lambda: 0.0,
     )
 
+
+def test_moex_default_policies_reserve_ten_percent_headroom() -> None:
+    assert MOEX_ISS_PUBLIC_POLICY.hard_requests_per_second == 2.0
+    assert MOEX_ISS_PUBLIC_POLICY.target_requests_per_second == pytest.approx(1.8)
+    assert MOEX_ISS_PUBLIC_POLICY.effective_min_interval_seconds == pytest.approx(0.5 / 0.9)
+    assert MOEX_AUTHENTICATED_POLICY.hard_requests_per_second == 1.0
+    assert MOEX_AUTHENTICATED_POLICY.target_requests_per_second == pytest.approx(0.9)
+    assert MOEX_AUTHENTICATED_POLICY.effective_min_interval_seconds == pytest.approx(1.0 / 0.9)
+    assert policy_for_moex(authenticated=False) is MOEX_ISS_PUBLIC_POLICY
+    assert policy_for_moex(authenticated=True) is MOEX_AUTHENTICATED_POLICY
+
+
+def test_executor_spaces_requests_at_effective_not_hard_ceiling() -> None:
+    clock = FakeClock()
+    policy = UpstreamPolicy(min_interval_seconds=0.5, max_requests_per_operation=10)
+    executor = executor_for(policy, clock)
+
     assert executor.run(lambda: FakeResponse(200)).status_code == 200
     assert executor.run(lambda: FakeResponse(200)).status_code == 200
-    assert clock.sleeps == [0.5]
+    assert clock.sleeps == [pytest.approx(0.5 / 0.9)]
     assert executor.requests_used == 2
 
 
 def test_retry_after_is_honored_and_retry_counts_toward_budget() -> None:
     clock = FakeClock()
     responses = iter([FakeResponse(429, {"Retry-After": "3"}), FakeResponse(200)])
-    executor = SafeRequestExecutor(
+    executor = executor_for(
         UpstreamPolicy(
             min_interval_seconds=0.5,
             max_requests_per_operation=5,
@@ -69,9 +87,7 @@ def test_retry_after_is_honored_and_retry_counts_toward_budget() -> None:
             base_backoff_seconds=1.0,
             max_backoff_seconds=30.0,
         ),
-        clock=clock,
-        sleeper=clock.sleep,
-        jitter=lambda: 0.0,
+        clock,
     )
 
     result = executor.run(lambda: next(responses))
@@ -83,24 +99,25 @@ def test_retry_after_is_honored_and_retry_counts_toward_budget() -> None:
 
 def test_budget_stops_runaway_request_loop() -> None:
     clock = FakeClock()
-    executor = SafeRequestExecutor(
+    executor = executor_for(
         UpstreamPolicy(
             min_interval_seconds=0.5,
-            max_requests_per_operation=1,
+            max_requests_per_operation=3,
             max_retries=2,
         ),
-        clock=clock,
-        sleeper=clock.sleep,
-        jitter=lambda: 0.0,
+        clock,
     )
 
-    with pytest.raises(UpstreamRequestBudgetExceeded):
+    with pytest.raises(UpstreamRateLimited):
         executor.run(lambda: FakeResponse(503))
+
+    with pytest.raises(UpstreamRequestBudgetExceeded):
+        executor.run(lambda: FakeResponse(200))
 
 
 def test_repeated_429_fails_closed_after_bounded_retries() -> None:
     clock = FakeClock()
-    executor = SafeRequestExecutor(
+    executor = executor_for(
         UpstreamPolicy(
             min_interval_seconds=0.5,
             max_requests_per_operation=10,
@@ -108,12 +125,83 @@ def test_repeated_429_fails_closed_after_bounded_retries() -> None:
             base_backoff_seconds=1.0,
             max_backoff_seconds=10.0,
         ),
-        clock=clock,
-        sleeper=clock.sleep,
-        jitter=lambda: 0.0,
+        clock,
     )
 
     with pytest.raises(UpstreamRateLimited):
         executor.run(lambda: FakeResponse(429))
 
     assert executor.requests_used == 3
+
+
+def test_large_command_is_split_by_worst_case_retry_budget() -> None:
+    clock = FakeClock()
+    policy = MOEX_ISS_PUBLIC_POLICY
+    executor = executor_for(policy, clock)
+    governor = UpstreamRequestGovernor(policy, executor, clock=clock, sleeper=clock.sleep)
+
+    plan = governor.plan(20)
+
+    # Public policy permits 18 attempts per 10-second window at the 90% target.
+    # With max_retries=2, one logical request may cost 3 attempts, so a window
+    # carries at most 6 logical requests in the worst case.
+    assert plan.soft_attempts_per_window == 18
+    assert plan.max_logical_requests_per_batch == 6
+    assert [batch.size for batch in plan.batches] == [6, 6, 6, 2]
+    assert all(batch.worst_case_attempts <= 18 for batch in plan.batches)
+
+
+def test_large_command_continues_automatically_with_window_waits() -> None:
+    clock = FakeClock()
+    policy = UpstreamPolicy(
+        min_interval_seconds=1.0,
+        max_requests_per_operation=30,
+        max_retries=0,
+        target_utilization=0.9,
+        batch_window_seconds=10.0,
+    )
+    executor = executor_for(policy, clock)
+    governor = UpstreamRequestGovernor(policy, executor, clock=clock, sleeper=clock.sleep)
+
+    results = governor.execute(
+        list(range(20)),
+        lambda _: (lambda: FakeResponse(200)),
+    )
+
+    assert len(results) == 20
+    # 0.9 req/s -> 9 logical requests per 10-second batch -> 9,9,2.
+    assert governor.plan(20).batch_count == 3
+    # Work is stretched across at least two complete scheduling windows.
+    assert clock.now >= 20.0
+    assert executor.total_requests_used == 20
+
+
+def test_remote_multi_instance_mode_fails_closed_without_distributed_gate() -> None:
+    clock = FakeClock()
+    policy = MOEX_ISS_PUBLIC_POLICY
+    executor = executor_for(policy, clock, distributed=False)
+
+    with pytest.raises(UnsafeUpstreamConfiguration):
+        UpstreamRequestGovernor(
+            policy,
+            executor,
+            require_distributed_gate=True,
+            clock=clock,
+            sleeper=clock.sleep,
+        )
+
+
+def test_remote_mode_accepts_distributed_gate_contract() -> None:
+    clock = FakeClock()
+    policy = MOEX_ISS_PUBLIC_POLICY
+    executor = executor_for(policy, clock, distributed=True)
+
+    governor = UpstreamRequestGovernor(
+        policy,
+        executor,
+        require_distributed_gate=True,
+        clock=clock,
+        sleeper=clock.sleep,
+    )
+
+    assert governor.plan(1).batch_count == 1
