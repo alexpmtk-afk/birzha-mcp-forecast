@@ -15,6 +15,7 @@ from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
 from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
+from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.outcome import OutcomeService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -30,8 +31,6 @@ from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
 
-# One composition-root control plane is shared by every MOEX/ALGOPACK adapter in
-# this server process. This prevents concurrent tools from multiplying request rate.
 _upstream_control = ProcessUpstreamControlPlane()
 _market = MarketDataService.default(control_plane=_upstream_control)
 _flow = MarketFlowService(
@@ -58,6 +57,7 @@ _validator = WalkForwardValidator(
     forecasts=_forecast,
     calendar=MoexTradingCalendar(_market.provider),
 )
+_model_lab = ModelAcceptanceService(validator=_validator)
 
 
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
@@ -130,6 +130,17 @@ def outcome_list(forecast_id: str) -> dict[str, object]:
 @mcp.tool(name="validation.walk_forward", description="Run a causal historical walk-forward validation over official MOEX trading sessions. Historical futures roots are resolved to the contract that was liquid on each forecast date.")
 def validation_walk_forward(symbol: str, start_date: str, end_date: str, step_sessions: int = 5, max_points: int = 24) -> dict[str, object]:
     return _validator.run(symbol, start_date=start_date, end_date=end_date, step_sessions=step_sessions, max_points=max_points).to_dict()
+
+
+@mcp.tool(name="validation.assess_model", description="Statistically assess the current Forecast Engine on a causal walk-forward sample. Requires enough observations, sufficient directional coverage and a 95% Wilson lower bound above random 50% direction accuracy before ACCEPTED.")
+def validation_assess_model(symbol: str, start_date: str, end_date: str, step_sessions: int = 5, max_points: int = 60) -> dict[str, object]:
+    return _model_lab.assess(
+        symbol,
+        start_date=start_date,
+        end_date=end_date,
+        step_sessions=step_sessions,
+        max_points=max_points,
+    ).to_dict()
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
