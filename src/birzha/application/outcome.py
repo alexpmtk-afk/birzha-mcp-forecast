@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.domain.forecast import ForecastRecord
@@ -19,14 +19,17 @@ class OutcomeService:
     forecasts: DuckDBForecastJournal
     outcomes: DuckDBOutcomeJournal
 
-    def evaluate(self, forecast_id: str) -> OutcomeEvaluation:
+    def evaluate(self, forecast_id: str, *, evaluation_date: str | None = None) -> OutcomeEvaluation:
         forecast = self.forecasts.get(forecast_id)
         if forecast is None:
             raise KeyError(f"forecast not found: {forecast_id}")
         instrument = self._exact_instrument(forecast)
         t0 = _parse_time(forecast.created_at_t0)
         start_date = (t0.date() - timedelta(days=7)).isoformat()
-        till_date = (datetime.now(MOEX_TIMEZONE).date() + timedelta(days=1)).isoformat()
+        cutoff = date.fromisoformat(evaluation_date) if evaluation_date else datetime.now(MOEX_TIMEZONE).date()
+        if cutoff < t0.date():
+            raise ValueError("evaluation_date must not be before forecast T0")
+        till_date = (cutoff + timedelta(days=1)).isoformat()
         series = self.market_data.candles_for_instrument(
             instrument,
             timeframe="D1",
@@ -35,12 +38,11 @@ class OutcomeService:
             completed_only=True,
         )
         before = [c for c in series.candles if _parse_time(c.end) <= t0 and c.close is not None]
-        # Horizon session #1 is the first exchange session whose trading date is
-        # strictly after the forecast date. The partially observed T0 session is
-        # session zero and is never counted as future evidence.
         future = [
             c for c in series.candles
-            if _parse_time(c.begin).date() > t0.date() and c.close is not None
+            if _parse_time(c.begin).date() > t0.date()
+            and _parse_time(c.begin).date() <= cutoff
+            and c.close is not None
         ]
         reference = forecast.reference_price
         if reference is None:
