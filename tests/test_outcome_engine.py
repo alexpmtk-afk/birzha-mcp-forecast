@@ -28,8 +28,6 @@ class Market:
             Candle(100, 100, 101, 99, None, 1, "2026-08-28T10:00:00+03:00", "2026-08-28T23:49:59+03:00", True),
         ]
         for index in range(1, 21):
-            day = 31 + index
-            # Keep timestamps monotonic without depending on real calendar rules.
             begin = f"2026-09-{index:02d}T10:00:00+03:00"
             end = f"2026-09-{index:02d}T23:49:59+03:00"
             close = 100.0 + index
@@ -58,8 +56,8 @@ def test_outcome_engine_observes_real_session_horizons_idempotently():
     forecasts.append(record())
     service = OutcomeService(Market(), forecasts, outcomes)
 
-    first = service.evaluate("fcst_outcome_test")
-    second = service.evaluate("fcst_outcome_test")
+    first = service.evaluate("fcst_outcome_test", evaluation_date="2026-09-30")
+    second = service.evaluate("fcst_outcome_test", evaluation_date="2026-09-30")
 
     assert first.status == "COMPLETE"
     assert [item.horizon_sessions for item in first.outcomes] == [5, 10, 20]
@@ -73,5 +71,7 @@ def test_neutral_direction_is_not_forced_into_binary_hit_metric():
     forecasts = DuckDBForecastJournal(":memory:")
     outcomes = DuckDBOutcomeJournal(":memory:")
     forecasts.append(replace(record(), forecast_id="fcst_neutral", direction="NEUTRAL", control="BALANCE"))
-    result = OutcomeService(Market(), forecasts, outcomes).evaluate("fcst_neutral")
+    result = OutcomeService(Market(), forecasts, outcomes).evaluate(
+        "fcst_neutral", evaluation_date="2026-09-30"
+    )
     assert all(item.direction_hit is None for item in result.outcomes)
