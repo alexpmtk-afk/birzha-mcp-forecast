@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
-from birzha.application.market_data import MarketDataService
+from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.domain.market import Candle, CandleSeries
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 
@@ -19,24 +19,28 @@ class MarketSnapshotService:
         return cls(market_data=MarketDataService.default())
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
-        till = date.fromisoformat(as_of_date) if as_of_date else date.today()
+        till = (
+            date.fromisoformat(as_of_date)
+            if as_of_date
+            else datetime.now(MOEX_TIMEZONE).date()
+        )
         instrument = self.market_data.resolve(symbol)
 
-        d1 = self.market_data.provider.fetch_candles(
+        d1 = self.market_data.candles_for_instrument(
             instrument,
             timeframe="D1",
             from_date=(till - timedelta(days=260)).isoformat(),
             till_date=till.isoformat(),
             completed_only=True,
         )
-        h1 = self.market_data.provider.fetch_candles(
+        h1 = self.market_data.candles_for_instrument(
             instrument,
             timeframe="H1",
             from_date=(till - timedelta(days=60)).isoformat(),
             till_date=till.isoformat(),
             completed_only=True,
         )
-        m15 = self.market_data.provider.fetch_candles(
+        m15 = self.market_data.candles_for_instrument(
             instrument,
             timeframe="M15",
             from_date=(till - timedelta(days=20)).isoformat(),
@@ -73,7 +77,7 @@ class MarketSnapshotService:
 
 
 def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
-    candles = tuple(c for c in series.candles if c.end <= t0)
+    candles = tuple(c for c in series.candles if c.completed and c.end <= t0)
     return CandleSeries(instrument=series.instrument, timeframe=series.timeframe, candles=candles)
 
 
