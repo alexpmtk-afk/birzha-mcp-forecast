@@ -37,7 +37,11 @@ class MoexTradingCalendar:
             ).json()
             page = self._client._table(payload, "dates")  # noqa: SLF001
             rows.extend(page)
-            cursor_rows = self._client._table(payload, "dates.cursor")  # noqa: SLF001
+            cursor_rows = (
+                self._client._table(payload, "dates.cursor")  # noqa: SLF001
+                if "dates.cursor" in payload
+                else []
+            )
             if cursor_rows:
                 cursor = cursor_rows[0]
                 total = _integer(cursor, "TOTAL") or _integer(cursor, "total") or len(rows)
@@ -46,9 +50,6 @@ class MoexTradingCalendar:
                     break
                 start += page_size
                 continue
-            # No cursor: an empty page is an unambiguous end marker. If a full
-            # page is returned, continue by the number of rows so long ranges do
-            # not silently truncate on an ISS page boundary.
             if not page:
                 break
             start += len(page)
