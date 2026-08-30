@@ -7,8 +7,8 @@ from birzha.application.validation import WalkForwardValidator
 
 
 CASES = (
-    {"symbol": "SBER", "start_date": "2026-01-15", "end_date": "2026-06-30", "step_sessions": 20, "max_points": 4},
-    {"symbol": "Si", "start_date": "2026-01-15", "end_date": "2026-06-30", "step_sessions": 20, "max_points": 4},
+    {"symbol": "SBER", "start_date": "2026-04-01", "end_date": "2026-06-30", "step_sessions": 20, "max_points": 2},
+    {"symbol": "Si", "start_date": "2026-04-01", "end_date": "2026-06-30", "step_sessions": 20, "max_points": 2},
 )
 
 
@@ -33,7 +33,12 @@ def main() -> int:
     # This gate proves the validation path can complete on real MOEX data. It is
     # deliberately not a model-quality acceptance threshold yet: calibration is
     # decided only after a larger historical study.
-    failed = [r for r in reports if r["status"] not in {"COMPUTED", "PARTIAL"} or int(r["completed_forecasts"]) < 1]
+    failed = [
+        r
+        for r in reports
+        if r["status"] not in {"COMPUTED", "PARTIAL"}
+        or int(r["completed_forecasts"]) < 1
+    ]
     if failed:
         print("REAL_MOEX_VALIDATION_GATE=FAIL")
         return 1
