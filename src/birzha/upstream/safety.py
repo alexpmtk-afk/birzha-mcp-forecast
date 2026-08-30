@@ -1,6 +1,6 @@
 """Conservative outbound request safety controls for upstream market-data APIs.
 
-This module is deliberately provider-neutral.  Provider adapters are not
+This module is deliberately provider-neutral. Provider adapters are not
 allowed to decide their own pacing on the fly; they receive a policy and a
 shared pacing gate from the application-level request governor.
 """
@@ -46,12 +46,12 @@ class UnsafeUpstreamConfiguration(RuntimeError):
 class UpstreamPolicy:
     """Fail-safe limits for one upstream provider profile.
 
-    ``min_interval_seconds`` is the *hard internal ceiling* interval.  BIRZHA
+    ``min_interval_seconds`` is the hard internal ceiling interval. BIRZHA
     intentionally operates below it: ``target_utilization`` defaults to 0.90,
     so the real pacing interval is larger by ``1 / target_utilization``.
 
     ``batch_window_seconds`` is used by the upper-level governor to split a
-    large user command into smaller windows.  Retries are additionally paced
+    large user command into smaller windows. Retries are additionally paced
     by the same shared gate and count toward the bounded segment attempt budget.
     """
 
@@ -62,6 +62,7 @@ class UpstreamPolicy:
     max_backoff_seconds: float = 30.0
     target_utilization: float = 0.90
     batch_window_seconds: float = 10.0
+    no_header_429_cooldown_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if self.min_interval_seconds <= 0:
@@ -78,6 +79,8 @@ class UpstreamPolicy:
             raise ValueError("target_utilization must be > 0 and < 1")
         if self.batch_window_seconds <= 0:
             raise ValueError("batch_window_seconds must be > 0")
+        if self.no_header_429_cooldown_seconds <= 0:
+            raise ValueError("no_header_429_cooldown_seconds must be > 0")
         if self.max_requests_per_operation < self.max_retries + 1:
             raise ValueError("operation budget must accommodate at least one fully retried request")
 
@@ -115,10 +118,10 @@ class ProcessPacingGate:
     """Thread-safe, process-wide serialization gate.
 
     A single instance must be shared by all commands for the same provider
-    profile.  It prevents two concurrent MCP calls inside one container process
+    profile. It prevents two concurrent MCP calls inside one container process
     from multiplying the outbound request rate.
 
-    This gate is intentionally marked ``scope='process'``.  Remote multi-instance
+    This gate is intentionally marked ``scope='process'``. Remote multi-instance
     market-data enablement must use a distributed implementation of ``PacingGate``
     or an equivalently strict deployment constraint; the application governor
     can fail closed when distributed scope is required.
@@ -152,7 +155,7 @@ class ProcessPacingGate:
 class SafeRequestExecutor:
     """Budgeted, retry-aware executor for one provider profile.
 
-    The executor handles *attempt-level* safety.  Large-command splitting lives
+    The executor handles attempt-level safety. Large-command splitting lives
     one layer above in ``birzha.application.upstream_control``.
     """
 
@@ -219,7 +222,14 @@ class SafeRequestExecutor:
     def _backoff_seconds(self, attempt: int, response: ResponseLike) -> float:
         retry_after = self._retry_after_seconds(response)
         if retry_after is not None:
-            return min(retry_after, self._policy.max_backoff_seconds)
+            # Never shorten an upstream-specified Retry-After. Retrying earlier
+            # than the server asked is unsafe even when it exceeds our normal
+            # exponential-backoff ceiling.
+            return retry_after
+        if int(response.status_code) == 429:
+            # A 429 without guidance gets a deliberately conservative cooldown,
+            # not the ordinary 1s/2s transient-error backoff.
+            return self._policy.no_header_429_cooldown_seconds
         exponential = self._policy.base_backoff_seconds * (2**attempt)
         with_jitter = exponential + min(1.0, exponential * 0.1) * self._jitter()
         return min(with_jitter, self._policy.max_backoff_seconds)
