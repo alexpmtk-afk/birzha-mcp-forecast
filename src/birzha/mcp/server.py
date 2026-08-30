@@ -17,8 +17,10 @@ from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.outcome import OutcomeService
 from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.application.validation import WalkForwardValidator
 from birzha.config import Settings
+from birzha.providers.moex_analytics import MoexAnalyticsClient
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
@@ -26,8 +28,16 @@ from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
 settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
-_market = MarketDataService.default()
-_flow = MarketFlowService.default()
+
+# One composition-root control plane is shared by every MOEX/ALGOPACK adapter in
+# this server process. This is required so concurrent MCP tools cannot multiply
+# the process-local upstream request rate by constructing independent limiters.
+_upstream_control = ProcessUpstreamControlPlane()
+_market = MarketDataService.default(control_plane=_upstream_control)
+_flow = MarketFlowService(
+    market_data=_market,
+    analytics=MoexAnalyticsClient(control_plane=_upstream_control),
+)
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
 _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)

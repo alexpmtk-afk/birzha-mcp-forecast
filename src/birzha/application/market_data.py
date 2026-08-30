@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.providers.moex_history import MoexHistoricalFutureResolver
 from birzha.providers.moex_iss import MoexIssClient
@@ -22,8 +23,13 @@ class MarketDataService:
     historical_future_resolver: MoexHistoricalFutureResolver | None = None
 
     @classmethod
-    def default(cls) -> "MarketDataService":
-        provider = MoexIssClient()
+    def default(
+        cls,
+        *,
+        control_plane: ProcessUpstreamControlPlane | None = None,
+    ) -> "MarketDataService":
+        shared_control = control_plane or ProcessUpstreamControlPlane()
+        provider = MoexIssClient(control_plane=shared_control)
         return cls(
             provider=provider,
             direct_resolver=MoexDirectInstrumentResolver(provider),

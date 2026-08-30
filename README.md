@@ -1,47 +1,79 @@
 # BIRZHA MCP Forecast System
 
-Minimal MCP-M1 server foundation for the universal BIRZHA forecasting backend.
+Universal MCP backend for causal MOEX market analysis, forecasting, immutable forecast journaling, outcome evaluation and historical walk-forward validation.
 
-## Current scope
+## Current implemented scope
 
-This repository intentionally contains **no market or forecast logic yet**.
-MCP-M1 proves only the transport/runtime foundation:
+The current `main` line contains working application code for:
 
-- Python backend
-- MCP Python SDK v2
-- Streamable HTTP endpoint at `/mcp`
-- liveness endpoint at `/healthz`
-- MCP tool `system.version`
-- Docker image suitable for the selected remote container runtime
-- mandatory upper-level outbound API safety governor
+- MCP Streamable HTTP endpoint `/mcp` and liveness `/healthz`;
+- Docker runtime and transport-security controls;
+- mandatory outbound MOEX/ALGOPACK request governor with bounded retries, conservative pacing and strict `Retry-After` handling;
+- real MOEX ISS candles and instrument resolution;
+- historical futures contract resolution for causal replay;
+- SBER/equity and futures-root routing without symbol-specific domain logic;
+- D1/H1/M15 causal Market Snapshot;
+- ALGOPACK TradeStats Delta and FUTOI/Open Interest as optional causal flow evidence;
+- explainable baseline Forecast Engine for 5/10/20 exchange sessions;
+- immutable Forecast Journal reference backend;
+- append-only Outcome Journal and 5/10/20-session outcome evaluation;
+- causal historical walk-forward validation and real-MOEX end-to-end validation evidence.
+
+The baseline forecast is **not yet statistically calibrated or accepted as a production-quality model**. Real historical validation is implemented; large-sample model research/calibration remains a later gate.
+
+## MCP tools
+
+Current MCP surface includes:
+
+- `system.version`
+- `market.resolve_instrument`
+- `market.resolve_active_future`
+- `market.candles`
+- `market.recent_candles`
+- `market.flow`
+- `market.snapshot`
+- `forecast.build`
+- `forecast.create`
+- `forecast.get`
+- `forecast.list`
+- `outcome.evaluate`
+- `outcome.list`
+- `validation.walk_forward`
+
+MCP remains a thin adapter. Domain, provider, forecast, persistence, outcome and validation logic lives outside the MCP package.
+
+## Causality rules
+
+- Forecast input is limited to information available at its T0.
+- Forming bars are excluded from completed-only Snapshot data.
+- Historical futures roots resolve to the contract that was actually relevant on the historical date.
+- Flow rows later than T0 are excluded; timestamps that cannot be proven causal fail closed.
+- Missing analytical data stays missing/`NULL`; it is never replaced with a synthetic zero.
+- Forecast Records are immutable; outcomes are append-only.
 
 ## Outbound API safety contract
 
-Every operation that can create external market-data traffic must go through the
-application-level request governor before it reaches a provider adapter. There is
-no force/ignore-limit mode.
+Every external market-data operation must go through the application-level request governor. There is no force/ignore-limit mode.
 
-For the initial MOEX policy BIRZHA deliberately reserves 10% headroom below its
-own conservative ceilings:
+BIRZHA currently reserves 10% headroom below conservative internal ceilings:
 
-- public ISS internal ceiling: 2 attempts/s; operating target: 1.8 attempts/s;
-- authenticated / ALGOPACK internal ceiling: 1 attempt/s; operating target: 0.9 attempts/s;
-- large commands are split into bounded batches using worst-case retry cost;
-- each batch is paced and the next batch waits for the next scheduling window;
-- retries consume the same budget and HTTP 429 / transient 5xx use bounded backoff;
-- a logical operation cannot fan out without a finite request budget;
-- concurrent commands share one pacing gate rather than creating independent limiters.
+- public ISS: internal ceiling 2 attempts/s, operating target 1.8 attempts/s;
+- authenticated ALGOPACK: internal ceiling 1 attempt/s, operating target 0.9 attempts/s;
+- large commands are split into bounded batches;
+- retries consume the same bounded budget;
+- `Retry-After` is never shortened;
+- 429 without `Retry-After` uses a conservative cooldown;
+- repeated/stalled pagination fails closed.
 
-Process-local coordination is sufficient only for local/single-process tests.
-Remote market-data enablement in a platform that can run more than one container
-instance MUST provide a distributed pacing gate (or an equivalently strict global
-coordination mechanism). The governor fails closed when distributed scope is
-required but unavailable.
+All public `iss.moex.com` traffic in one process shares one pacing gate. Authenticated `apim.moex.com` traffic uses its separate stricter profile.
 
-MOEX's public materials do not provide one stable universal numeric quota that
-BIRZHA can treat as an SLA for every ISS/ALGOPACK endpoint. If MOEX publishes a
-stricter account/endpoint-specific rule, that stricter rule supersedes these
-internal defaults.
+Process-local coordination is not sufficient for arbitrary multi-instance remote scale-out. Remote market-data enablement must use a distributed/global limiter or an equivalently strict single-instance deployment constraint.
+
+## Persistence status
+
+DuckDB is the current local/reference Forecast and Outcome backend. It proves immutability, idempotency, collision detection, reopen persistence and append-only behavior, but `/tmp` in a serverless container is **not** accepted as production durable storage.
+
+A separate experimental `m11-ydb-durable-state` branch exists, but it is not part of `main` and is not considered accepted until it is rebased, tested and formally promoted.
 
 ## Local run
 
@@ -64,59 +96,32 @@ MCP endpoint:
 http://localhost:8080/mcp
 ```
 
-## First MCP contract
-
-Tool:
-
-```text
-system.version
-```
-
-Expected structured result:
-
-```json
-{
-  "service": "BIRZHA MCP FORECAST",
-  "version": "0.1.0",
-  "architecture": "BIRZHA_MCP_FORECAST_V0_2"
-}
-```
-
 ## Transport security
 
 DNS-rebinding protection is enabled. Local development accepts only localhost/127.0.0.1.
 Remote deployment must explicitly set `MCP_ALLOWED_HOSTS` from the real Yandex API Gateway domain.
-For the final Gateway binding, list exactly two Host values:
+
+For the final Gateway binding, list exactly:
 
 ```text
 <gateway-domain>,<gateway-domain>:*
 ```
 
-The `:*` form is a wildcard for the port only; it is not a wildcard for sibling or arbitrary
-`*.apigw.yandexcloud.net` domains. If an Origin header is expected, it must be explicitly listed in
-`MCP_ALLOWED_ORIGINS`.
+The `:*` suffix is a port wildcard only, not a hostname wildcard.
 
-No permanent ChatGPT-to-MCP authentication scheme is introduced in M1.3. The first remote TEST is
-restricted to the harmless `system.version` tool while the standard MCP-compatible authorization
-flow is evaluated separately.
+## Current acceptance boundary
 
-## Architecture rule
-
-The `birzha.mcp` package is an adapter layer only. Instrument resolution, market data,
-Snapshot, Data Quality, features, models, Journal and Outcome will live outside it.
-
-## MCP-M1 acceptance path
+Implemented and regression-tested through the real-MOEX M10 end-to-end validation path:
 
 ```text
-Git commit
--> Docker image
--> Yandex Container Registry
--> private Yandex Serverless Container
--> Yandex API Gateway
--> /healthz
--> /mcp
--> MCP discovery/tools/list
--> system.version
+MOEX data
+-> causal historical T0
+-> Snapshot
+-> Forecast
+-> immutable Forecast Record
+-> future 5/10/20 exchange sessions
+-> Outcome
+-> validation metrics
 ```
 
-MOEX, ALGOPACK and Forecast logic are deliberately outside this gate.
+This proves the path works on real market data. It does not by itself prove forecast quality; statistical model calibration and real forward validation remain separate acceptance gates.
