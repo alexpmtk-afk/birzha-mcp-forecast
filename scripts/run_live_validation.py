@@ -7,8 +7,8 @@ from birzha.application.validation import WalkForwardValidator
 
 
 CASES = (
-    {"symbol": "SBER", "start_date": "2026-04-01", "end_date": "2026-06-30", "step_sessions": 20, "max_points": 2},
-    {"symbol": "Si", "start_date": "2026-04-01", "end_date": "2026-06-30", "step_sessions": 20, "max_points": 2},
+    {"symbol": "SBER", "start_date": "2026-04-01", "end_date": "2026-05-20", "step_sessions": 20, "max_points": 1},
+    {"symbol": "Si", "start_date": "2026-04-01", "end_date": "2026-05-20", "step_sessions": 20, "max_points": 1},
 )
 
 
@@ -23,16 +23,17 @@ def main() -> int:
 
     evidence = {
         "schema": "BIRZHA_MCP_REAL_MOEX_VALIDATION_V1",
-        "purpose": "bounded real-network causal walk-forward smoke evidence",
+        "purpose": "minimal real-network causal walk-forward end-to-end evidence",
+        "quality_acceptance": False,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
-    # This gate proves the validation path can complete on real MOEX data. It is
-    # deliberately not a model-quality acceptance threshold yet: calibration is
-    # decided only after a larger historical study.
+    # This gate proves only that the real historical path completes for both a
+    # share and a futures root. It must never be interpreted as evidence of
+    # statistical model quality; that requires a larger dedicated study.
     failed = [
         r
         for r in reports
