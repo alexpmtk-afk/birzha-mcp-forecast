@@ -13,6 +13,35 @@ MCP-M1 proves only the transport/runtime foundation:
 - liveness endpoint at `/healthz`
 - MCP tool `system.version`
 - Docker image suitable for the selected remote container runtime
+- mandatory upper-level outbound API safety governor
+
+## Outbound API safety contract
+
+Every operation that can create external market-data traffic must go through the
+application-level request governor before it reaches a provider adapter. There is
+no force/ignore-limit mode.
+
+For the initial MOEX policy BIRZHA deliberately reserves 10% headroom below its
+own conservative ceilings:
+
+- public ISS internal ceiling: 2 attempts/s; operating target: 1.8 attempts/s;
+- authenticated / ALGOPACK internal ceiling: 1 attempt/s; operating target: 0.9 attempts/s;
+- large commands are split into bounded batches using worst-case retry cost;
+- each batch is paced and the next batch waits for the next scheduling window;
+- retries consume the same budget and HTTP 429 / transient 5xx use bounded backoff;
+- a logical operation cannot fan out without a finite request budget;
+- concurrent commands share one pacing gate rather than creating independent limiters.
+
+Process-local coordination is sufficient only for local/single-process tests.
+Remote market-data enablement in a platform that can run more than one container
+instance MUST provide a distributed pacing gate (or an equivalently strict global
+coordination mechanism). The governor fails closed when distributed scope is
+required but unavailable.
+
+MOEX's public materials do not provide one stable universal numeric quota that
+BIRZHA can treat as an SLA for every ISS/ALGOPACK endpoint. If MOEX publishes a
+stricter account/endpoint-specific rule, that stricter rule supersedes these
+internal defaults.
 
 ## Local run
 
