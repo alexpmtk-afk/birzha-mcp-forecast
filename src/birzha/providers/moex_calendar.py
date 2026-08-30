@@ -8,12 +8,11 @@ from birzha.providers.moex_iss import MoexIssClient
 
 
 class MoexTradingCalendar:
-    """Return exchange dates reported by MOEX for one exact security.
+    """Return actual trading dates from exact-security MOEX history rows.
 
-    The official ISS developer manual documents
-    ``.../securities/{secid}/dates`` as the list of dates for which history is
-    available for that instrument.  Using the exact security eliminates
-    weekday/holiday inference and avoids one HTTP request per calendar day.
+    A row in the official history endpoint is direct evidence that the security
+    traded on that date. This avoids inferring sessions from weekdays and avoids
+    treating the ``/dates`` history-availability range as a session calendar.
     """
 
     def __init__(self, client: MoexIssClient) -> None:
@@ -36,10 +35,12 @@ class MoexTradingCalendar:
 
         path = (
             f"/history/engines/{engine}/markets/{market}/boards/{board}/"
-            f"securities/{security}/dates.json"
+            f"securities/{security}.json"
         )
         base_params = {
             "iss.meta": "off",
+            "iss.only": "history,history.cursor",
+            "history.columns": "TRADEDATE",
             "from": from_date.isoformat(),
             "till": till_date.isoformat(),
         }
@@ -49,9 +50,9 @@ class MoexTradingCalendar:
             payload = self._client._request(  # noqa: SLF001 - provider-internal collaboration
                 path, {**base_params, "start": start}
             ).json()
-            page = self._client._table(payload, "dates")  # noqa: SLF001
+            page = self._client._table(payload, "history")  # noqa: SLF001
             for row in page:
-                raw = row.get("TRADEDATE") or row.get("tradedate") or row.get("date") or row.get("DATE")
+                raw = row.get("TRADEDATE") or row.get("tradedate")
                 if not raw:
                     continue
                 try:
@@ -62,8 +63,8 @@ class MoexTradingCalendar:
                     result.add(day)
 
             cursor_rows = (
-                self._client._table(payload, "dates.cursor")  # noqa: SLF001
-                if "dates.cursor" in payload
+                self._client._table(payload, "history.cursor")  # noqa: SLF001
+                if "history.cursor" in payload
                 else []
             )
             if cursor_rows:
