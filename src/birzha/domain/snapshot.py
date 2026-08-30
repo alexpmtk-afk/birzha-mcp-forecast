@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from birzha.domain.flow import MarketFlowSnapshot
+
 
 @dataclass(frozen=True, slots=True)
 class TimeframeState:
@@ -35,6 +37,7 @@ class MarketSnapshot:
     m15: TimeframeState
     data_quality: str
     warnings: tuple[str, ...]
+    flow: MarketFlowSnapshot | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -45,6 +48,7 @@ class MarketSnapshot:
             "d1": self.d1.to_dict(),
             "h1": self.h1.to_dict(),
             "m15": self.m15.to_dict(),
+            "flow": self.flow.to_dict() if self.flow else None,
             "data_quality": self.data_quality,
             "warnings": list(self.warnings),
         }

@@ -14,10 +14,10 @@ from dataclasses import dataclass
 
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
-from birzha.domain.snapshot import MarketSnapshot, TimeframeState
+from birzha.domain.snapshot import MarketSnapshot
 
 
-ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_1"
+ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_2_FLOW"
 
 
 @dataclass(slots=True)
@@ -35,7 +35,7 @@ class ForecastService:
 
 def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
     score = _combined_score(snapshot)
-    strength = min(1.0, abs(score) / 5.0)
+    strength = min(1.0, abs(score) / 5.75)
     if score >= 1.0:
         direction = "UP"
         control = "BUYERS"
@@ -102,23 +102,50 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
 
 def _combined_score(snapshot: MarketSnapshot) -> float:
     # Long horizon leads. Intraday frames refine timing but cannot dominate D1.
-    d1 = snapshot.d1.trend_score
-    h1 = snapshot.h1.trend_score
-    m15 = snapshot.m15.trend_score
-    score = 0.55 * d1 + 0.30 * h1 + 0.15 * m15
+    score = (
+        0.55 * snapshot.d1.trend_score
+        + 0.30 * snapshot.h1.trend_score
+        + 0.15 * snapshot.m15.trend_score
+    )
 
-    # Preserve the old explainable CONTROL idea using return alignment.
     aligned = 0
     for state in (snapshot.d1, snapshot.h1, snapshot.m15):
         if state.return_5 is not None:
             aligned += 1 if state.return_5 > 0 else -1 if state.return_5 < 0 else 0
     score += 0.25 * aligned
 
-    # Penalize weak directional efficiency on the daily horizon.
     er = snapshot.d1.efficiency_ratio_20
     if er is not None and er < 0.2:
         score *= 0.7
+
+    # Flow is a conservative refinement, not the main driver. Aggressive-volume
+    # Delta contributes at most +/-0.45 score units. OI contributes only as a
+    # confirmation/weakening signal for the observed price move.
+    score += _flow_adjustment(snapshot)
     return score
+
+
+def _flow_adjustment(snapshot: MarketSnapshot) -> float:
+    flow = snapshot.flow
+    if flow is None:
+        return 0.0
+
+    adjustment = 0.0
+    if flow.volume_delta_ratio is not None:
+        clipped = max(-0.30, min(0.30, flow.volume_delta_ratio))
+        adjustment += 1.5 * clipped
+
+    price = flow.price_change_pct
+    oi_open = flow.algopack_oi_open
+    oi_change = flow.algopack_oi_change
+    if price not in {None, 0.0} and oi_open not in {None, 0.0} and oi_change not in {None, 0.0}:
+        price_sign = 1.0 if price > 0 else -1.0
+        if oi_change > 0:
+            adjustment += 0.30 * price_sign
+        else:
+            adjustment -= 0.10 * price_sign
+
+    return max(-0.75, min(0.75, adjustment))
 
 
 def _reasons(snapshot: MarketSnapshot, score: float) -> list[str]:
@@ -130,6 +157,22 @@ def _reasons(snapshot: MarketSnapshot, score: float) -> list[str]:
         )
     if snapshot.d1.atr_14_pct is not None:
         reasons.append(f"D1:atr14_pct={snapshot.d1.atr_14_pct * 100:.3f}")
+    if snapshot.flow is not None:
+        flow = snapshot.flow
+        reasons.append(
+            "FLOW:"
+            f"delta_ratio={_fmt(flow.volume_delta_ratio)},"
+            f"price_change_pct={_fmt(flow.price_change_pct)},"
+            f"oi_change={_fmt(flow.algopack_oi_change)},"
+            f"adjustment={_flow_adjustment(snapshot):.4f},"
+            f"as_of={flow.as_of or 'NULL'}"
+        )
+        if flow.individuals is not None or flow.legal_entities is not None:
+            reasons.append(
+                "FUTOI:"
+                f"individuals_net={_fmt(flow.individuals.net_position if flow.individuals else None)},"
+                f"legal_net={_fmt(flow.legal_entities.net_position if flow.legal_entities else None)}"
+            )
     return reasons
 
 

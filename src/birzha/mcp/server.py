@@ -22,7 +22,7 @@ settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
 _market = MarketDataService.default()
 _flow = MarketFlowService.default()
-_snapshot = MarketSnapshotService(market_data=_market)
+_snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
 
 
@@ -108,8 +108,8 @@ def market_flow(
 @mcp.tool(
     name="market.snapshot",
     description=(
-        "Build a causal D1/H1/M15 Market Snapshot from real MOEX data at a common T0, "
-        "including trend, efficiency, volatility and volume features."
+        "Build a causal D1/H1/M15 Market Snapshot from real MOEX price, volume, "
+        "ALGOPACK Delta and FUTOI data at one forecast T0."
     ),
 )
 def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
@@ -120,7 +120,7 @@ def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, obj
     name="forecast.build",
     description=(
         "Build an explainable ex-ante BIRZHA baseline forecast for approximately "
-        "5, 10 and 20 trading sessions from a causal Market Snapshot."
+        "5, 10 and 20 trading sessions using causal price, Delta and OI evidence."
     ),
 )
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:

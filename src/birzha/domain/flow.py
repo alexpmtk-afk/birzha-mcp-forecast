@@ -25,6 +25,7 @@ class MarketFlowSnapshot:
     secid: str
     from_date: str
     till_date: str
+    as_of: str | None
     source: str
     intervals: int
     buy_volume: float | None
@@ -49,6 +50,7 @@ class MarketFlowSnapshot:
             "secid": self.secid,
             "from_date": self.from_date,
             "till_date": self.till_date,
+            "as_of": self.as_of,
             "source": self.source,
             "intervals": self.intervals,
             "buy_volume": self.buy_volume,
