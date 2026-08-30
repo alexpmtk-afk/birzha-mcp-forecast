@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.domain.market import Candle, CandleSeries, Instrument
@@ -33,7 +34,9 @@ def _candle(begin: str, end: str, close: float) -> Candle:
 
 @dataclass
 class FakeMarketData:
-    def resolve(self, symbol: str) -> Instrument:
+    def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
+        assert symbol == "Si"
+        assert as_of == date(2026, 8, 28)
         return INSTRUMENT
 
     def candles_for_instrument(self, instrument: Instrument, *, timeframe: str, **_: object) -> CandleSeries:
