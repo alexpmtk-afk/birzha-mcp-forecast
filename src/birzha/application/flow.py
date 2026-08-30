@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
 from birzha.domain.market import Instrument
 from birzha.providers.moex_analytics import MoexAnalyticsClient, MoexAnalyticsError
@@ -24,10 +25,16 @@ class MarketFlowService:
     analytics: MoexAnalyticsClient
 
     @classmethod
-    def default(cls) -> "MarketFlowService":
+    def default(
+        cls,
+        *,
+        control_plane: ProcessUpstreamControlPlane | None = None,
+    ) -> "MarketFlowService":
+        shared_control = control_plane or ProcessUpstreamControlPlane()
+        market_data = MarketDataService.default(control_plane=shared_control)
         return cls(
-            market_data=MarketDataService.default(),
-            analytics=MoexAnalyticsClient(),
+            market_data=market_data,
+            analytics=MoexAnalyticsClient(control_plane=shared_control),
         )
 
     def build(
@@ -39,7 +46,11 @@ class MarketFlowService:
         lookback_days: int = 5,
         cutoff_at: str | None = None,
     ) -> MarketFlowSnapshot:
-        instrument = self.market_data.resolve(symbol)
+        cutoff = _parse_timestamp(cutoff_at) if cutoff_at else None
+        if cutoff_at and cutoff is None:
+            raise ValueError("cutoff_at must be a parseable exchange timestamp")
+        resolve_as_of = cutoff.date() if cutoff is not None else date.fromisoformat(till_date) if till_date else None
+        instrument = self.market_data.resolve(symbol, as_of=resolve_as_of)
         return self.build_for_instrument(
             instrument,
             from_date=from_date,
