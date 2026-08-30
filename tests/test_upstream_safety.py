@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from birzha.application.upstream_control import UpstreamRequestGovernor
+from birzha.application.upstream_control import (
+    ProcessUpstreamControlPlane,
+    UpstreamRequestGovernor,
+)
 from birzha.upstream.moex import (
     MOEX_AUTHENTICATED_POLICY,
     MOEX_ISS_PUBLIC_POLICY,
@@ -142,9 +145,6 @@ def test_large_command_is_split_by_worst_case_retry_budget() -> None:
 
     plan = governor.plan(20)
 
-    # Public policy permits 18 attempts per 10-second window at the 90% target.
-    # With max_retries=2, one logical request may cost 3 attempts, so a window
-    # carries at most 6 logical requests in the worst case.
     assert plan.soft_attempts_per_window == 18
     assert plan.max_logical_requests_per_batch == 6
     assert [batch.size for batch in plan.batches] == [6, 6, 6, 2]
@@ -169,39 +169,73 @@ def test_large_command_continues_automatically_with_window_waits() -> None:
     )
 
     assert len(results) == 20
-    # 0.9 req/s -> 9 logical requests per 10-second batch -> 9,9,2.
     assert governor.plan(20).batch_count == 3
-    # Work is stretched across at least two complete scheduling windows.
     assert clock.now >= 20.0
     assert executor.total_requests_used == 20
+
+
+def test_control_plane_shares_one_gate_for_same_provider() -> None:
+    clock = FakeClock()
+    policy = UpstreamPolicy(
+        min_interval_seconds=1.0,
+        max_requests_per_operation=10,
+        max_retries=0,
+        target_utilization=0.9,
+    )
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
+    first = control.governor("moex-public", policy)
+    second = control.governor("moex-public", policy)
+
+    first.execute([1], lambda _: (lambda: FakeResponse(200)))
+    second.execute([2], lambda _: (lambda: FakeResponse(200)))
+
+    assert clock.now == pytest.approx(1.0 / 0.9)
+
+
+def test_different_provider_keys_do_not_share_gate() -> None:
+    clock = FakeClock()
+    policy = UpstreamPolicy(
+        min_interval_seconds=1.0,
+        max_requests_per_operation=10,
+        max_retries=0,
+        target_utilization=0.9,
+    )
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
+    first = control.governor("provider-a", policy)
+    second = control.governor("provider-b", policy)
+
+    first.execute([1], lambda _: (lambda: FakeResponse(200)))
+    second.execute([2], lambda _: (lambda: FakeResponse(200)))
+
+    assert clock.now == 0.0
 
 
 def test_remote_multi_instance_mode_fails_closed_without_distributed_gate() -> None:
     clock = FakeClock()
     policy = MOEX_ISS_PUBLIC_POLICY
-    executor = executor_for(policy, clock, distributed=False)
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
 
     with pytest.raises(UnsafeUpstreamConfiguration):
-        UpstreamRequestGovernor(
+        control.governor(
+            "moex-public",
             policy,
-            executor,
             require_distributed_gate=True,
-            clock=clock,
-            sleeper=clock.sleep,
         )
 
 
 def test_remote_mode_accepts_distributed_gate_contract() -> None:
     clock = FakeClock()
     policy = MOEX_ISS_PUBLIC_POLICY
-    executor = executor_for(policy, clock, distributed=True)
-
-    governor = UpstreamRequestGovernor(
-        policy,
-        executor,
-        require_distributed_gate=True,
+    control = ProcessUpstreamControlPlane(
+        gate_factory=lambda: FakeDistributedGate(clock=clock, sleeper=clock.sleep),
         clock=clock,
         sleeper=clock.sleep,
+    )
+
+    governor = control.governor(
+        "moex-public",
+        policy,
+        require_distributed_gate=True,
     )
 
     assert governor.plan(1).batch_count == 1
