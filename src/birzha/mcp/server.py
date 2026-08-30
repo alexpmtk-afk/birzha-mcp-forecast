@@ -1,7 +1,7 @@
 """BIRZHA MCP server surface.
 
-MCP remains a thin interface: market, flow, snapshot and forecast logic lives
-in application/provider layers.
+MCP remains a thin interface: market, flow, snapshot, forecast and persistence
+logic lives in application/storage layers.
 """
 
 from __future__ import annotations
@@ -13,9 +13,11 @@ from starlette.responses import JSONResponse
 
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
+from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.config import Settings
+from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
 settings = Settings.from_env()
@@ -24,6 +26,8 @@ _market = MarketDataService.default()
 _flow = MarketFlowService.default()
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
+_journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
+_journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)
 
 
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
@@ -130,12 +134,40 @@ def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, obj
 @mcp.tool(
     name="forecast.build",
     description=(
-        "Build an explainable ex-ante BIRZHA baseline forecast for approximately "
-        "5, 10 and 20 trading sessions using causal price, Delta and applicable OI evidence."
+        "Build an explainable ex-ante BIRZHA baseline forecast without persistence. "
+        "Use forecast.create for an operational forecast that must enter the journal."
     ),
 )
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _forecast.build(symbol, as_of_date=as_of_date).to_dict()
+
+
+@mcp.tool(
+    name="forecast.create",
+    description=(
+        "Create an ex-ante forecast and append it immutably to the configured Forecast Journal. "
+        "Identical duplicate writes are idempotent; conflicting content is rejected."
+    ),
+)
+def forecast_create(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
+    return _journal.create_and_save(symbol, as_of_date=as_of_date)
+
+
+@mcp.tool(
+    name="forecast.get",
+    description="Read one immutable Forecast Record from the Forecast Journal by forecast_id.",
+)
+def forecast_get(forecast_id: str) -> dict[str, object]:
+    record = _journal.get(forecast_id)
+    return record if record is not None else {"forecast_id": forecast_id, "status": "NOT_FOUND"}
+
+
+@mcp.tool(
+    name="forecast.list",
+    description="List recent immutable Forecast Records, optionally filtered by symbol.",
+)
+def forecast_list(limit: int = 20, symbol: str | None = None) -> dict[str, object]:
+    return _journal.list_recent(limit=limit, symbol=symbol)
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
