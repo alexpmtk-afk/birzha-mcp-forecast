@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from json import JSONDecodeError
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -61,6 +62,8 @@ class MarketFlowService:
         ``cutoff_at`` is the causal forecast T0. Rows whose exchange timestamp is
         later than T0 are excluded. Rows without a parseable timestamp are also
         excluded when a cutoff is requested; unknown time is never assumed safe.
+        Optional analytical feeds fail closed to missing/DEGRADED rather than
+        destroying the price-based snapshot when MOEX returns malformed data.
         """
 
         if lookback_days <= 0:
@@ -82,9 +85,11 @@ class MarketFlowService:
                 from_date=start.isoformat(),
                 till_date=till.isoformat(),
             )
-        except MoexAnalyticsError as exc:
+        except (MoexAnalyticsError, JSONDecodeError) as exc:
             trade_rows = []
-            warnings.append(f"ALGOPACK_TRADESTATS_UNAVAILABLE:{exc}")
+            warnings.append(
+                f"ALGOPACK_TRADESTATS_UNAVAILABLE:{type(exc).__name__}:{exc}"
+            )
 
         try:
             futoi_rows = self.analytics.fetch_futoi(
@@ -92,9 +97,9 @@ class MarketFlowService:
                 from_date=start.isoformat(),
                 till_date=till.isoformat(),
             )
-        except MoexAnalyticsError as exc:
+        except (MoexAnalyticsError, JSONDecodeError) as exc:
             futoi_rows = []
-            warnings.append(f"FUTOI_UNAVAILABLE:{exc}")
+            warnings.append(f"FUTOI_UNAVAILABLE:{type(exc).__name__}:{exc}")
 
         if cutoff is not None:
             trade_rows = _causal_rows(trade_rows, cutoff)
