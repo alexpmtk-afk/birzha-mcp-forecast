@@ -56,7 +56,7 @@ class MoexAnalyticsClient:
         authenticated = bool(self._token)
         self._algopack_base = APIM_BASE if authenticated else ISS_BASE
         self._algopack_governor = self._control_plane.governor(
-            "moex-algopack-auth" if authenticated else "moex-algopack-public",
+            "moex-algopack-auth" if authenticated else "moex-iss-public",
             MOEX_AUTHENTICATED_POLICY if authenticated else MOEX_ISS_PUBLIC_POLICY,
             require_distributed_gate=require_distributed_gate,
         )
@@ -134,19 +134,14 @@ class MoexAnalyticsClient:
         page_limit: int = 1000,
         max_pages: int = 50,
     ) -> list[dict[str, Any]]:
-        """Read bounded analytical pages and fail closed if pagination stalls.
-
-        A remote endpoint must never be able to keep BIRZHA in an unbounded loop
-        by returning the same full page for successive ``start`` offsets. Both a
-        page-count ceiling and a repeated-page fingerprint guard are enforced.
-        """
+        """Read bounded analytical pages and fail closed if pagination stalls."""
 
         if max_pages <= 0:
             raise ValueError("max_pages must be > 0")
         rows: list[dict[str, Any]] = []
         start = 0
         previous_fingerprint: str | None = None
-        for page_number in range(max_pages):
+        for _ in range(max_pages):
             payload = self._request(
                 base=base,
                 path=path,
