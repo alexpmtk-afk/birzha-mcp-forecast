@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
+from birzha.domain.market import Instrument
 from birzha.providers.moex_analytics import MoexAnalyticsClient, MoexAnalyticsError
 
 
@@ -37,7 +38,25 @@ class MarketFlowService:
         lookback_days: int = 5,
         cutoff_at: str | None = None,
     ) -> MarketFlowSnapshot:
-        """Build flow using only records that existed on or before ``cutoff_at``.
+        instrument = self.market_data.resolve(symbol)
+        return self.build_for_instrument(
+            instrument,
+            from_date=from_date,
+            till_date=till_date,
+            lookback_days=lookback_days,
+            cutoff_at=cutoff_at,
+        )
+
+    def build_for_instrument(
+        self,
+        instrument: Instrument,
+        *,
+        from_date: str | None = None,
+        till_date: str | None = None,
+        lookback_days: int = 5,
+        cutoff_at: str | None = None,
+    ) -> MarketFlowSnapshot:
+        """Build flow for the exact resolved contract using only data <= T0.
 
         ``cutoff_at`` is the causal forecast T0. Rows whose exchange timestamp is
         later than T0 are excluded. Rows without a parseable timestamp are also
@@ -56,9 +75,7 @@ class MarketFlowService:
         if start > till:
             raise ValueError("from_date must not be after till_date")
 
-        instrument = self.market_data.resolve(symbol)
         warnings: list[str] = []
-
         try:
             trade_rows = self.analytics.fetch_tradestats(
                 instrument,
@@ -119,11 +136,12 @@ class MarketFlowService:
         observed = [dt for row in [*trade_rows, *futoi_rows] if (dt := _row_datetime(row)) is not None]
         as_of = max(observed).isoformat() if observed else None
         if cutoff is not None and as_of is not None:
-            assert _parse_timestamp(as_of) is not None and _parse_timestamp(as_of) <= cutoff
+            parsed_as_of = _parse_timestamp(as_of)
+            assert parsed_as_of is not None and parsed_as_of <= cutoff
 
         quality = "PASS" if not warnings else "DEGRADED"
         return MarketFlowSnapshot(
-            symbol=symbol,
+            symbol=instrument.symbol,
             secid=instrument.secid,
             from_date=start.isoformat(),
             till_date=till.isoformat(),
@@ -161,34 +179,30 @@ def _parse_timestamp(value: str | None) -> datetime | None:
     return parsed.astimezone(MOEX_TIMEZONE)
 
 
+def _first_present(row: dict[str, Any], *keys: str) -> object | None:
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return None
+
+
 def _row_datetime(row: dict[str, Any]) -> datetime | None:
-    tradedate = str(row.get("tradedate") or row.get("TRADEDATE") or "").strip()
-    tradetime = str(
-        row.get("tradetime")
-        or row.get("TRADETIME")
-        or row.get("systime")
-        or row.get("SYSTIME")
-        or ""
-    ).strip()
+    tradedate = str(_first_present(row, "tradedate", "TRADEDATE") or "").strip()
+    tradetime = str(_first_present(row, "tradetime", "TRADETIME") or "").strip()
     if tradedate and tradetime:
-        candidate = f"{tradedate}T{tradetime}"
-        parsed = _parse_timestamp(candidate)
+        parsed = _parse_timestamp(f"{tradedate}T{tradetime}")
         if parsed is not None:
             return parsed
     for key in ("systime", "SYSTIME", "timestamp", "TIMESTAMP"):
-        parsed = _parse_timestamp(str(row.get(key) or ""))
+        value = _first_present(row, key)
+        parsed = _parse_timestamp(str(value)) if value is not None else None
         if parsed is not None:
             return parsed
     return None
 
 
 def _causal_rows(rows: list[dict[str, Any]], cutoff: datetime) -> list[dict[str, Any]]:
-    result: list[dict[str, Any]] = []
-    for row in rows:
-        observed = _row_datetime(row)
-        if observed is not None and observed <= cutoff:
-            result.append(row)
-    return result
+    return [row for row in rows if (observed := _row_datetime(row)) is not None and observed <= cutoff]
 
 
 def _number(value: object) -> float | None:
@@ -207,13 +221,13 @@ def _int_or_none(value: object) -> int | None:
 
 
 def _sum_field(rows: list[dict[str, Any]], field: str) -> float | None:
-    values = [value for row in rows if (value := _number(row.get(field))) is not None]
+    values = [value for row in rows if (value := _number(_first_present(row, field, field.upper()))) is not None]
     return sum(values) if values else None
 
 
 def _first_number(rows: list[dict[str, Any]], field: str) -> float | None:
     for row in rows:
-        value = _number(row.get(field))
+        value = _number(_first_present(row, field, field.upper()))
         if value is not None:
             return value
     return None
@@ -221,7 +235,7 @@ def _first_number(rows: list[dict[str, Any]], field: str) -> float | None:
 
 def _last_number(rows: list[dict[str, Any]], field: str) -> float | None:
     for row in reversed(rows):
-        value = _number(row.get(field))
+        value = _number(_first_present(row, field, field.upper()))
         if value is not None:
             return value
     return None
@@ -237,22 +251,16 @@ def _add(left: float | None, right: float | None) -> float | None:
 
 def _row_time_key(row: dict[str, Any]) -> tuple[str, str, int]:
     return (
-        str(row.get("tradedate") or row.get("TRADEDATE") or ""),
-        str(
-            row.get("tradetime")
-            or row.get("TRADETIME")
-            or row.get("SYSTIME")
-            or row.get("systime")
-            or ""
-        ),
-        _int_or_none(row.get("seqnum") or row.get("SEQNUM")) or 0,
+        str(_first_present(row, "tradedate", "TRADEDATE") or ""),
+        str(_first_present(row, "tradetime", "TRADETIME", "SYSTIME", "systime") or ""),
+        _int_or_none(_first_present(row, "seqnum", "SEQNUM")) or 0,
     )
 
 
 def _latest_futoi_by_group(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for row in sorted(rows, key=_row_time_key):
-        group = str(row.get("clgroup") or row.get("CLGROUP") or "").upper()
+        group = str(_first_present(row, "clgroup", "CLGROUP") or "").upper()
         if group in {"FIZ", "YUR"}:
             result[group] = row
     return result
@@ -264,11 +272,11 @@ def _client_oi(row: dict[str, Any] | None, group: str) -> ClientOpenInterest | N
     observed = _row_datetime(row)
     return ClientOpenInterest(
         client_group=group,
-        net_position=_round_or_none(_number(row.get("pos") or row.get("POS"))),
-        long_position=_round_or_none(_number(row.get("pos_long") or row.get("POS_LONG"))),
-        short_position=_round_or_none(_number(row.get("pos_short") or row.get("POS_SHORT"))),
-        long_accounts=_int_or_none(row.get("pos_long_num") or row.get("POS_LONG_NUM")),
-        short_accounts=_int_or_none(row.get("pos_short_num") or row.get("POS_SHORT_NUM")),
+        net_position=_round_or_none(_number(_first_present(row, "pos", "POS"))),
+        long_position=_round_or_none(_number(_first_present(row, "pos_long", "POS_LONG"))),
+        short_position=_round_or_none(_number(_first_present(row, "pos_short", "POS_SHORT"))),
+        long_accounts=_int_or_none(_first_present(row, "pos_long_num", "POS_LONG_NUM")),
+        short_accounts=_int_or_none(_first_present(row, "pos_short_num", "POS_SHORT_NUM")),
         observed_at=observed.isoformat() if observed else None,
     )
 
