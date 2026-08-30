@@ -12,6 +12,7 @@ LOCAL_ALLOWED_HOSTS = (
     "localhost",
     "localhost:*",
 )
+DEFAULT_JOURNAL_PATH = "/tmp/birzha_forecast_journal.duckdb"
 
 
 def _csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -27,6 +28,7 @@ class Settings:
     port: int = 8080
     mcp_allowed_hosts: tuple[str, ...] = LOCAL_ALLOWED_HOSTS
     mcp_allowed_origins: tuple[str, ...] = ()
+    forecast_journal_path: str = DEFAULT_JOURNAL_PATH
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -35,4 +37,5 @@ class Settings:
             port=int(os.getenv("PORT", "8080")),
             mcp_allowed_hosts=_csv_env("MCP_ALLOWED_HOSTS", LOCAL_ALLOWED_HOSTS),
             mcp_allowed_origins=_csv_env("MCP_ALLOWED_ORIGINS", ()),
+            forecast_journal_path=os.getenv("BIRZHA_FORECAST_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
         )
