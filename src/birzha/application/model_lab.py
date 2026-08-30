@@ -126,6 +126,7 @@ def assess_walk_forward(
         walk_forward_status=report.status,
         completed_forecasts=report.completed_forecasts,
         failed_forecasts=report.failed_forecasts,
+        failures=report.failures,
         horizons=tuple(horizons),
         status=overall,
     )
