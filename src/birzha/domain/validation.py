@@ -77,6 +77,7 @@ class ModelAcceptanceReport:
     walk_forward_status: str
     completed_forecasts: int
     failed_forecasts: int
+    failures: tuple[str, ...]
     horizons: tuple[HorizonAcceptance, ...]
     status: str
 
@@ -89,6 +90,7 @@ class ModelAcceptanceReport:
             "walk_forward_status": self.walk_forward_status,
             "completed_forecasts": self.completed_forecasts,
             "failed_forecasts": self.failed_forecasts,
+            "failures": list(self.failures),
             "horizons": [item.to_dict() for item in self.horizons],
             "status": self.status,
         }
