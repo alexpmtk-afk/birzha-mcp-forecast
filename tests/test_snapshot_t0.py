@@ -74,3 +74,15 @@ def test_snapshot_t0_is_latest_completed_observation_not_oldest_timeframe_end() 
     assert snapshot.d1.candles > 0
     assert snapshot.h1.candles > 0
     assert snapshot.m15.candles > 0
+
+    quality = snapshot.quality_contract
+    assert quality is not None
+    assert quality.version == "DATA_QUALITY_CONTRACT_V2"
+    assert quality.status == "DEGRADED"
+    by_tf = {item.timeframe: item for item in quality.timeframes}
+    assert by_tf["D1"].status == "PASS"
+    assert by_tf["H1"].status == "DEGRADED"
+    assert by_tf["M15"].status == "DEGRADED"
+    assert quality.flow_status == "NOT_REQUESTED"
+    assert snapshot.data_quality == quality.status
+    assert any(reason.startswith("H1: insufficient_history") for reason in quality.reasons)
