@@ -12,6 +12,7 @@ dependencies = [
   "duckdb==1.5.5",
   "mcp==2.1.1",
   "uvicorn==0.35.0",
+  "ydb[yc]==3.31.4",
 ]
 
 [project.optional-dependencies]
