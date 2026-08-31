@@ -23,15 +23,34 @@ from birzha.application.validation import WalkForwardValidator
 from birzha.config import Settings
 from birzha.providers.moex_analytics import MoexAnalyticsClient
 from birzha.providers.moex_calendar import MoexTradingCalendar
+from birzha.security import McpBearerAuthMiddleware
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
+from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
 settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
 
-_upstream_control = ProcessUpstreamControlPlane()
+_ydb_runtime: YdbRuntime | None = None
+if settings.state_backend == "ydb":
+    assert settings.ydb_connection_string is not None
+    _ydb_runtime = YdbRuntime.connect(settings.ydb_connection_string)
+    _upstream_control = ProcessUpstreamControlPlane(
+        gate_factory=lambda provider_key: YdbSlotPacingGate(
+            _ydb_runtime.pool,
+            provider_key=provider_key,
+        ),
+        require_distributed_gate=True,
+    )
+    _journal_store = YdbForecastJournal(_ydb_runtime.pool)
+    _outcome_store = YdbOutcomeJournal(_ydb_runtime.pool)
+else:
+    _upstream_control = ProcessUpstreamControlPlane()
+    _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
+    _outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
+
 _market = MarketDataService.default(control_plane=_upstream_control)
 _flow = MarketFlowService(
     market_data=_market,
@@ -39,17 +58,6 @@ _flow = MarketFlowService(
 )
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
-
-_ydb_runtime: YdbRuntime | None = None
-if settings.state_backend == "ydb":
-    assert settings.ydb_connection_string is not None
-    _ydb_runtime = YdbRuntime.connect(settings.ydb_connection_string)
-    _journal_store = YdbForecastJournal(_ydb_runtime.pool)
-    _outcome_store = YdbOutcomeJournal(_ydb_runtime.pool)
-else:
-    _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
-    _outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
-
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
 _outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
 _validator = WalkForwardValidator(
@@ -160,3 +168,5 @@ transport_security = TransportSecuritySettings(
 )
 
 app = mcp.streamable_http_app(json_response=True, transport_security=transport_security)
+if settings.mcp_bearer_token:
+    app.add_middleware(McpBearerAuthMiddleware, token=settings.mcp_bearer_token)
