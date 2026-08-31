@@ -55,7 +55,7 @@ class WalkForwardValidator:
 
         sessions = self._session_dates(symbol, start=start, end=end)
         eligible = sessions[:-20] if len(sessions) > 20 else ()
-        selected = tuple(eligible[::step_sessions][:max_points])
+        candidates = tuple(eligible[::step_sessions])
 
         forecast_store = DuckDBForecastJournal(":memory:")
         outcome_store = DuckDBOutcomeJournal(":memory:")
@@ -68,8 +68,12 @@ class WalkForwardValidator:
         failures: list[str] = []
         versions: set[str] = set()
         completed = 0
+        attempted = 0
         try:
-            for forecast_day in selected:
+            for forecast_day in candidates:
+                if completed >= max_points:
+                    break
+                attempted += 1
                 try:
                     record = self.forecasts.build(symbol, as_of_date=forecast_day.isoformat())
                     forecast_store.append(record)
@@ -79,6 +83,12 @@ class WalkForwardValidator:
                     )
                     by_horizon = {item.horizon_sessions: item for item in evaluation.outcomes}
                     if any(h.sessions not in by_horizon for h in record.horizons):
+                        # Exact-contract outcomes intentionally do not jump across
+                        # an expiry into a different futures contract. A T0 too
+                        # close to expiry is therefore not a valid full-horizon
+                        # observation. Keep the diagnostic and continue to later
+                        # independent T0s until the requested completed sample is
+                        # filled or the candidate calendar is exhausted.
                         failures.append(f"{forecast_day.isoformat()}:incomplete_outcome")
                         continue
                     completed += 1
@@ -91,11 +101,11 @@ class WalkForwardValidator:
             outcome_store.close()
 
         metrics = summarize_walk_forward(pairs)
-        if not selected:
+        if not candidates:
             status = "NO_ELIGIBLE_POINTS"
         elif completed == 0:
             status = "FAILED"
-        elif failures:
+        elif completed < max_points:
             status = "PARTIAL"
         else:
             status = "COMPUTED"
@@ -103,7 +113,7 @@ class WalkForwardValidator:
             symbol=symbol,
             start_date=start.isoformat(),
             end_date=end.isoformat(),
-            requested_points=len(selected),
+            requested_points=attempted,
             completed_forecasts=completed,
             failed_forecasts=len(failures),
             engine_versions=tuple(sorted(versions)),
@@ -139,10 +149,6 @@ class WalkForwardValidator:
             try:
                 instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
             except MoexIssError:
-                # A trailing weekend/holiday after the last collected futures
-                # session is normal. Once valid sessions exist, terminate the
-                # requested calendar instead of treating closed tail days as a
-                # missing-contract failure.
                 if sessions:
                     break
                 raise
