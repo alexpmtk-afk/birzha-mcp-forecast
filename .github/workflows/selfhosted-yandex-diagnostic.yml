@@ -1,0 +1,33 @@
+name: Self-hosted Yandex diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/selfhosted-yandex-diagnostic.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, Windows, X64, codex-bridge-service]
+    timeout-minutes: 10
+    steps:
+      - name: Check runner
+        shell: cmd
+        run: |
+          echo SELF_HOSTED_RUNNER_PASS
+          whoami
+      - name: Check Yandex CLI
+        shell: cmd
+        run: |
+          where yc
+          yc --version
+      - name: Check Yandex authentication without exposing token
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $token = & yc iam create-token
+          if ([string]::IsNullOrWhiteSpace($token)) { throw 'Yandex authentication failed' }
+          Write-Output 'YANDEX_AUTH_PASS'
