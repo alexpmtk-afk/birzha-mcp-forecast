@@ -41,6 +41,10 @@ class HistoricalCandleStore(Protocol):
 
     def stored_trade_dates(self, secid: str, timeframe: str, from_date: str, till_date: str) -> tuple[str, ...]: ...
 
+    def is_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> bool: ...
+
+    def mark_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> None: ...
+
 
 class DuckDBHistoricalCandleStore:
     """Idempotent candle store keyed by real contract identity + timeframe + begin."""
@@ -78,6 +82,9 @@ class DuckDBHistoricalCandleStore:
                 source VARCHAR NOT NULL,
                 PRIMARY KEY (secid, timeframe, begin)
             )
+        """)
+        self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS historical_verified_ranges (symbol VARCHAR NOT NULL, timeframe VARCHAR NOT NULL, from_date VARCHAR NOT NULL, till_date VARCHAR NOT NULL, PRIMARY KEY (symbol, timeframe, from_date, till_date))
         """)
 
     def upsert_series(self, series: CandleSeries) -> int:
@@ -152,6 +159,15 @@ class DuckDBHistoricalCandleStore:
                 ORDER BY trade_date
             """, [secid, timeframe, from_date, _exclusive_upper_bound(till_date)]).fetchall()
         return tuple(str(row[0]) for row in rows)
+
+    def is_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> bool:
+        with self._lock:
+            row=self._connection.execute("SELECT 1 FROM historical_verified_ranges WHERE symbol=? AND timeframe=? AND from_date<=? AND till_date>=? LIMIT 1",[symbol,timeframe,from_date,till_date]).fetchone()
+        return row is not None
+
+    def mark_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> None:
+        with self._lock:
+            self._connection.execute("INSERT OR IGNORE INTO historical_verified_ranges VALUES (?,?,?,?)",[symbol,timeframe,from_date,till_date])
 
     def close(self) -> None:
         with self._lock:

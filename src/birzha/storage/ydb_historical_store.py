@@ -23,6 +23,7 @@ class YdbHistoricalCandleStore:
     def __init__(self, pool: QueryPool, *, table: str = "historical_candles") -> None:
         self._pool = pool
         self._table = _safe_table_name(table)
+        self._verified_table = _safe_table_name(table + "_verified_ranges")
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -40,6 +41,7 @@ class YdbHistoricalCandleStore:
             """,
             retry_settings=ydb.RetrySettings(idempotent=True),
         )
+        self._pool.execute_with_retries(f"""CREATE TABLE IF NOT EXISTS `{self._verified_table}` (symbol Utf8 NOT NULL, timeframe Utf8 NOT NULL, from_date Utf8 NOT NULL, till_date Utf8 NOT NULL, PRIMARY KEY (symbol, timeframe, from_date, till_date));""", retry_settings=ydb.RetrySettings(idempotent=True))
 
     def upsert_series(self, series: CandleSeries) -> int:
         if not series.candles:
@@ -170,6 +172,15 @@ class YdbHistoricalCandleStore:
             retry_settings=ydb.RetrySettings(idempotent=True),
         )
         return tuple(sorted({str(_row_value(row, "begin"))[:10] for row in _rows(result)}))
+
+    def is_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> bool:
+        q=f"""DECLARE $symbol AS Utf8; DECLARE $timeframe AS Utf8; DECLARE $from_date AS Utf8; DECLARE $till_date AS Utf8; SELECT 1 AS found FROM `{self._verified_table}` WHERE symbol=$symbol AND timeframe=$timeframe AND from_date<=$from_date AND till_date>=$till_date LIMIT 1;"""
+        r=self._pool.execute_with_retries(q,{"$symbol":_utf8(symbol),"$timeframe":_utf8(timeframe),"$from_date":_utf8(from_date),"$till_date":_utf8(till_date)},retry_settings=ydb.RetrySettings(idempotent=True))
+        return _first_row(r) is not None
+
+    def mark_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> None:
+        q=f"""DECLARE $symbol AS Utf8; DECLARE $timeframe AS Utf8; DECLARE $from_date AS Utf8; DECLARE $till_date AS Utf8; UPSERT INTO `{self._verified_table}` (symbol,timeframe,from_date,till_date) VALUES ($symbol,$timeframe,$from_date,$till_date);"""
+        self._pool.execute_with_retries(q,{"$symbol":_utf8(symbol),"$timeframe":_utf8(timeframe),"$from_date":_utf8(from_date),"$till_date":_utf8(till_date)},retry_settings=ydb.RetrySettings(idempotent=True))
 
     def close(self) -> None:
         return None
