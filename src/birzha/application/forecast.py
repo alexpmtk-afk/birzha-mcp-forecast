@@ -18,7 +18,7 @@ from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.domain.snapshot import MarketSnapshot
 
 
-ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_3_PROFILE"
+ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
 
 
 @dataclass(slots=True)
@@ -96,6 +96,8 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
         else snapshot.d1.last_close
     )
 
+    primary, alternative, confirmation, invalidation, levels = _scenarios(snapshot, direction, reference_price)
+
     return ForecastRecord(
         forecast_id=f"fcst_{digest}",
         symbol=snapshot.symbol,
@@ -111,6 +113,11 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
         warnings=tuple(warnings),
         validation_status="UNVALIDATED_BASELINE",
         reference_price=reference_price,
+        primary_scenario=primary,
+        alternative_scenario=alternative,
+        confirmation_level=confirmation,
+        invalidation_level=invalidation,
+        key_levels=levels,
     )
 
 
@@ -187,3 +194,35 @@ def _reasons(snapshot: MarketSnapshot, score: float) -> list[str]:
 
 def _fmt(value: float | None) -> str:
     return "NULL" if value is None else f"{value:.6f}"
+
+
+def _scenarios(snapshot: MarketSnapshot, direction: str, reference_price: float | None) -> tuple[str, str, float | None, float | None, tuple[float, ...]]:
+    profile = snapshot.volume_profile
+    support = snapshot.h1.support_20 or snapshot.d1.support_20
+    resistance = snapshot.h1.resistance_20 or snapshot.d1.resistance_20
+    levels = [value for value in (
+        profile.val if profile else None,
+        profile.poc if profile else None,
+        profile.vah if profile else None,
+        support,
+        resistance,
+        reference_price,
+    ) if value is not None]
+    unique_levels = tuple(sorted(set(round(float(value), 8) for value in levels)))
+
+    if direction == "UP":
+        confirmation = profile.vah if profile is not None else resistance
+        invalidation = profile.val if profile is not None else support
+        primary = "Рост сохраняется при удержании цены выше зоны подтверждения; цель — продолжение движения к верхним уровням."
+        alternative = "Если цена закрепится ниже уровня отмены, основной сценарий роста считается нарушенным и приоритет смещается к снижению/балансу."
+    elif direction == "DOWN":
+        confirmation = profile.val if profile is not None else support
+        invalidation = profile.vah if profile is not None else resistance
+        primary = "Снижение сохраняется при удержании цены ниже зоны подтверждения; цель — продолжение движения к нижним уровням."
+        alternative = "Если цена закрепится выше уровня отмены, основной сценарий снижения считается нарушенным и приоритет смещается к росту/балансу."
+    else:
+        confirmation = resistance
+        invalidation = support
+        primary = "Базовый сценарий — баланс без подтверждённого направленного преимущества до выхода из рабочего диапазона."
+        alternative = "Альтернативный сценарий включается после устойчивого выхода за одну из границ диапазона и появления направленного контроля."
+    return primary, alternative, confirmation, invalidation, unique_levels

@@ -77,20 +77,25 @@ class HistoricalDataService:
         from_date: str,
         till_date: str,
     ) -> HistoricalSyncResult:
+        timeframe = timeframe.upper()
         start = date.fromisoformat(from_date[:10])
         finish = date.fromisoformat(till_date[:10])
         if finish < start:
             raise ValueError("till_date must be on or after from_date")
 
-        if self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10]):
+        price_verified = self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10])
+        sessions_verified = timeframe != "D1" or self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10])
+        if price_verified and sessions_verified:
             return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=(), reused_verified_range=True)
 
         segments = self._segments(symbol, start, finish)
         results = tuple(
-            self._sync_contract(instrument, timeframe, left, right)
+            self._sync_contract(symbol, instrument, timeframe, left, right)
             for instrument, left, right in segments
         )
         self.store.mark_verified(symbol, timeframe, from_date[:10], till_date[:10])
+        if timeframe == "D1":
+            self.store.mark_session_range_verified(symbol, from_date[:10], till_date[:10])
         return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=results)
 
     def sync_many(
@@ -118,6 +123,11 @@ class HistoricalDataService:
         till_date: str,
     ) -> CandleSeries:
         return self.store.read(instrument, timeframe, from_date, till_date)
+
+    def session_dates(self, symbol: str, *, from_date: str, till_date: str) -> tuple[date, ...]:
+        if not self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10]):
+            raise RuntimeError("stored session calendar is not verified for requested range")
+        return tuple(date.fromisoformat(item[:10]) for item in self.store.stored_sessions(symbol, from_date, till_date))
 
     def _segments(
         self,
@@ -156,6 +166,7 @@ class HistoricalDataService:
 
     def _sync_contract(
         self,
+        symbol: str,
         instrument: Instrument,
         timeframe: str,
         start: date,
@@ -170,6 +181,8 @@ class HistoricalDataService:
             from_date=start,
             till_date=finish,
         )
+        if timeframe.upper() == "D1":
+            self.store.record_sessions(symbol, instrument.secid, tuple(day.isoformat() for day in expected))
         stored_dates = self.store.stored_trade_dates(
             instrument.secid,
             timeframe,

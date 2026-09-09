@@ -45,6 +45,14 @@ class HistoricalCandleStore(Protocol):
 
     def mark_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> None: ...
 
+    def record_sessions(self, symbol: str, secid: str, trade_dates: tuple[str, ...]) -> None: ...
+
+    def stored_sessions(self, symbol: str, from_date: str, till_date: str) -> tuple[str, ...]: ...
+
+    def is_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> bool: ...
+
+    def mark_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> None: ...
+
 
 class DuckDBHistoricalCandleStore:
     """Idempotent candle store keyed by real contract identity + timeframe + begin."""
@@ -85,6 +93,12 @@ class DuckDBHistoricalCandleStore:
         """)
         self._connection.execute("""
             CREATE TABLE IF NOT EXISTS historical_verified_ranges (symbol VARCHAR NOT NULL, timeframe VARCHAR NOT NULL, from_date VARCHAR NOT NULL, till_date VARCHAR NOT NULL, PRIMARY KEY (symbol, timeframe, from_date, till_date))
+        """)
+        self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS historical_sessions (symbol VARCHAR NOT NULL, secid VARCHAR NOT NULL, trade_date VARCHAR NOT NULL, PRIMARY KEY (symbol, secid, trade_date))
+        """)
+        self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS historical_session_verified_ranges (symbol VARCHAR NOT NULL, from_date VARCHAR NOT NULL, till_date VARCHAR NOT NULL, PRIMARY KEY (symbol, from_date, till_date))
         """)
 
     def upsert_series(self, series: CandleSeries) -> int:
@@ -168,6 +182,38 @@ class DuckDBHistoricalCandleStore:
     def mark_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> None:
         with self._lock:
             self._connection.execute("INSERT OR IGNORE INTO historical_verified_ranges VALUES (?,?,?,?)",[symbol,timeframe,from_date,till_date])
+
+    def record_sessions(self, symbol: str, secid: str, trade_dates: tuple[str, ...]) -> None:
+        if not trade_dates:
+            return
+        with self._lock:
+            self._connection.executemany(
+                "INSERT OR IGNORE INTO historical_sessions VALUES (?,?,?)",
+                [[symbol, secid, item[:10]] for item in trade_dates],
+            )
+
+    def stored_sessions(self, symbol: str, from_date: str, till_date: str) -> tuple[str, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT DISTINCT trade_date FROM historical_sessions WHERE symbol=? AND trade_date>=? AND trade_date<=? ORDER BY trade_date",
+                [symbol, from_date[:10], till_date[:10]],
+            ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def is_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> bool:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT 1 FROM historical_session_verified_ranges WHERE symbol=? AND from_date<=? AND till_date>=? LIMIT 1",
+                [symbol, from_date[:10], till_date[:10]],
+            ).fetchone()
+        return row is not None
+
+    def mark_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> None:
+        with self._lock:
+            self._connection.execute(
+                "INSERT OR IGNORE INTO historical_session_verified_ranges VALUES (?,?,?)",
+                [symbol, from_date[:10], till_date[:10]],
+            )
 
     def close(self) -> None:
         with self._lock:

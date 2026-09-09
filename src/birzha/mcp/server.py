@@ -215,6 +215,18 @@ def validation_assess_model(symbol: str, start_date: str, end_date: str, step_se
     ).to_dict()
 
 
+@mcp.tool(name="validation.development_holdout", description="Evaluate the current model separately on a development period and a later untouched holdout period. Overall ACCEPTED requires both periods to pass the existing statistical gate.")
+def validation_development_holdout(symbol: str, development_start: str, split_date: str, holdout_end: str, step_sessions: int = 5, max_points: int = 60) -> dict[str, object]:
+    return _model_lab.assess_development_holdout(
+        symbol,
+        development_start=development_start,
+        split_date=split_date,
+        holdout_end=holdout_end,
+        step_sessions=step_sessions,
+        max_points=max_points,
+    ).to_dict()
+
+
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_: Request) -> JSONResponse:
     return JSONResponse({

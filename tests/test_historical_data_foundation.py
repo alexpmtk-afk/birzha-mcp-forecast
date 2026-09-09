@@ -35,6 +35,10 @@ def test_historical_store_is_idempotent_and_reports_coverage() -> None:
     assert store.stored_trade_dates("SBER", "D1", "2026-09-01", "2026-09-02") == (
         "2026-09-01", "2026-09-02"
     )
+    store.record_sessions("SBER", "SBER", ("2026-09-01", "2026-09-02"))
+    store.mark_session_range_verified("SBER", "2026-09-01", "2026-09-02")
+    assert store.stored_sessions("SBER", "2026-09-01", "2026-09-02") == ("2026-09-01", "2026-09-02")
+    assert store.is_session_range_verified("SBER", "2026-09-01", "2026-09-02") is True
 
 
 def test_missing_session_ranges_detect_internal_hole_without_weekend_guessing() -> None:
@@ -69,6 +73,7 @@ def test_missing_session_ranges_groups_missing_exchange_sessions() -> None:
 def test_verified_range_skips_market_access() -> None:
     store = DuckDBHistoricalCandleStore()
     store.mark_verified("SBER", "D1", "2026-09-01", "2026-09-05")
+    store.mark_session_range_verified("SBER", "2026-09-01", "2026-09-05")
     service = HistoricalDataService(market_data=object(), store=store)  # type: ignore[arg-type]
 
     result = service.sync(
@@ -85,6 +90,7 @@ def test_sync_many_reuses_verified_ranges() -> None:
     for symbol in ("SBER", "IMOEX"):
         for timeframe in ("D1", "H1"):
             store.mark_verified(symbol, timeframe, "2026-09-01", "2026-09-05")
+        store.mark_session_range_verified(symbol, "2026-09-01", "2026-09-05")
     service = HistoricalDataService(market_data=object(), store=store)  # type: ignore[arg-type]
 
     result = service.sync_many(["SBER", "IMOEX"], ["D1", "H1"], from_date="2026-09-01", till_date="2026-09-05")
@@ -98,6 +104,7 @@ def test_sync_many_reuses_verified_ranges() -> None:
 def test_sync_many_continues_after_one_failure() -> None:
     store = DuckDBHistoricalCandleStore()
     store.mark_verified("SBER", "D1", "2026-09-01", "2026-09-05")
+    store.mark_session_range_verified("SBER", "2026-09-01", "2026-09-05")
     service = HistoricalDataService(market_data=object(), store=store)  # type: ignore[arg-type]
     result = service.sync_many(["SBER", "UNKNOWN"], ["D1"], from_date="2026-09-01", till_date="2026-09-05")
     assert result["status"] == "PARTIAL"
