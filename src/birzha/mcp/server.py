@@ -11,6 +11,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from birzha.application.calibration import ModelCalibrationService
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
 from birzha.application.historical_flow import HistoricalFlowDataService
@@ -81,6 +82,7 @@ _validator = WalkForwardValidator(
     historical_flow=_historical_flow,
 )
 _model_lab = ModelAcceptanceService(validator=_validator)
+_calibration = ModelCalibrationService(validator=_validator)
 
 
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
@@ -218,6 +220,18 @@ def validation_assess_model(symbol: str, start_date: str, end_date: str, step_se
 @mcp.tool(name="validation.development_holdout", description="Evaluate the current model separately on a development period and a later untouched holdout period. Overall ACCEPTED requires both periods to pass the existing statistical gate.")
 def validation_development_holdout(symbol: str, development_start: str, split_date: str, holdout_end: str, step_sessions: int = 5, max_points: int = 60) -> dict[str, object]:
     return _model_lab.assess_development_holdout(
+        symbol,
+        development_start=development_start,
+        split_date=split_date,
+        holdout_end=holdout_end,
+        step_sessions=step_sessions,
+        max_points=max_points,
+    ).to_dict()
+
+
+@mcp.tool(name="validation.calibrate_model", description="Choose forecast settings on a development period only, then evaluate the selected settings once on a later untouched holdout period. Acceptance thresholds are never weakened.")
+def validation_calibrate_model(symbol: str, development_start: str, split_date: str, holdout_end: str, step_sessions: int = 5, max_points: int = 60) -> dict[str, object]:
+    return _calibration.calibrate(
         symbol,
         development_start=development_start,
         split_date=split_date,

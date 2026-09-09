@@ -64,7 +64,7 @@ class WalkForwardValidator:
         if self.history is not None:
             self._prepare_history(symbol,start=start,end=end)
             stored=StoredMarketDataView(self.market_data,self.history)
-            forecast_service=ForecastService(MarketSnapshotService(market_data=stored,flow=self.forecasts.snapshots.flow))
+            forecast_service=ForecastService(MarketSnapshotService(market_data=stored,flow=self.forecasts.snapshots.flow), parameters=self.forecasts.parameters)
             outcome_market=stored
 
         sessions = self._validation_sessions(symbol, start=start, end=end)
