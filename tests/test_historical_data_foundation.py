@@ -78,3 +78,28 @@ def test_verified_range_skips_market_access() -> None:
     assert result.reused_verified_range is True
     assert result.fetched_candles == 0
     assert result.contracts == ()
+
+
+def test_sync_many_reuses_verified_ranges() -> None:
+    store = DuckDBHistoricalCandleStore()
+    for symbol in ("SBER", "IMOEX"):
+        for timeframe in ("D1", "H1"):
+            store.mark_verified(symbol, timeframe, "2026-09-01", "2026-09-05")
+    service = HistoricalDataService(market_data=object(), store=store)  # type: ignore[arg-type]
+
+    result = service.sync_many(["SBER", "IMOEX"], ["D1", "H1"], from_date="2026-09-01", till_date="2026-09-05")
+
+    assert result["status"] == "PASS"
+    assert result["requested"] == 4
+    assert result["passed"] == 4
+    assert all(item["reused_verified_range"] is True for item in result["items"])
+
+
+def test_sync_many_continues_after_one_failure() -> None:
+    store = DuckDBHistoricalCandleStore()
+    store.mark_verified("SBER", "D1", "2026-09-01", "2026-09-05")
+    service = HistoricalDataService(market_data=object(), store=store)  # type: ignore[arg-type]
+    result = service.sync_many(["SBER", "UNKNOWN"], ["D1"], from_date="2026-09-01", till_date="2026-09-05")
+    assert result["status"] == "PARTIAL"
+    assert result["passed"] == 1
+    assert result["failed"] == 1

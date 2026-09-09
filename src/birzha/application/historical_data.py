@@ -93,6 +93,22 @@ class HistoricalDataService:
         self.store.mark_verified(symbol, timeframe, from_date[:10], till_date[:10])
         return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=results)
 
+    def sync_many(
+        self, symbols: list[str], timeframes: list[str], *, from_date: str, till_date: str
+    ) -> dict[str, object]:
+        if not symbols or not timeframes:
+            raise ValueError("symbols and timeframes must be non-empty")
+        items: list[dict[str, object]] = []
+        for symbol in symbols:
+            for timeframe in timeframes:
+                try:
+                    result = self.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date)
+                    items.append({"status": "PASS", **result.to_dict()})
+                except Exception as exc:
+                    items.append({"status": "ERROR", "symbol": symbol, "timeframe": timeframe, "error_type": type(exc).__name__, "error": str(exc)[:1000]})
+        passed=sum(1 for item in items if item["status"] == "PASS")
+        return {"status": "PASS" if passed == len(items) else "PARTIAL", "requested": len(items), "passed": passed, "failed": len(items)-passed, "items": items}
+
     def load_exact(
         self,
         instrument: Instrument,

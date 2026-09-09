@@ -33,6 +33,9 @@ from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
+CORE_HISTORY_SYMBOLS = ["SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI"]
+CORE_HISTORY_TIMEFRAMES = ["D1", "H1", "M15"]
+
 settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
 
@@ -114,6 +117,16 @@ def history_sync(symbol: str, timeframe: str, from_date: str, till_date: str) ->
             "from_date": from_date,
             "till_date": till_date,
         }
+
+
+@mcp.tool(name="history.sync_batch", description="Sequentially sync several instruments and timeframes; one failure does not stop the remaining history jobs.")
+def history_sync_batch(symbols: list[str], timeframes: list[str], from_date: str, till_date: str) -> dict[str, object]:
+    return _history.sync_many(symbols, timeframes, from_date=from_date, till_date=till_date)
+
+
+@mcp.tool(name="history.sync_core", description="Sync the BIRZHA core research universe on D1/H1/M15, reusing already verified stored history.")
+def history_sync_core(from_date: str, till_date: str) -> dict[str, object]:
+    return _history.sync_many(CORE_HISTORY_SYMBOLS, CORE_HISTORY_TIMEFRAMES, from_date=from_date, till_date=till_date)
 
 
 @mcp.tool(name="history.coverage", description="Return durable stored coverage for one exact MOEX SECID and timeframe.")
