@@ -47,7 +47,7 @@ def test_missing_session_ranges_detect_internal_hole_without_weekend_guessing() 
         date(2026, 9, 8),
         date(2026, 9, 9),
     )
-    stored = ("2026-09-01", "2026-09-02", "2026-09-04", "2026-09-7", "2026-09-09")
+    stored = ("2026-09-01", "2026-09-02", "2026-09-04", "2026-09-07", "2026-09-09")
     assert _missing_session_ranges(expected, stored) == (
         (date(2026, 9, 3), date(2026, 9, 3)),
         (date(2026, 9, 8), date(2026, 9, 8)),
