@@ -34,12 +34,14 @@ def test_backfill_stops_after_requested_number_of_windows():
     assert len(history.calls) == 2
 
 
-def test_backfill_reports_partial_without_losing_resume_cursor():
+def test_backfill_stops_on_partial_and_retries_same_month():
     history = FakeHistory(partial_month="2026-02-01")
     report = HistoricalBackfillService(history).run(  # type: ignore[arg-type]
         ["BR"], ["D1"],
-        from_date="2026-01-01", till_date="2026-02-28", max_windows=2,
+        from_date="2026-01-01", till_date="2026-03-31", max_windows=3,
     )
     assert report.status == "PARTIAL"
-    assert report.complete is True
-    assert report.next_from_date is None
+    assert report.complete is False
+    assert report.processed_windows == 2
+    assert report.next_from_date == "2026-02-01"
+    assert [call[2] for call in history.calls] == ["2026-01-01", "2026-02-01"]
