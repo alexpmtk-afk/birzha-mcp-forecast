@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
+from birzha.application.features import TimeframeFeatureEngine
 from birzha.application.flow import MarketFlowService
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -173,23 +174,7 @@ def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
 
 
 def _state(series: CandleSeries) -> TimeframeState:
-    candles = list(series.candles)
-    closes = [c.close for c in candles if c.close is not None]
-    volumes = [c.volume for c in candles if c.volume is not None]
-    return TimeframeState(
-        timeframe=series.timeframe,
-        candles=len(candles),
-        last_close=closes[-1] if closes else None,
-        return_5=_return_n(closes, 5),
-        return_10=_return_n(closes, 10),
-        return_20=_return_n(closes, 20),
-        sma_20=_sma(closes, 20),
-        sma_50=_sma(closes, 50),
-        efficiency_ratio_20=_efficiency_ratio(closes, 20),
-        atr_14_pct=_atr_pct(candles, 14),
-        volume_ratio_20=_volume_ratio(volumes, 20),
-        trend_score=_trend_score(closes),
-    )
+    return TimeframeFeatureEngine().build(series)
 
 
 def _return_n(values: list[float], n: int) -> float | None:

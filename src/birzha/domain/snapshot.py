@@ -24,6 +24,10 @@ class TimeframeState:
     atr_14_pct: float | None
     volume_ratio_20: float | None
     trend_score: float
+    vwap_20: float | None = None
+    price_location_20: float | None = None
+    support_20: float | None = None
+    resistance_20: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
