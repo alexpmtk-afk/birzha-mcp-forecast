@@ -92,8 +92,12 @@ class MoexIssClient:
                     headers={str(k): str(v) for k, v in exc.headers.items()},
                     body=exc.read(),
                 )
-            except URLError as exc:
-                raise MoexIssError(f"MOEX ISS network error: {exc.reason}") from exc
+            except (URLError, TimeoutError, ConnectionError) as exc:
+                return IssResponse(
+                    status_code=503,
+                    headers={"X-BIRZHA-TRANSIENT": type(exc).__name__},
+                    body=b"",
+                )
 
         response = self._governor.execute([url], lambda _: one_attempt)[0]
         if response.status_code != 200:
@@ -123,8 +127,12 @@ class MoexIssClient:
                         headers={str(k): str(v) for k, v in exc.headers.items()},
                         body=exc.read(),
                     )
-                except URLError as exc:
-                    raise MoexIssError(f"MOEX ISS network error: {exc.reason}") from exc
+                except (URLError, TimeoutError, ConnectionError) as exc:
+                    return IssResponse(
+                        status_code=503,
+                        headers={"X-BIRZHA-TRANSIENT": type(exc).__name__},
+                        body=b"",
+                    )
 
             return one_attempt
 
