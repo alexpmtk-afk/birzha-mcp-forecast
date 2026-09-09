@@ -11,7 +11,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from birzha.application.calibration import ModelCalibrationService
+from birzha.application.calibration import ModelCalibrationService, calibrate_across_symbols
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
 from birzha.application.historical_flow import HistoricalFlowDataService
@@ -238,6 +238,15 @@ def validation_calibrate_model(symbol: str, development_start: str, split_date: 
         holdout_end=holdout_end,
         step_sessions=step_sessions,
         max_points=max_points,
+    ).to_dict()
+
+
+@mcp.tool(name="validation.calibrate_core", description="Select one forecast configuration across the core BIRZHA research universe on development data, then test that unchanged configuration on later holdout data for every symbol.")
+def validation_calibrate_core(development_start: str, split_date: str, holdout_end: str, step_sessions: int = 5, max_points: int = 60) -> dict[str, object]:
+    return calibrate_across_symbols(
+        _calibration, tuple(CORE_HISTORY_SYMBOLS),
+        development_start=development_start, split_date=split_date, holdout_end=holdout_end,
+        step_sessions=step_sessions, max_points=max_points,
     ).to_dict()
 
 
