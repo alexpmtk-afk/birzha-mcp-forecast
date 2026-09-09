@@ -159,3 +159,26 @@ def test_incomplete_sync_fails_closed(monkeypatch) -> None:
     with pytest.raises(HistoricalDataIncompleteError):
         service._sync_contract("SBER", _instrument(), "D1", date(2026, 9, 1), date(2026, 9, 2))
     assert store.stored_trade_dates("SBER", "D1", "2026-09-01", "2026-09-02") == ("2026-09-01",)
+
+
+class _RootOnlyResolver:
+    def resolve(self, symbol):
+        return None
+
+
+class _RootMarketData:
+    direct_resolver = _RootOnlyResolver()
+
+
+class _RootHistoryService(HistoricalDataService):
+    def _segments(self, symbol, start, finish):
+        return ()
+
+
+def test_root_future_does_not_trust_stale_verified_range() -> None:
+    store = DuckDBHistoricalCandleStore()
+    store.mark_verified("Si", "D1", "2025-01-01", "2026-09-08")
+    store.mark_session_range_verified("Si", "2025-01-01", "2026-09-08")
+    service = _RootHistoryService(market_data=_RootMarketData(), store=store)  # type: ignore[arg-type]
+    result = service.sync("Si", timeframe="D1", from_date="2025-01-01", till_date="2026-09-08")
+    assert result.reused_verified_range is False

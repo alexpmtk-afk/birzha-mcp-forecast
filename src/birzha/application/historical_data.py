@@ -90,10 +90,21 @@ class HistoricalDataService:
         if finish < start:
             raise ValueError("till_date must be on or after from_date")
 
-        price_verified = self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10])
-        sessions_verified = timeframe != "D1" or self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10])
-        if price_verified and sessions_verified:
-            return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=(), reused_verified_range=True)
+        resolver_known = hasattr(self.market_data, "direct_resolver")
+        direct_resolver = getattr(self.market_data, "direct_resolver", None)
+        direct = direct_resolver.resolve(symbol) if direct_resolver is not None else None
+        is_direct = direct is not None and direct.asset_class != "unknown"
+        # Root futures must re-resolve their historical contract timeline. Older
+        # root-level verified markers cannot prove that every rollover contract
+        # was actually stored, so they are intentionally not trusted here.
+        # Minimal test/custom market-data stubs without resolver capability keep
+        # the legacy verified-range shortcut because they cannot classify roots.
+        trust_verified = is_direct or not resolver_known
+        if trust_verified:
+            price_verified = self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10])
+            sessions_verified = timeframe != "D1" or self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10])
+            if price_verified and sessions_verified:
+                return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=(), reused_verified_range=True)
 
         segments = self._segments(symbol, start, finish)
         results = tuple(
