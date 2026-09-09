@@ -1,6 +1,6 @@
 from datetime import date
 
-from birzha.application.historical_data import _missing_session_ranges
+from birzha.application.historical_data import HistoricalDataService, _missing_session_ranges
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
@@ -64,3 +64,17 @@ def test_missing_session_ranges_groups_missing_exchange_sessions() -> None:
     assert _missing_session_ranges(expected, ("2026-09-04", "2026-09-09")) == (
         (date(2026, 9, 7), date(2026, 9, 8)),
     )
+
+
+def test_verified_range_skips_market_access() -> None:
+    store = DuckDBHistoricalCandleStore()
+    store.mark_verified("SBER", "D1", "2026-09-01", "2026-09-05")
+    service = HistoricalDataService(market_data=object(), store=store)  # type: ignore[arg-type]
+
+    result = service.sync(
+        "SBER", timeframe="D1", from_date="2026-09-02", till_date="2026-09-04"
+    )
+
+    assert result.reused_verified_range is True
+    assert result.fetched_candles == 0
+    assert result.contracts == ()

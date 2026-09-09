@@ -40,6 +40,7 @@ class HistoricalSyncResult:
     requested_from: str
     requested_till: str
     contracts: tuple[ContractSyncResult, ...]
+    reused_verified_range: bool = False
 
     @property
     def fetched_candles(self) -> int:
@@ -56,6 +57,7 @@ class HistoricalSyncResult:
             "requested_from": self.requested_from,
             "requested_till": self.requested_till,
             "contract_count": len(self.contracts),
+            "reused_verified_range": self.reused_verified_range,
             "fetched_candles": self.fetched_candles,
             "stored_candles": self.stored_candles,
             "contracts": [item.to_dict() for item in self.contracts],
@@ -80,18 +82,16 @@ class HistoricalDataService:
         if finish < start:
             raise ValueError("till_date must be on or after from_date")
 
+        if self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10]):
+            return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=(), reused_verified_range=True)
+
         segments = self._segments(symbol, start, finish)
         results = tuple(
             self._sync_contract(instrument, timeframe, left, right)
             for instrument, left, right in segments
         )
-        return HistoricalSyncResult(
-            symbol=symbol,
-            timeframe=timeframe,
-            requested_from=from_date,
-            requested_till=till_date,
-            contracts=results,
-        )
+        self.store.mark_verified(symbol, timeframe, from_date[:10], till_date[:10])
+        return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=results)
 
     def load_exact(
         self,
