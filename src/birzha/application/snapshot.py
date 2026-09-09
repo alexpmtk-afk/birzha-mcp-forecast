@@ -9,6 +9,7 @@ from birzha.application.features import TimeframeFeatureEngine
 from birzha.application.flow import MarketFlowService
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
+from birzha.application.volume_profile import profile_from_candles
 from birzha.domain.flow import MarketFlowSnapshot
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.domain.snapshot import (
@@ -120,6 +121,9 @@ class MarketSnapshotService:
             flow_status=flow_status,
             reasons=tuple(warnings),
         )
+        volume_profile = profile_from_candles(h1, bins=24)
+        if volume_profile is not None:
+            warnings.append("VOLUME_PROFILE:approximate_candle_proxy")
         source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
         return MarketSnapshot(
             symbol=symbol,
@@ -130,6 +134,7 @@ class MarketSnapshotService:
             h1=_state(h1),
             m15=_state(m15),
             flow=flow_snapshot,
+            volume_profile=volume_profile,
             data_quality=quality,
             quality_contract=quality_contract,
             warnings=tuple(warnings),

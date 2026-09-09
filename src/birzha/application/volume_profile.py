@@ -11,6 +11,7 @@ from birzha.domain.volume_profile import PriceVolumePoint, VolumeBin, VolumeProf
 class VolumeProfileEngine:
     bins: int = 24
     value_area_fraction: float = 0.70
+    method: str = "PRICE_VOLUME_POINTS_V1"
 
     def build(self, points: list[PriceVolumePoint] | tuple[PriceVolumePoint, ...]) -> VolumeProfileResult:
         usable = tuple(p for p in points if p.volume > 0)
@@ -64,6 +65,7 @@ class VolumeProfileEngine:
             shape=shape,
             bins=bins,
             total_volume=total,
+            method=self.method,
         )
 
 
@@ -95,3 +97,18 @@ def _peak_count(volumes: list[float]) -> int:
         if volumes[i] >= threshold and volumes[i] >= volumes[i - 1] and volumes[i] >= volumes[i + 1]:
             peaks += 1
     return peaks
+
+
+def profile_from_candles(series, *, bins: int = 24):
+    points=[]
+    for c in series.candles:
+        if c.volume is None or c.volume <= 0 or c.close is None:
+            continue
+        if c.high is not None and c.low is not None:
+            price=(c.high+c.low+c.close)/3.0
+        else:
+            price=c.close
+        points.append(PriceVolumePoint(price=float(price), volume=float(c.volume)))
+    if not points:
+        return None
+    return VolumeProfileEngine(bins=bins, method="CANDLE_TYPICAL_PRICE_VOLUME_PROXY_V1").build(points)

@@ -18,7 +18,7 @@ from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.domain.snapshot import MarketSnapshot
 
 
-ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_2_FLOW"
+ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_3_PROFILE"
 
 
 @dataclass(slots=True)
@@ -125,6 +125,7 @@ def _combined_score(snapshot: MarketSnapshot) -> float:
     if er is not None and er < 0.2:
         score *= 0.7
     score += _flow_adjustment(snapshot)
+    score += _profile_adjustment(snapshot)
     return score
 
 
@@ -145,12 +146,37 @@ def _flow_adjustment(snapshot: MarketSnapshot) -> float:
     return max(-0.75, min(0.75, adjustment))
 
 
+
+def _profile_adjustment(snapshot: MarketSnapshot) -> float:
+    profile = snapshot.volume_profile
+    price = snapshot.h1.last_close
+    if profile is None or price is None:
+        return 0.0
+    adjustment = 0.0
+    if price > profile.vah:
+        adjustment += 0.35
+    elif price < profile.val:
+        adjustment -= 0.35
+    elif price > profile.poc:
+        adjustment += 0.10
+    elif price < profile.poc:
+        adjustment -= 0.10
+    if profile.shape == "P":
+        adjustment += 0.10
+    elif profile.shape == "b":
+        adjustment -= 0.10
+    return max(-0.50, min(0.50, adjustment))
+
+
 def _reasons(snapshot: MarketSnapshot, score: float) -> list[str]:
     reasons = [f"combined_directional_score={score:.4f}"]
     for state in (snapshot.d1, snapshot.h1, snapshot.m15):
         reasons.append(f"{state.timeframe}:trend_score={state.trend_score:.4f},return20={_fmt(state.return_20)},er20={_fmt(state.efficiency_ratio_20)}")
     if snapshot.d1.atr_14_pct is not None:
         reasons.append(f"D1:atr14_pct={snapshot.d1.atr_14_pct * 100:.3f}")
+    if snapshot.volume_profile is not None:
+        p=snapshot.volume_profile
+        reasons.append(f"PROFILE:poc={p.poc:.6f},vah={p.vah:.6f},val={p.val:.6f},shape={p.shape},adjustment={_profile_adjustment(snapshot):.4f},method={p.method}")
     if snapshot.flow is not None:
         flow = snapshot.flow
         reasons.append("FLOW:" f"delta_ratio={_fmt(flow.volume_delta_ratio)}," f"price_change_pct={_fmt(flow.price_change_pct)}," f"oi_change={_fmt(flow.algopack_oi_change)}," f"adjustment={_flow_adjustment(snapshot):.4f}," f"as_of={flow.as_of or 'NULL'}")
