@@ -11,6 +11,13 @@ from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCoverage
 
 
+M15_MAX_SESSIONS_PER_FETCH = 3
+
+
+class HistoricalDataIncompleteError(RuntimeError):
+    """Expected exchange sessions are still absent after a sync attempt."""
+
+
 @dataclass(frozen=True, slots=True)
 class ContractSyncResult:
     secid: str
@@ -189,7 +196,7 @@ class HistoricalDataService:
             start.isoformat(),
             finish.isoformat(),
         )
-        missing_ranges = _missing_session_ranges(expected, stored_dates)
+        missing_ranges = _bounded_missing_ranges(expected, stored_dates, timeframe)
         fetched = 0
         for left, right in missing_ranges:
             series = self.market_data.candles_for_instrument(
@@ -201,6 +208,19 @@ class HistoricalDataService:
             )
             fetched += series.count
             self.store.upsert_series(series)
+
+        stored_dates_after = self.store.stored_trade_dates(
+            instrument.secid, timeframe, start.isoformat(), finish.isoformat()
+        )
+        remaining = _missing_session_ranges(expected, stored_dates_after)
+        if remaining:
+            compact = ",".join(
+                left.isoformat() if left == right else f"{left.isoformat()}..{right.isoformat()}"
+                for left, right in remaining[:10]
+            )
+            raise HistoricalDataIncompleteError(
+                f"history remains incomplete for {instrument.secid} {timeframe}: {compact}"
+            )
 
         coverage = self.store.coverage(instrument.secid, timeframe)
         stored = self.store.read(
@@ -242,3 +262,21 @@ def _missing_session_ranges(
     if run_start is not None and run_end is not None:
         ranges.append((run_start, run_end))
     return tuple(ranges)
+
+
+def _bounded_missing_ranges(
+    expected_sessions: tuple[date, ...],
+    stored_trade_dates: tuple[str, ...],
+    timeframe: str,
+) -> tuple[tuple[date, date], ...]:
+    ranges = _missing_session_ranges(expected_sessions, stored_trade_dates)
+    if timeframe.upper() != "M15":
+        return ranges
+    bounded: list[tuple[date, date]] = []
+    for left, right in ranges:
+        missing_days = [day for day in expected_sessions if left <= day <= right]
+        for index in range(0, len(missing_days), M15_MAX_SESSIONS_PER_FETCH):
+            chunk = missing_days[index : index + M15_MAX_SESSIONS_PER_FETCH]
+            if chunk:
+                bounded.append((chunk[0], chunk[-1]))
+    return tuple(bounded)
