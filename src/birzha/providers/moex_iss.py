@@ -239,11 +239,32 @@ class MoexIssClient:
             total = len(rows)
             page_size = max(1, len(rows))
 
-        starts = list(range(page_size, total, page_size))
-        if starts:
-            responses = self._request_many((path, {**base_params, "start": start}) for start in starts)
-            for response in responses:
-                rows.extend(self._table(response.json(), "candles"))
+        if cursor_rows:
+            starts = list(range(page_size, total, page_size))
+            if starts:
+                responses = self._request_many((path, {**base_params, "start": start}) for start in starts)
+                for response in responses:
+                    rows.extend(self._table(response.json(), "candles"))
+        elif rows:
+            # The candles endpoint commonly omits a cursor and caps a page at 500 rows.
+            # Continue until a short/empty page. Fail closed if MOEX repeats a page.
+            seen_pages = {_page_signature(rows)}
+            start = len(rows)
+            for _ in range(1000):
+                page_payload = self._request(path, {**base_params, "start": start}).json()
+                page = self._table(page_payload, "candles")
+                if not page:
+                    break
+                signature = _page_signature(page)
+                if signature in seen_pages:
+                    raise MoexIssError(f"MOEX ISS repeated candle page for {instrument.secid} start={start}")
+                seen_pages.add(signature)
+                rows.extend(page)
+                if len(page) < page_size:
+                    break
+                start += len(page)
+            else:
+                raise MoexIssError(f"MOEX ISS candle pagination exceeded safety limit for {instrument.secid}")
 
         candles: list[Candle] = []
         for row in rows:
@@ -332,6 +353,14 @@ class MoexIssClient:
             candles = tuple(c for c in candles if c.completed)
         return CandleSeries(instrument=instrument, timeframe=tf, candles=candles)
 
+
+
+def _page_signature(rows: list[dict[str, Any]]) -> tuple[int, str, str]:
+    if not rows:
+        return (0, "", "")
+    first = str(rows[0].get("begin") or rows[0])
+    last = str(rows[-1].get("begin") or rows[-1])
+    return (len(rows), first, last)
 
 def _float_or_none(value: object) -> float | None:
     if value is None:

@@ -1,8 +1,10 @@
 from datetime import date
 
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.domain.market import Candle
-from birzha.providers.moex_iss import IssResponse, MoexIssClient
+from birzha.domain.market import Candle, Instrument
+from birzha.providers.moex_iss import IssResponse, MoexIssClient, MoexIssError
+
+import pytest
 
 
 def _json_response(payload: str) -> IssResponse:
@@ -110,3 +112,34 @@ def test_batched_request_retries_transient_connection_error():
     assert responses[0].status_code == 200
     assert calls["count"] == 2
 
+
+
+def _candle_page(start: int, count: int) -> IssResponse:
+    import json
+    rows = []
+    for i in range(start, start + count):
+        rows.append([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, f"B{i:05d}", f"E{i:05d}"])
+    payload = {"candles": {"columns": ["open","close","high","low","value","volume","begin","end"], "data": rows}}
+    return IssResponse(status_code=200, headers={}, body=json.dumps(payload).encode())
+
+
+def test_candle_pagination_without_cursor_reads_all_pages() -> None:
+    client = object.__new__(MoexIssClient)
+    calls: list[int] = []
+    def request(path, params):
+        start = int(params.get("start", 0)); calls.append(start)
+        return _candle_page(start, 500 if start < 1000 else 3)
+    client._request = request
+    instrument = Instrument(symbol="SBER", secid="SBER", board="TQBR", engine="stock", market="shares", asset_class="equity")
+    candles = client._fetch_native_candles(instrument, interval=60, from_date="2025-01-01", till_date="2026-01-01")
+    assert len(candles) == 1003
+    assert calls == [0, 500, 1000]
+
+
+def test_candle_pagination_repeated_page_fails_closed() -> None:
+    client = object.__new__(MoexIssClient)
+    first = _candle_page(0, 500)
+    client._request = lambda path, params: first
+    instrument = Instrument(symbol="SBER", secid="SBER", board="TQBR", engine="stock", market="shares", asset_class="equity")
+    with pytest.raises(MoexIssError, match="repeated candle page"):
+        client._fetch_native_candles(instrument, interval=60, from_date="2025-01-01", till_date="2026-01-01")
