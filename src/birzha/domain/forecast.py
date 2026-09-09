@@ -37,6 +37,11 @@ class ForecastRecord:
     warnings: tuple[str, ...]
     validation_status: str
     reference_price: float | None = None
+    primary_scenario: str | None = None
+    alternative_scenario: str | None = None
+    confirmation_level: float | None = None
+    invalidation_level: float | None = None
+    key_levels: tuple[float, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -54,4 +59,9 @@ class ForecastRecord:
             "warnings": list(self.warnings),
             "validation_status": self.validation_status,
             "reference_price": self.reference_price,
+            "primary_scenario": self.primary_scenario,
+            "alternative_scenario": self.alternative_scenario,
+            "confirmation_level": self.confirmation_level,
+            "invalidation_level": self.invalidation_level,
+            "key_levels": list(self.key_levels),
         }

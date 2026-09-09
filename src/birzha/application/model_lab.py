@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from birzha.application.validation import WalkForwardValidator
 from birzha.domain.validation import (
+    DevelopmentHoldoutReport,
     HorizonAcceptance,
     ModelAcceptanceReport,
     WalkForwardReport,
@@ -41,6 +42,32 @@ class ModelAcceptanceService:
             minimum_observations=self.minimum_observations,
             minimum_directional_coverage=self.minimum_directional_coverage,
             minimum_wilson_lower_95=self.minimum_wilson_lower_95,
+        )
+
+    def assess_development_holdout(
+        self, symbol: str, *, development_start: str, split_date: str, holdout_end: str,
+        step_sessions: int = 5, max_points: int = 60,
+    ) -> DevelopmentHoldoutReport:
+        if not development_start < split_date < holdout_end:
+            raise ValueError("expected development_start < split_date < holdout_end")
+        development = self.assess(
+            symbol, start_date=development_start, end_date=split_date,
+            step_sessions=step_sessions, max_points=max_points,
+        )
+        holdout = self.assess(
+            symbol, start_date=split_date, end_date=holdout_end,
+            step_sessions=step_sessions, max_points=max_points,
+        )
+        if holdout.status == "ACCEPTED" and development.status == "ACCEPTED":
+            status = "ACCEPTED"
+        elif holdout.status in {"FAILED", "INSUFFICIENT_SAMPLE"}:
+            status = holdout.status
+        else:
+            status = "REJECTED"
+        return DevelopmentHoldoutReport(
+            symbol=symbol, development_start=development_start, development_end=split_date,
+            holdout_start=split_date, holdout_end=holdout_end, development=development,
+            holdout=holdout, status=status,
         )
 
 

@@ -24,6 +24,8 @@ class YdbHistoricalCandleStore:
         self._pool = pool
         self._table = _safe_table_name(table)
         self._verified_table = _safe_table_name(table + "_verified_ranges")
+        self._sessions_table = _safe_table_name(table + "_sessions")
+        self._session_verified_table = _safe_table_name(table + "_session_verified_ranges")
         self._init_schema()
 
     def _init_schema(self) -> None:
@@ -42,6 +44,8 @@ class YdbHistoricalCandleStore:
             retry_settings=ydb.RetrySettings(idempotent=True),
         )
         self._pool.execute_with_retries(f"""CREATE TABLE IF NOT EXISTS `{self._verified_table}` (symbol Utf8 NOT NULL, timeframe Utf8 NOT NULL, from_date Utf8 NOT NULL, till_date Utf8 NOT NULL, PRIMARY KEY (symbol, timeframe, from_date, till_date));""", retry_settings=ydb.RetrySettings(idempotent=True))
+        self._pool.execute_with_retries(f"""CREATE TABLE IF NOT EXISTS `{self._sessions_table}` (symbol Utf8 NOT NULL, secid Utf8 NOT NULL, trade_date Utf8 NOT NULL, PRIMARY KEY (symbol, trade_date, secid));""", retry_settings=ydb.RetrySettings(idempotent=True))
+        self._pool.execute_with_retries(f"""CREATE TABLE IF NOT EXISTS `{self._session_verified_table}` (symbol Utf8 NOT NULL, from_date Utf8 NOT NULL, till_date Utf8 NOT NULL, PRIMARY KEY (symbol, from_date, till_date));""", retry_settings=ydb.RetrySettings(idempotent=True))
 
     def upsert_series(self, series: CandleSeries) -> int:
         if not series.candles:
@@ -181,6 +185,45 @@ class YdbHistoricalCandleStore:
     def mark_verified(self, symbol: str, timeframe: str, from_date: str, till_date: str) -> None:
         q=f"""DECLARE $symbol AS Utf8; DECLARE $timeframe AS Utf8; DECLARE $from_date AS Utf8; DECLARE $till_date AS Utf8; UPSERT INTO `{self._verified_table}` (symbol,timeframe,from_date,till_date) VALUES ($symbol,$timeframe,$from_date,$till_date);"""
         self._pool.execute_with_retries(q,{"$symbol":_utf8(symbol),"$timeframe":_utf8(timeframe),"$from_date":_utf8(from_date),"$till_date":_utf8(till_date)},retry_settings=ydb.RetrySettings(idempotent=True))
+
+    def record_sessions(self, symbol: str, secid: str, trade_dates: tuple[str, ...]) -> None:
+        if not trade_dates:
+            return
+        row_type = (
+            ydb.StructType()
+            .add_member("symbol", ydb.PrimitiveType.Utf8)
+            .add_member("secid", ydb.PrimitiveType.Utf8)
+            .add_member("trade_date", ydb.PrimitiveType.Utf8)
+        )
+        rows = [{"symbol": symbol, "secid": secid, "trade_date": item[:10]} for item in trade_dates]
+        query = f"""DECLARE $rows AS List<Struct<symbol:Utf8,secid:Utf8,trade_date:Utf8>>; UPSERT INTO `{self._sessions_table}` SELECT symbol,secid,trade_date FROM AS_TABLE($rows);"""
+        self._pool.execute_with_retries(
+            query, {"$rows": (rows, ydb.ListType(row_type))},
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+
+    def stored_sessions(self, symbol: str, from_date: str, till_date: str) -> tuple[str, ...]:
+        query = f"""DECLARE $symbol AS Utf8; DECLARE $from_date AS Utf8; DECLARE $till_date AS Utf8; SELECT trade_date FROM `{self._sessions_table}` WHERE symbol=$symbol AND trade_date>=$from_date AND trade_date<=$till_date ORDER BY trade_date;"""
+        result = self._pool.execute_with_retries(
+            query, {"$symbol": _utf8(symbol), "$from_date": _utf8(from_date[:10]), "$till_date": _utf8(till_date[:10])},
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+        return tuple(sorted({str(_row_value(row, "trade_date")) for row in _rows(result)}))
+
+    def is_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> bool:
+        query = f"""DECLARE $symbol AS Utf8; DECLARE $from_date AS Utf8; DECLARE $till_date AS Utf8; SELECT 1 AS found FROM `{self._session_verified_table}` WHERE symbol=$symbol AND from_date<=$from_date AND till_date>=$till_date LIMIT 1;"""
+        result = self._pool.execute_with_retries(
+            query, {"$symbol": _utf8(symbol), "$from_date": _utf8(from_date[:10]), "$till_date": _utf8(till_date[:10])},
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+        return _first_row(result) is not None
+
+    def mark_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> None:
+        query = f"""DECLARE $symbol AS Utf8; DECLARE $from_date AS Utf8; DECLARE $till_date AS Utf8; UPSERT INTO `{self._session_verified_table}` (symbol,from_date,till_date) VALUES ($symbol,$from_date,$till_date);"""
+        self._pool.execute_with_retries(
+            query, {"$symbol": _utf8(symbol), "$from_date": _utf8(from_date[:10]), "$till_date": _utf8(till_date[:10])},
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
 
     def close(self) -> None:
         return None

@@ -67,7 +67,7 @@ class WalkForwardValidator:
             forecast_service=ForecastService(MarketSnapshotService(market_data=stored,flow=self.forecasts.snapshots.flow))
             outcome_market=stored
 
-        sessions = self._session_dates(symbol, start=start, end=end)
+        sessions = self._validation_sessions(symbol, start=start, end=end)
         eligible = sessions[:-20] if len(sessions) > 20 else ()
         candidates = tuple(eligible[::step_sessions])
 
@@ -147,6 +147,11 @@ class WalkForwardValidator:
             self.history.sync(symbol,timeframe=timeframe,from_date=left.isoformat(),till_date=end.isoformat())
         if self.historical_flow is not None:
             self.historical_flow.sync(symbol,from_date=(start-timedelta(days=10)).isoformat(),till_date=end.isoformat())
+
+    def _validation_sessions(self, symbol: str, *, start: date, end: date) -> tuple[date, ...]:
+        if self.history is not None:
+            return self.history.session_dates(symbol, from_date=start.isoformat(), till_date=end.isoformat())
+        return self._session_dates(symbol, start=start, end=end)
 
     def _session_dates(self, symbol: str, *, start: date, end: date) -> tuple[date, ...]:
         """Build a real-session calendar from exact securities, including rolls."""

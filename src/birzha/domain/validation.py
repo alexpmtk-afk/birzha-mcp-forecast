@@ -94,3 +94,27 @@ class ModelAcceptanceReport:
             "horizons": [item.to_dict() for item in self.horizons],
             "status": self.status,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentHoldoutReport:
+    symbol: str
+    development_start: str
+    development_end: str
+    holdout_start: str
+    holdout_end: str
+    development: ModelAcceptanceReport
+    holdout: ModelAcceptanceReport
+    status: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "development_start": self.development_start,
+            "development_end": self.development_end,
+            "holdout_start": self.holdout_start,
+            "holdout_end": self.holdout_end,
+            "development": self.development.to_dict(),
+            "holdout": self.holdout.to_dict(),
+            "status": self.status,
+        }

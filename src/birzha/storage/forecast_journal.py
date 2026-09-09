@@ -130,4 +130,9 @@ def _record_from_dict(payload: dict[str, object]) -> ForecastRecord:
         warnings=tuple(str(item) for item in (payload.get("warnings") or [])),
         validation_status=str(payload["validation_status"]),
         reference_price=float(reference_raw) if reference_raw is not None else None,
+        primary_scenario=str(payload["primary_scenario"]) if payload.get("primary_scenario") is not None else None,
+        alternative_scenario=str(payload["alternative_scenario"]) if payload.get("alternative_scenario") is not None else None,
+        confirmation_level=float(payload["confirmation_level"]) if payload.get("confirmation_level") is not None else None,
+        invalidation_level=float(payload["invalidation_level"]) if payload.get("invalidation_level") is not None else None,
+        key_levels=tuple(float(item) for item in (payload.get("key_levels") or [])),
     )
