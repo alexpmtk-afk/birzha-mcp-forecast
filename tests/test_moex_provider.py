@@ -1,5 +1,6 @@
 from datetime import date
 
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.market import Candle
 from birzha.providers.moex_iss import IssResponse, MoexIssClient
 
@@ -61,3 +62,51 @@ def test_m15_aggregation_marks_complete_only_for_15_minutes():
     assert aggregated[0].close == 114.5
     assert aggregated[0].volume == 15.0
     assert aggregated[1].completed is False
+
+class _NoopGate:
+    scope = "process"
+    def pace(self, min_interval_seconds: float) -> None:
+        return None
+
+
+class _FakeHttpResponse:
+    status = 200
+    headers: dict[str, str] = {}
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        return False
+    def read(self) -> bytes:
+        return b"{}"
+
+
+def _retry_test_client(opener):
+    control = ProcessUpstreamControlPlane(
+        gate_factory=lambda _: _NoopGate(), sleeper=lambda _: None,
+    )
+    return MoexIssClient(control_plane=control, opener=opener)
+
+
+def test_single_request_retries_transient_timeout():
+    calls = {"count": 0}
+    def opener(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise TimeoutError("temporary MOEX timeout")
+        return _FakeHttpResponse()
+    response = _retry_test_client(opener)._request("/test")
+    assert response.status_code == 200
+    assert calls["count"] == 2
+
+
+def test_batched_request_retries_transient_connection_error():
+    calls = {"count": 0}
+    def opener(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ConnectionError("temporary MOEX reset")
+        return _FakeHttpResponse()
+    responses = _retry_test_client(opener)._request_many((("/test", {}),))
+    assert responses[0].status_code == 200
+    assert calls["count"] == 2
+
