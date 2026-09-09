@@ -101,12 +101,33 @@ def market_recent_candles(symbol: str, timeframe: str, lookback_days: int = 30, 
 
 @mcp.tool(name="history.sync", description="Persist and repair historical MOEX candles for an instrument and timeframe. Only missing official exchange sessions are fetched; futures roots are split by the historically liquid real contract.")
 def history_sync(symbol: str, timeframe: str, from_date: str, till_date: str) -> dict[str, object]:
-    return _history.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date).to_dict()
+    try:
+        payload = _history.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date).to_dict()
+        return {"status": "PASS", **payload}
+    except Exception as exc:  # structured operational diagnostic; never includes credentials
+        return {
+            "status": "ERROR",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:1500],
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "from_date": from_date,
+            "till_date": till_date,
+        }
 
 
 @mcp.tool(name="history.coverage", description="Return durable stored coverage for one exact MOEX SECID and timeframe.")
 def history_coverage(secid: str, timeframe: str) -> dict[str, object]:
-    return _historical_store.coverage(secid, timeframe).to_dict()
+    try:
+        return {"status": "PASS", **_historical_store.coverage(secid, timeframe).to_dict()}
+    except Exception as exc:
+        return {
+            "status": "ERROR",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:1500],
+            "secid": secid,
+            "timeframe": timeframe,
+        }
 
 
 @mcp.tool(name="market.flow", description="Build real MOEX flow analytics from ALGOPACK TradeStats and, for futures, FUTOI: aggressive buy/sell volume, volume delta, value delta and open interest.")
