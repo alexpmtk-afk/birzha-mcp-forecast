@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from birzha.domain.market import Instrument
@@ -26,10 +25,13 @@ class MoexHistoricalFutureResolver:
         return _pick_instrument(root, as_of, rows)
 
     def timeline(self, root_symbol: str, from_date: date, till_date: date) -> tuple[tuple[date, Instrument], ...]:
-        """Resolve the most liquid real contract for every available trade date.
+        """Resolve the real liquid contract separately for each historical weekday.
 
-        One ranged, paginated ISS history scan is used instead of one resolver
-        request per day. This is the canonical input for rollover-safe backfills.
+        MOEX futures history treats ``date`` as the historical selector; ranged
+        ``from/till`` parameters do not provide a multi-day contract timeline.
+        Weekends are skipped before requesting and exchange holidays naturally
+        return no matching rows. All requests still pass through the shared
+        provider governor, so long backfills remain rate-limited and bounded.
         """
         root = root_symbol.strip()
         if not root:
@@ -37,54 +39,50 @@ class MoexHistoricalFutureResolver:
         if from_date > till_date:
             raise ValueError("from_date must not be after till_date")
 
-        grouped: dict[date, list[dict[str, Any]]] = defaultdict(list)
-        start = 0
-        while True:
-            payload = self._client._request(  # noqa: SLF001
-                "/history/engines/futures/markets/forts/securities.json",
+        days: list[date] = []
+        cursor = from_date
+        while cursor <= till_date:
+            if cursor.weekday() < 5:
+                days.append(cursor)
+            cursor += timedelta(days=1)
+        if not days:
+            return ()
+
+        path = "/history/engines/futures/markets/forts/securities.json"
+        requests = [
+            (
+                path,
                 {
                     "iss.meta": "off",
-                    "iss.only": "history,history.cursor",
+                    "iss.only": "history",
                     "history.columns": (
                         "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
                         "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,LASTTRADEDATE"
                     ),
+                    "date": day.isoformat(),
                     "assetcode": root,
-                    "from": from_date.isoformat(),
-                    "till": till_date.isoformat(),
-                    "start": start,
                 },
-            ).json()
-            page = self._client._table(payload, "history")  # noqa: SLF001
-            for row in page:
-                raw = _text(row, "TRADEDATE")
-                try:
-                    trade_date = date.fromisoformat(raw[:10])
-                except ValueError:
-                    continue
-                if from_date <= trade_date <= till_date:
-                    grouped[trade_date].append(row)
-
-            cursor_rows = (
-                self._client._table(payload, "history.cursor")  # noqa: SLF001
-                if "history.cursor" in payload
-                else []
             )
-            if cursor_rows:
-                cursor = cursor_rows[0]
-                total = _integer(cursor, "TOTAL") or _integer(cursor, "total") or (start + len(page))
-                page_size = _integer(cursor, "PAGESIZE") or _integer(cursor, "pagesize") or len(page)
-                if not page or page_size <= 0 or start + len(page) >= total:
-                    break
-                start += page_size
+            for day in days
+        ]
+        responses = self._client._request_many(requests)  # noqa: SLF001
+        resolved: list[tuple[date, Instrument]] = []
+        for day, response in zip(days, responses, strict=True):
+            payload = response.json()
+            rows = self._client._table(payload, "history")  # noqa: SLF001
+            exact_rows = []
+            for row in rows:
+                raw = _text(row, "TRADEDATE")
+                if raw and raw[:10] != day.isoformat():
+                    continue
+                asset = _text(row, "ASSETCODE")
+                secid = _text(row, "SECID")
+                if asset.lower() == root.lower() or (not asset and secid.lower().startswith(root.lower())):
+                    exact_rows.append(row)
+            if not exact_rows:
                 continue
-            if not page:
-                break
-            start += len(page)
-            if len(page) < 100:
-                break
-
-        return tuple((day, _pick_instrument(root, day, grouped[day])) for day in sorted(grouped))
+            resolved.append((day, _pick_instrument(root, day, exact_rows)))
+        return tuple(resolved)
 
 
 def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Instrument:

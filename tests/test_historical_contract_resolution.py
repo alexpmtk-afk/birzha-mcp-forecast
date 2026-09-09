@@ -37,30 +37,30 @@ class Client:
 
 
 class TimelineClient:
-    def _request(self, path, params):
-        assert path == "/history/engines/futures/markets/forts/securities.json"
-        assert params["assetcode"] == "Si"
-        assert params["from"] == "2026-06-10"
-        assert params["till"] == "2026-06-12"
-        assert params["start"] == 0
-        return Response({
-            "history": {
-                "columns": [
-                    "TRADEDATE", "SECID", "BOARDID", "ASSETCODE", "VALUE", "VOLUME", "OPENPOSITIONVALUE"
-                ],
-                "data": [
-                    ["2026-06-10", "SiM6", "RFUD", "Si", 500, 50, 300],
-                    ["2026-06-10", "SiU6", "RFUD", "Si", 100, 20, 80],
-                    ["2026-06-11", "SiM6", "RFUD", "Si", 200, 30, 120],
-                    ["2026-06-11", "SiU6", "RFUD", "Si", 900, 90, 500],
-                    ["2026-06-12", "SiU6", "RFUD", "Si", 1000, 100, 600],
-                ],
-            },
-            "history.cursor": {
-                "columns": ["INDEX", "TOTAL", "PAGESIZE"],
-                "data": [[0, 5, 100]],
-            },
-        })
+    def __init__(self):
+        self.requested_dates = []
+
+    def _request_many(self, requests):
+        responses = []
+        data_by_day = {
+            "2026-06-10": [["2026-06-10", "SiM6", "RFUD", "Si", 500, 50, 300], ["2026-06-10", "SiU6", "RFUD", "Si", 100, 20, 80]],
+            "2026-06-11": [["2026-06-11", "SiM6", "RFUD", "Si", 200, 30, 120], ["2026-06-11", "SiU6", "RFUD", "Si", 900, 90, 500]],
+            "2026-06-12": [["2026-06-12", "SiU6", "RFUD", "Si", 1000, 100, 600]],
+            "2026-06-15": [],
+        }
+        for path, params in requests:
+            assert path == "/history/engines/futures/markets/forts/securities.json"
+            assert "from" not in params and "till" not in params
+            assert params["assetcode"] == "Si"
+            day = params["date"]
+            self.requested_dates.append(day)
+            responses.append(Response({
+                "history": {
+                    "columns": ["TRADEDATE", "SECID", "BOARDID", "ASSETCODE", "VALUE", "VOLUME", "OPENPOSITIONVALUE"],
+                    "data": data_by_day[day],
+                }
+            }))
+        return responses
 
     @staticmethod
     def _table(payload, name):
@@ -77,11 +77,13 @@ def test_historical_resolver_uses_liquidity_on_requested_date():
 
 
 def test_timeline_tracks_real_rollover_by_daily_liquidity():
-    timeline = MoexHistoricalFutureResolver(TimelineClient()).timeline(
-        "Si", date(2026, 6, 10), date(2026, 6, 12)
+    client = TimelineClient()
+    timeline = MoexHistoricalFutureResolver(client).timeline(
+        "Si", date(2026, 6, 10), date(2026, 6, 15)
     )
     assert [(day.isoformat(), instrument.secid) for day, instrument in timeline] == [
         ("2026-06-10", "SiM6"),
         ("2026-06-11", "SiU6"),
         ("2026-06-12", "SiU6"),
     ]
+    assert client.requested_dates == ["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15"]
