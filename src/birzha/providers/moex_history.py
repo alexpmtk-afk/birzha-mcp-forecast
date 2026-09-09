@@ -12,6 +12,7 @@ from birzha.providers.moex_iss import MoexIssClient, MoexIssError
 class MoexHistoricalFutureResolver:
     def __init__(self, client: MoexIssClient) -> None:
         self._client = client
+        self._timeline_cache: dict[tuple[str, date], Instrument | None] = {}
 
     def resolve(self, root_symbol: str, as_of: date) -> Instrument:
         root = root_symbol.strip()
@@ -48,6 +49,8 @@ class MoexHistoricalFutureResolver:
         if not days:
             return ()
 
+        root_key = root.lower()
+        missing_days = [day for day in days if (root_key, day) not in self._timeline_cache]
         path = "/history/engines/futures/markets/forts/securities.json"
         requests = [
             (
@@ -63,11 +66,10 @@ class MoexHistoricalFutureResolver:
                     "assetcode": root,
                 },
             )
-            for day in days
+            for day in missing_days
         ]
-        responses = self._client._request_many(requests)  # noqa: SLF001
-        resolved: list[tuple[date, Instrument]] = []
-        for day, response in zip(days, responses, strict=True):
+        responses = self._client._request_many(requests) if requests else []  # noqa: SLF001
+        for day, response in zip(missing_days, responses, strict=True):
             payload = response.json()
             rows = self._client._table(payload, "history")  # noqa: SLF001
             exact_rows = []
@@ -79,10 +81,14 @@ class MoexHistoricalFutureResolver:
                 secid = _text(row, "SECID")
                 if asset.lower() == root.lower() or (not asset and secid.lower().startswith(root.lower())):
                     exact_rows.append(row)
-            if not exact_rows:
-                continue
-            resolved.append((day, _pick_instrument(root, day, exact_rows)))
-        return tuple(resolved)
+            self._timeline_cache[(root_key, day)] = (
+                _pick_instrument(root, day, exact_rows) if exact_rows else None
+            )
+        return tuple(
+            (day, instrument)
+            for day in days
+            if (instrument := self._timeline_cache.get((root_key, day))) is not None
+        )
 
 
 def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Instrument:

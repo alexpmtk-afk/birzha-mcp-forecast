@@ -87,3 +87,14 @@ def test_timeline_tracks_real_rollover_by_daily_liquidity():
         ("2026-06-12", "SiU6"),
     ]
     assert client.requested_dates == ["2026-06-10", "2026-06-11", "2026-06-12", "2026-06-15"]
+
+
+def test_timeline_reuses_resolved_and_empty_days_from_cache():
+    client = TimelineClient()
+    resolver = MoexHistoricalFutureResolver(client)
+    first = resolver.timeline("Si", date(2026, 6, 10), date(2026, 6, 15))
+    requested_after_first = list(client.requested_dates)
+    second = resolver.timeline("Si", date(2026, 6, 10), date(2026, 6, 15))
+
+    assert second == first
+    assert client.requested_dates == requested_after_first
