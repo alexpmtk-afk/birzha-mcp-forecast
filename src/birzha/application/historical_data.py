@@ -1,22 +1,21 @@
-"""Historical Data Foundation: persistent coverage and incremental tail loading."""
+"""Historical Data Foundation: durable coverage, gap repair and rollover-safe sync."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 
 from birzha.application.market_data import MarketDataService
-from birzha.domain.market import CandleSeries
-from birzha.storage.historical_store import DuckDBHistoricalCandleStore, HistoricalCoverage
+from birzha.domain.market import CandleSeries, Instrument
+from birzha.providers.moex_calendar import MoexTradingCalendar
+from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCoverage
 
 
 @dataclass(frozen=True, slots=True)
-class HistoricalSyncResult:
-    symbol: str
+class ContractSyncResult:
     secid: str
-    timeframe: str
-    requested_from: str
-    requested_till: str
+    from_date: str
+    till_date: str
     fetched_ranges: tuple[tuple[str, str], ...]
     fetched_candles: int
     stored_candles: int
@@ -24,11 +23,9 @@ class HistoricalSyncResult:
 
     def to_dict(self) -> dict[str, object]:
         return {
-            "symbol": self.symbol,
             "secid": self.secid,
-            "timeframe": self.timeframe,
-            "requested_from": self.requested_from,
-            "requested_till": self.requested_till,
+            "from_date": self.from_date,
+            "till_date": self.till_date,
             "fetched_ranges": [list(item) for item in self.fetched_ranges],
             "fetched_candles": self.fetched_candles,
             "stored_candles": self.stored_candles,
@@ -36,10 +33,39 @@ class HistoricalSyncResult:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class HistoricalSyncResult:
+    symbol: str
+    timeframe: str
+    requested_from: str
+    requested_till: str
+    contracts: tuple[ContractSyncResult, ...]
+
+    @property
+    def fetched_candles(self) -> int:
+        return sum(item.fetched_candles for item in self.contracts)
+
+    @property
+    def stored_candles(self) -> int:
+        return sum(item.stored_candles for item in self.contracts)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "symbol": self.symbol,
+            "timeframe": self.timeframe,
+            "requested_from": self.requested_from,
+            "requested_till": self.requested_till,
+            "contract_count": len(self.contracts),
+            "fetched_candles": self.fetched_candles,
+            "stored_candles": self.stored_candles,
+            "contracts": [item.to_dict() for item in self.contracts],
+        }
+
+
 @dataclass(slots=True)
 class HistoricalDataService:
     market_data: MarketDataService
-    store: DuckDBHistoricalCandleStore
+    store: HistoricalCandleStore
 
     def sync(
         self,
@@ -54,12 +80,89 @@ class HistoricalDataService:
         if finish < start:
             raise ValueError("till_date must be on or after from_date")
 
-        instrument = self.market_data.resolve(symbol, as_of=finish)
-        before = self.store.coverage(instrument.secid, timeframe)
-        ranges = _missing_tail_ranges(start, finish, before)
-        fetched = 0
+        segments = self._segments(symbol, start, finish)
+        results = tuple(
+            self._sync_contract(instrument, timeframe, left, right)
+            for instrument, left, right in segments
+        )
+        return HistoricalSyncResult(
+            symbol=symbol,
+            timeframe=timeframe,
+            requested_from=from_date,
+            requested_till=till_date,
+            contracts=results,
+        )
 
-        for left, right in ranges:
+    def load_exact(
+        self,
+        instrument: Instrument,
+        *,
+        timeframe: str,
+        from_date: str,
+        till_date: str,
+    ) -> CandleSeries:
+        return self.store.read(instrument, timeframe, from_date, till_date)
+
+    def _segments(
+        self,
+        symbol: str,
+        start: date,
+        finish: date,
+    ) -> tuple[tuple[Instrument, date, date], ...]:
+        direct = self.market_data.direct_resolver.resolve(symbol) if self.market_data.direct_resolver else None
+        if direct is not None and direct.asset_class != "unknown":
+            return ((direct, start, finish),)
+
+        resolver = self.market_data.historical_future_resolver
+        if resolver is None:
+            instrument = self.market_data.resolve(symbol, as_of=finish)
+            return ((instrument, start, finish),)
+
+        timeline = resolver.timeline(symbol, start, finish)
+        if not timeline:
+            instrument = self.market_data.resolve(symbol, as_of=finish)
+            return ((instrument, start, finish),)
+
+        segments: list[tuple[Instrument, date, date]] = []
+        current_instrument = timeline[0][1]
+        segment_start = timeline[0][0]
+        segment_end = timeline[0][0]
+        for day, instrument in timeline[1:]:
+            if instrument.secid == current_instrument.secid:
+                segment_end = day
+                continue
+            segments.append((current_instrument, segment_start, segment_end))
+            current_instrument = instrument
+            segment_start = day
+            segment_end = day
+        segments.append((current_instrument, segment_start, segment_end))
+        return tuple(segments)
+
+    def _sync_contract(
+        self,
+        instrument: Instrument,
+        timeframe: str,
+        start: date,
+        finish: date,
+    ) -> ContractSyncResult:
+        calendar = MoexTradingCalendar(self.market_data.provider)
+        expected = calendar.dates(
+            engine=instrument.engine,
+            market=instrument.market,
+            board=instrument.board,
+            security=instrument.secid,
+            from_date=start,
+            till_date=finish,
+        )
+        stored_dates = self.store.stored_trade_dates(
+            instrument.secid,
+            timeframe,
+            start.isoformat(),
+            finish.isoformat(),
+        )
+        missing_ranges = _missing_session_ranges(expected, stored_dates)
+        fetched = 0
+        for left, right in missing_ranges:
             series = self.market_data.candles_for_instrument(
                 instrument,
                 timeframe=timeframe,
@@ -71,54 +174,42 @@ class HistoricalDataService:
             self.store.upsert_series(series)
 
         coverage = self.store.coverage(instrument.secid, timeframe)
-        stored = self.store.read(instrument, timeframe, from_date, till_date)
-        return HistoricalSyncResult(
-            symbol=symbol,
+        stored = self.store.read(
+            instrument,
+            timeframe,
+            start.isoformat(),
+            finish.isoformat(),
+        )
+        return ContractSyncResult(
             secid=instrument.secid,
-            timeframe=timeframe,
-            requested_from=from_date,
-            requested_till=till_date,
-            fetched_ranges=tuple((left.isoformat(), right.isoformat()) for left, right in ranges),
+            from_date=start.isoformat(),
+            till_date=finish.isoformat(),
+            fetched_ranges=tuple((left.isoformat(), right.isoformat()) for left, right in missing_ranges),
             fetched_candles=fetched,
             stored_candles=stored.count,
             coverage=coverage,
         )
 
-    def load(
-        self,
-        symbol: str,
-        *,
-        timeframe: str,
-        from_date: str,
-        till_date: str,
-        sync_first: bool = True,
-    ) -> CandleSeries:
-        finish = date.fromisoformat(till_date[:10])
-        instrument = self.market_data.resolve(symbol, as_of=finish)
-        if sync_first:
-            self.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date)
-        return self.store.read(instrument, timeframe, from_date, till_date)
 
-
-def _missing_tail_ranges(
-    requested_from: date,
-    requested_till: date,
-    coverage: HistoricalCoverage,
+def _missing_session_ranges(
+    expected_sessions: tuple[date, ...],
+    stored_trade_dates: tuple[str, ...],
 ) -> tuple[tuple[date, date], ...]:
-    """Return only uncovered left/right calendar tails.
-
-    Internal exchange-session gap detection belongs to the next coverage-index
-    increment, where the MOEX trading calendar can distinguish a true hole from
-    weekends/holidays. This first increment deliberately does not invent gaps.
-    """
-    if coverage.count == 0 or coverage.first_begin is None or coverage.last_end is None:
-        return ((requested_from, requested_till),)
-
-    first = date.fromisoformat(coverage.first_begin[:10])
-    last = date.fromisoformat(coverage.last_end[:10])
-    missing: list[tuple[date, date]] = []
-    if requested_from < first:
-        missing.append((requested_from, min(requested_till, first - timedelta(days=1))))
-    if requested_till > last:
-        missing.append((max(requested_from, last + timedelta(days=1)), requested_till))
-    return tuple(item for item in missing if item[0] <= item[1])
+    """Return missing runs of actual exchange sessions, never weekends by guess."""
+    stored = {date.fromisoformat(item[:10]) for item in stored_trade_dates}
+    ranges: list[tuple[date, date]] = []
+    run_start: date | None = None
+    run_end: date | None = None
+    for day in expected_sessions:
+        if day in stored:
+            if run_start is not None and run_end is not None:
+                ranges.append((run_start, run_end))
+            run_start = None
+            run_end = None
+            continue
+        if run_start is None:
+            run_start = day
+        run_end = day
+    if run_start is not None and run_end is not None:
+        ranges.append((run_start, run_end))
+    return tuple(ranges)

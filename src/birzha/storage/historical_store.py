@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import duckdb
 
@@ -29,8 +30,22 @@ class HistoricalCoverage:
         }
 
 
+class HistoricalCandleStore(Protocol):
+    """Storage contract shared by local DuckDB and remote YDB backends."""
+
+    def upsert_series(self, series: CandleSeries) -> int: ...
+
+    def coverage(self, secid: str, timeframe: str) -> HistoricalCoverage: ...
+
+    def read(self, instrument: Instrument, timeframe: str, from_date: str, till_date: str) -> CandleSeries: ...
+
+    def stored_trade_dates(self, secid: str, timeframe: str, from_date: str, till_date: str) -> tuple[str, ...]: ...
+
+
 class DuckDBHistoricalCandleStore:
     """Idempotent candle store keyed by real contract identity + timeframe + begin."""
+
+    storage_scope = "local"
 
     def __init__(self, path: str = ":memory:") -> None:
         self.path = path
@@ -114,7 +129,7 @@ class DuckDBHistoricalCandleStore:
     def read(self, instrument: Instrument, timeframe: str, from_date: str, till_date: str) -> CandleSeries:
         with self._lock:
             rows = self._connection.execute("""
-                SELECT open, close, high, low, value, volume, begin, end_time, completed
+                SELECT open, close, high, low, value, volume, begin, end_time, completed, source
                 FROM historical_candles
                 WHERE secid = ? AND timeframe = ?
                   AND begin >= ? AND begin < ?
@@ -124,7 +139,19 @@ class DuckDBHistoricalCandleStore:
             open=row[0], close=row[1], high=row[2], low=row[3], value=row[4], volume=row[5],
             begin=str(row[6]), end=str(row[7]), completed=bool(row[8]),
         ) for row in rows)
-        return CandleSeries(instrument=instrument, timeframe=timeframe, candles=candles)
+        source = str(rows[0][9]) if rows else instrument.source
+        return CandleSeries(instrument=instrument, timeframe=timeframe, candles=candles, source=source)
+
+    def stored_trade_dates(self, secid: str, timeframe: str, from_date: str, till_date: str) -> tuple[str, ...]:
+        with self._lock:
+            rows = self._connection.execute("""
+                SELECT DISTINCT substr(begin, 1, 10) AS trade_date
+                FROM historical_candles
+                WHERE secid = ? AND timeframe = ? AND completed = true
+                  AND begin >= ? AND begin < ?
+                ORDER BY trade_date
+            """, [secid, timeframe, from_date, _exclusive_upper_bound(till_date)]).fetchall()
+        return tuple(str(row[0]) for row in rows)
 
     def close(self) -> None:
         with self._lock:
@@ -132,8 +159,6 @@ class DuckDBHistoricalCandleStore:
 
 
 def _exclusive_upper_bound(till_date: str) -> str:
-    # ISO timestamps sort lexicographically. A plain YYYY-MM-DD upper boundary is
-    # expanded so the whole requested calendar day is included.
     if len(till_date) == 10:
         return till_date + "T23:59:59.999999"
     return till_date

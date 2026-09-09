@@ -1,7 +1,7 @@
 """BIRZHA MCP server surface.
 
-MCP remains a thin interface: market, flow, snapshot, forecast, outcome,
-validation and persistence logic lives in application/storage layers.
+MCP remains a thin interface: market, historical data, flow, snapshot, forecast,
+outcome, validation and persistence logic lives in application/storage layers.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
+from birzha.application.historical_data import HistoricalDataService
 from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.model_lab import ModelAcceptanceService
@@ -25,7 +26,9 @@ from birzha.providers.moex_analytics import MoexAnalyticsClient
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.security import McpBearerAuthMiddleware
 from birzha.storage.forecast_journal import DuckDBForecastJournal
+from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
+from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
@@ -46,12 +49,15 @@ if settings.state_backend == "ydb":
     )
     _journal_store = YdbForecastJournal(_ydb_runtime.pool)
     _outcome_store = YdbOutcomeJournal(_ydb_runtime.pool)
+    _historical_store = YdbHistoricalCandleStore(_ydb_runtime.pool)
 else:
     _upstream_control = ProcessUpstreamControlPlane()
     _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
     _outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
+    _historical_store = DuckDBHistoricalCandleStore(settings.historical_store_path)
 
 _market = MarketDataService.default(control_plane=_upstream_control)
+_history = HistoricalDataService(market_data=_market, store=_historical_store)
 _flow = MarketFlowService(
     market_data=_market,
     analytics=MoexAnalyticsClient(control_plane=_upstream_control),
@@ -91,6 +97,16 @@ def market_candles(symbol: str, timeframe: str, from_date: str, till_date: str, 
 @mcp.tool(name="market.recent_candles", description="Load recent real MOEX candles by lookback days for a supported instrument.")
 def market_recent_candles(symbol: str, timeframe: str, lookback_days: int = 30, completed_only: bool = True) -> dict[str, object]:
     return _market.recent_candles(symbol, timeframe=timeframe, lookback_days=lookback_days, completed_only=completed_only).to_dict()
+
+
+@mcp.tool(name="history.sync", description="Persist and repair historical MOEX candles for an instrument and timeframe. Only missing official exchange sessions are fetched; futures roots are split by the historically liquid real contract.")
+def history_sync(symbol: str, timeframe: str, from_date: str, till_date: str) -> dict[str, object]:
+    return _history.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date).to_dict()
+
+
+@mcp.tool(name="history.coverage", description="Return durable stored coverage for one exact MOEX SECID and timeframe.")
+def history_coverage(secid: str, timeframe: str) -> dict[str, object]:
+    return _historical_store.coverage(secid, timeframe).to_dict()
 
 
 @mcp.tool(name="market.flow", description="Build real MOEX flow analytics from ALGOPACK TradeStats and, for futures, FUTOI: aggressive buy/sell volume, volume delta, value delta and open interest.")
@@ -158,6 +174,7 @@ async def healthz(_: Request) -> JSONResponse:
         "service": SERVICE_NAME,
         "version": VERSION,
         "state_backend": settings.state_backend,
+        "historical_storage": _historical_store.storage_scope,
     })
 
 
