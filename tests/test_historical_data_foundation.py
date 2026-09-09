@@ -1,6 +1,13 @@
 from datetime import date
 
-from birzha.application.historical_data import HistoricalDataService, _missing_session_ranges
+import pytest
+
+from birzha.application.historical_data import (
+    HistoricalDataIncompleteError,
+    HistoricalDataService,
+    _bounded_missing_ranges,
+    _missing_session_ranges,
+)
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
@@ -110,3 +117,45 @@ def test_sync_many_continues_after_one_failure() -> None:
     assert result["status"] == "PARTIAL"
     assert result["passed"] == 1
     assert result["failed"] == 1
+
+
+def test_m15_missing_sessions_are_bounded_into_small_fetches() -> None:
+    expected = tuple(date(2026, 9, day) for day in range(1, 8))
+    assert _bounded_missing_ranges(expected, (), "M15") == (
+        (date(2026, 9, 1), date(2026, 9, 3)),
+        (date(2026, 9, 4), date(2026, 9, 6)),
+        (date(2026, 9, 7), date(2026, 9, 7)),
+    )
+    assert _bounded_missing_ranges(expected, (), "D1") == (
+        (date(2026, 9, 1), date(2026, 9, 7)),
+    )
+
+
+class _FakeCalendar:
+    def __init__(self, provider):
+        pass
+
+    def dates(self, **kwargs):
+        return (date(2026, 9, 1), date(2026, 9, 2))
+
+
+class _IncompleteMarketData:
+    provider = object()
+
+    def candles_for_instrument(self, instrument, *, timeframe, from_date, till_date, completed_only=True):
+        candle = Candle(
+            100.0, 101.0, 102.0, 99.0, 1000.0, 10.0,
+            "2026-09-01 00:00:00", "2026-09-01 23:59:59",
+        )
+        return CandleSeries(instrument=instrument, timeframe=timeframe, candles=(candle,))
+
+
+def test_incomplete_sync_fails_closed(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _FakeCalendar)
+    store = DuckDBHistoricalCandleStore()
+    service = HistoricalDataService(market_data=_IncompleteMarketData(), store=store)  # type: ignore[arg-type]
+    with pytest.raises(HistoricalDataIncompleteError):
+        service._sync_contract("SBER", _instrument(), "D1", date(2026, 9, 1), date(2026, 9, 2))
+    assert store.stored_trade_dates("SBER", "D1", "2026-09-01", "2026-09-02") == ("2026-09-01",)
