@@ -140,3 +140,107 @@ def _objective(report: ModelAcceptanceReport) -> float:
         sample_factor = min(1.0, item.observations / max(1, item.minimum_observations))
         scores.append(sample_factor * (0.50 * hit + 0.30 * wilson + 0.20 * coverage))
     return round(sum(scores) / len(scores), 8)
+
+
+@dataclass(frozen=True, slots=True)
+class MultiSymbolCandidateResult:
+    parameters: ForecastParameters
+    objective: float
+    development: tuple[ModelAcceptanceReport, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "parameters": self.parameters.to_dict(),
+            "objective": self.objective,
+            "development": [item.to_dict() for item in self.development],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MultiSymbolCalibrationReport:
+    symbols: tuple[str, ...]
+    development_start: str
+    split_date: str
+    holdout_end: str
+    selected: ForecastParameters
+    candidates: tuple[MultiSymbolCandidateResult, ...]
+    holdout: tuple[ModelAcceptanceReport, ...]
+    status: str
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "symbols": list(self.symbols),
+            "development_start": self.development_start,
+            "split_date": self.split_date,
+            "holdout_end": self.holdout_end,
+            "selected": self.selected.to_dict(),
+            "candidates": [item.to_dict() for item in self.candidates],
+            "holdout": [item.to_dict() for item in self.holdout],
+            "status": self.status,
+        }
+
+
+def calibrate_across_symbols(
+    service: ModelCalibrationService,
+    symbols: tuple[str, ...],
+    *,
+    development_start: str,
+    split_date: str,
+    holdout_end: str,
+    step_sessions: int = 5,
+    max_points: int = 60,
+    candidates: tuple[ForecastParameters, ...] = DEFAULT_CANDIDATES,
+) -> MultiSymbolCalibrationReport:
+    if not symbols:
+        raise ValueError("at least one symbol is required")
+    if not development_start < split_date < holdout_end:
+        raise ValueError("expected development_start < split_date < holdout_end")
+    if not candidates:
+        raise ValueError("at least one calibration candidate is required")
+
+    ranked_items: list[MultiSymbolCandidateResult] = []
+    for parameters in candidates:
+        assessor = service._acceptance_for(parameters)
+        development = tuple(
+            assessor.assess(
+                symbol,
+                start_date=development_start,
+                end_date=split_date,
+                step_sessions=step_sessions,
+                max_points=max_points,
+            )
+            for symbol in symbols
+        )
+        objective = round(sum(_objective(item) for item in development) / len(development), 8)
+        ranked_items.append(MultiSymbolCandidateResult(parameters, objective, development))
+
+    ranked = tuple(sorted(ranked_items, key=lambda item: (item.objective, item.parameters.name), reverse=True))
+    selected = ranked[0].parameters
+    holdout_assessor = service._acceptance_for(selected)
+    holdout = tuple(
+        holdout_assessor.assess(
+            symbol,
+            start_date=split_date,
+            end_date=holdout_end,
+            step_sessions=step_sessions,
+            max_points=max_points,
+        )
+        for symbol in symbols
+    )
+    development_ok = all(item.status == "ACCEPTED" for item in ranked[0].development)
+    holdout_ok = all(item.status == "ACCEPTED" for item in holdout)
+    if development_ok and holdout_ok:
+        status = "ACCEPTED"
+    elif any(item.status in {"FAILED", "INSUFFICIENT_SAMPLE"} for item in holdout):
+        status = "INSUFFICIENT_OR_FAILED"
+    else:
+        status = "REJECTED"
+    return MultiSymbolCalibrationReport(
+        symbols=symbols,
+        development_start=development_start,
+        split_date=split_date,
+        holdout_end=holdout_end,
+        selected=selected,
+        candidates=ranked,
+        holdout=holdout,
+        status=status,
+    )
