@@ -77,6 +77,8 @@ _validator = WalkForwardValidator(
     market_data=_market,
     forecasts=_forecast,
     calendar=MoexTradingCalendar(_market.provider),
+    history=_history,
+    historical_flow=_historical_flow,
 )
 _model_lab = ModelAcceptanceService(validator=_validator)
 

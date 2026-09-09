@@ -7,6 +7,10 @@ from datetime import date, timedelta
 from statistics import fmean
 
 from birzha.application.forecast import ForecastService
+from birzha.application.historical_data import HistoricalDataService
+from birzha.application.historical_flow import HistoricalFlowDataService
+from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.stored_market_data import StoredMarketDataView
 from birzha.application.market_data import MarketDataService
 from birzha.application.outcome import OutcomeService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -24,6 +28,8 @@ class WalkForwardValidator:
     market_data: MarketDataService
     forecasts: ForecastService
     calendar: MoexTradingCalendar
+    history: HistoricalDataService | None = None
+    historical_flow: HistoricalFlowDataService | None = None
 
     @classmethod
     def default(cls) -> "WalkForwardValidator":
@@ -53,6 +59,14 @@ class WalkForwardValidator:
         if max_points <= 0 or max_points > 60:
             raise ValueError("max_points must be between 1 and 60")
 
+        forecast_service=self.forecasts
+        outcome_market=self.market_data
+        if self.history is not None:
+            self._prepare_history(symbol,start=start,end=end)
+            stored=StoredMarketDataView(self.market_data,self.history)
+            forecast_service=ForecastService(MarketSnapshotService(market_data=stored,flow=self.forecasts.snapshots.flow))
+            outcome_market=stored
+
         sessions = self._session_dates(symbol, start=start, end=end)
         eligible = sessions[:-20] if len(sessions) > 20 else ()
         candidates = tuple(eligible[::step_sessions])
@@ -60,7 +74,7 @@ class WalkForwardValidator:
         forecast_store = DuckDBForecastJournal(":memory:")
         outcome_store = DuckDBOutcomeJournal(":memory:")
         outcome_service = OutcomeService(
-            market_data=self.market_data,
+            market_data=outcome_market,
             forecasts=forecast_store,
             outcomes=outcome_store,
         )
@@ -75,7 +89,7 @@ class WalkForwardValidator:
                     break
                 attempted += 1
                 try:
-                    record = self.forecasts.build(symbol, as_of_date=forecast_day.isoformat())
+                    record = forecast_service.build(symbol, as_of_date=forecast_day.isoformat())
                     forecast_store.append(record)
                     versions.add(record.engine_version)
                     evaluation = outcome_service.evaluate(
@@ -121,6 +135,18 @@ class WalkForwardValidator:
             failures=tuple(failures[:100]),
             status=status,
         )
+
+    def _prepare_history(self, symbol: str, *, start: date, end: date) -> None:
+        assert self.history is not None
+        requests=(
+            ("D1", start - timedelta(days=300)),
+            ("H1", start - timedelta(days=90)),
+            ("M15", start - timedelta(days=30)),
+        )
+        for timeframe,left in requests:
+            self.history.sync(symbol,timeframe=timeframe,from_date=left.isoformat(),till_date=end.isoformat())
+        if self.historical_flow is not None:
+            self.historical_flow.sync(symbol,from_date=(start-timedelta(days=10)).isoformat(),till_date=end.isoformat())
 
     def _session_dates(self, symbol: str, *, start: date, end: date) -> tuple[date, ...]:
         """Build a real-session calendar from exact securities, including rolls."""
