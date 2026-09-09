@@ -169,6 +169,6 @@ def test_flow_refines_but_cannot_dominate_long_horizon_score() -> None:
     assert _flow_adjustment(snapshot) == -0.75
     forecast = build_forecast_from_snapshot(snapshot)
     assert forecast.direction == "UP"
-    assert forecast.engine_version == "BIRZHA_FORECAST_BASELINE_V0_2_FLOW"
+    assert forecast.engine_version == "BIRZHA_FORECAST_BASELINE_V0_3_PROFILE"
     assert any(reason.startswith("FLOW:") for reason in forecast.reasons)
     assert any(reason.startswith("FUTOI:") for reason in forecast.reasons)
