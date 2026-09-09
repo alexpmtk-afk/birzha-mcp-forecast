@@ -62,10 +62,17 @@ class HistoricalBackfillService:
                 till_date=window.till_date,
             )
             items.append({"window": window.to_dict(), "batch": batch})
+            if batch["status"] != "PASS":
+                return BackfillRunResult(
+                    status="PARTIAL",
+                    complete=False,
+                    processed_windows=len(items),
+                    next_from_date=window.from_date,
+                    windows=tuple(items),
+                )
         complete = len(selected) == len(windows)
         next_from = None if complete else windows[len(selected)].from_date
-        status = "PASS" if all(item["batch"]["status"] == "PASS" for item in items) else "PARTIAL"
-        return BackfillRunResult(status, complete, len(selected), next_from, tuple(items))
+        return BackfillRunResult("PASS", complete, len(selected), next_from, tuple(items))
 
 
 def monthly_windows(from_date: str, till_date: str) -> tuple[BackfillWindow, ...]:
