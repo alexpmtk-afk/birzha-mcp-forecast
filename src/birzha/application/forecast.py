@@ -21,9 +21,31 @@ from birzha.domain.snapshot import MarketSnapshot
 ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
 
 
+@dataclass(frozen=True, slots=True)
+class ForecastParameters:
+    name: str = "baseline"
+    d1_weight: float = 0.55
+    h1_weight: float = 0.30
+    m15_weight: float = 0.15
+    alignment_weight: float = 0.25
+    direction_threshold: float = 1.0
+    low_er_threshold: float = 0.20
+    low_er_multiplier: float = 0.70
+    flow_weight: float = 1.0
+    profile_weight: float = 1.0
+    strength_scale: float = 5.75
+
+    def to_dict(self) -> dict[str, object]:
+        return {field: getattr(self, field) for field in self.__dataclass_fields__}
+
+
+DEFAULT_FORECAST_PARAMETERS = ForecastParameters()
+
+
 @dataclass(slots=True)
 class ForecastService:
     snapshots: MarketSnapshotService
+    parameters: ForecastParameters = DEFAULT_FORECAST_PARAMETERS
 
     @classmethod
     def default(
@@ -36,16 +58,16 @@ class ForecastService:
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> ForecastRecord:
         snapshot = self.snapshots.build(symbol, as_of_date=as_of_date)
-        return build_forecast_from_snapshot(snapshot)
+        return build_forecast_from_snapshot(snapshot, parameters=self.parameters)
 
 
-def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
-    score = _combined_score(snapshot)
-    strength = min(1.0, abs(score) / 5.75)
-    if score >= 1.0:
+def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: ForecastParameters = DEFAULT_FORECAST_PARAMETERS) -> ForecastRecord:
+    score = _combined_score(snapshot, parameters)
+    strength = min(1.0, abs(score) / parameters.strength_scale)
+    if score >= parameters.direction_threshold:
         direction = "UP"
         control = "BUYERS"
-    elif score <= -1.0:
+    elif score <= -parameters.direction_threshold:
         direction = "DOWN"
         control = "SELLERS"
     else:
@@ -53,7 +75,7 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
         control = "BALANCE"
 
     route = "TREND" if direction != "NEUTRAL" and strength >= 0.35 else "BALANCE"
-    reasons = _reasons(snapshot, score)
+    reasons = _reasons(snapshot, score, parameters)
     warnings = list(snapshot.warnings)
     warnings.append("baseline_engine_not_probability_calibrated")
 
@@ -85,6 +107,8 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
         "engine": ENGINE_VERSION,
         "horizons": [5, 10, 20],
     }
+    if parameters != DEFAULT_FORECAST_PARAMETERS:
+        identity_payload["parameters"] = parameters.to_dict()
     digest = hashlib.sha256(
         json.dumps(identity_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:24]
@@ -103,7 +127,7 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
         symbol=snapshot.symbol,
         secid=snapshot.secid,
         created_at_t0=snapshot.as_of,
-        engine_version=ENGINE_VERSION,
+        engine_version=ENGINE_VERSION if parameters == DEFAULT_FORECAST_PARAMETERS else f"{ENGINE_VERSION}:CAL:{parameters.name}",
         direction=direction,
         signal_strength=round(strength, 4),
         control=control,
@@ -121,18 +145,18 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot) -> ForecastRecord:
     )
 
 
-def _combined_score(snapshot: MarketSnapshot) -> float:
-    score = 0.55 * snapshot.d1.trend_score + 0.30 * snapshot.h1.trend_score + 0.15 * snapshot.m15.trend_score
+def _combined_score(snapshot: MarketSnapshot, parameters: ForecastParameters = DEFAULT_FORECAST_PARAMETERS) -> float:
+    score = parameters.d1_weight * snapshot.d1.trend_score + parameters.h1_weight * snapshot.h1.trend_score + parameters.m15_weight * snapshot.m15.trend_score
     aligned = 0
     for state in (snapshot.d1, snapshot.h1, snapshot.m15):
         if state.return_5 is not None:
             aligned += 1 if state.return_5 > 0 else -1 if state.return_5 < 0 else 0
-    score += 0.25 * aligned
+    score += parameters.alignment_weight * aligned
     er = snapshot.d1.efficiency_ratio_20
-    if er is not None and er < 0.2:
-        score *= 0.7
-    score += _flow_adjustment(snapshot)
-    score += _profile_adjustment(snapshot)
+    if er is not None and er < parameters.low_er_threshold:
+        score *= parameters.low_er_multiplier
+    score += parameters.flow_weight * _flow_adjustment(snapshot)
+    score += parameters.profile_weight * _profile_adjustment(snapshot)
     return score
 
 
@@ -175,8 +199,8 @@ def _profile_adjustment(snapshot: MarketSnapshot) -> float:
     return max(-0.50, min(0.50, adjustment))
 
 
-def _reasons(snapshot: MarketSnapshot, score: float) -> list[str]:
-    reasons = [f"combined_directional_score={score:.4f}"]
+def _reasons(snapshot: MarketSnapshot, score: float, parameters: ForecastParameters = DEFAULT_FORECAST_PARAMETERS) -> list[str]:
+    reasons = [f"combined_directional_score={score:.4f}", f"parameters={parameters.name}"]
     for state in (snapshot.d1, snapshot.h1, snapshot.m15):
         reasons.append(f"{state.timeframe}:trend_score={state.trend_score:.4f},return20={_fmt(state.return_20)},er20={_fmt(state.efficiency_ratio_20)}")
     if snapshot.d1.atr_14_pct is not None:
