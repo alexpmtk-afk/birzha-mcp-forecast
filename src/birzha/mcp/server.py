@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse
 
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
+from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
@@ -27,8 +28,10 @@ from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.security import McpBearerAuthMiddleware
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
+from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
+from birzha.storage.ydb_historical_flow_store import YdbHistoricalFlowStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
@@ -53,18 +56,19 @@ if settings.state_backend == "ydb":
     _journal_store = YdbForecastJournal(_ydb_runtime.pool)
     _outcome_store = YdbOutcomeJournal(_ydb_runtime.pool)
     _historical_store = YdbHistoricalCandleStore(_ydb_runtime.pool)
+    _historical_flow_store = YdbHistoricalFlowStore(_ydb_runtime.pool)
 else:
     _upstream_control = ProcessUpstreamControlPlane()
     _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
     _outcome_store = DuckDBOutcomeJournal(settings.forecast_journal_path)
     _historical_store = DuckDBHistoricalCandleStore(settings.historical_store_path)
+    _historical_flow_store = DuckDBHistoricalFlowStore(settings.historical_store_path)
 
 _market = MarketDataService.default(control_plane=_upstream_control)
 _history = HistoricalDataService(market_data=_market, store=_historical_store)
-_flow = MarketFlowService(
-    market_data=_market,
-    analytics=MoexAnalyticsClient(control_plane=_upstream_control),
-)
+_analytics = MoexAnalyticsClient(control_plane=_upstream_control)
+_historical_flow = HistoricalFlowDataService(market_data=_market, analytics=_analytics, store=_historical_flow_store)
+_flow = MarketFlowService(market_data=_market, analytics=_analytics, historical=_historical_flow)
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
@@ -127,6 +131,14 @@ def history_sync_batch(symbols: list[str], timeframes: list[str], from_date: str
 @mcp.tool(name="history.sync_core", description="Sync the BIRZHA core research universe on D1/H1/M15, reusing already verified stored history.")
 def history_sync_core(from_date: str, till_date: str) -> dict[str, object]:
     return _history.sync_many(CORE_HISTORY_SYMBOLS, CORE_HISTORY_TIMEFRAMES, from_date=from_date, till_date=till_date)
+
+
+@mcp.tool(name="history.flow_sync", description="Persist TradeStats Delta and applicable FUTOI history so repeated forecasts and validation can reuse stored analytical data.")
+def history_flow_sync(symbol: str, from_date: str, till_date: str) -> dict[str, object]:
+    try:
+        return {"status":"PASS", **_historical_flow.sync(symbol, from_date=from_date, till_date=till_date)}
+    except Exception as exc:
+        return {"status":"ERROR","symbol":symbol,"from_date":from_date,"till_date":till_date,"error_type":type(exc).__name__,"error":str(exc)[:1500]}
 
 
 @mcp.tool(name="history.coverage", description="Return durable stored coverage for one exact MOEX SECID and timeframe.")

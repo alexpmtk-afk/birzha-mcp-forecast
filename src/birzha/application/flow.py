@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService
+from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
 from birzha.domain.market import Instrument
@@ -23,6 +24,7 @@ MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
 class MarketFlowService:
     market_data: MarketDataService
     analytics: MoexAnalyticsClient
+    historical: HistoricalFlowDataService | None = None
 
     @classmethod
     def default(
@@ -91,10 +93,10 @@ class MarketFlowService:
 
         warnings: list[str] = []
         try:
-            trade_rows = self.analytics.fetch_tradestats(
-                instrument,
-                from_date=start.isoformat(),
-                till_date=till.isoformat(),
+            trade_rows = (
+                self.historical.tradestats(instrument, from_date=start.isoformat(), till_date=till.isoformat())
+                if self.historical is not None
+                else self.analytics.fetch_tradestats(instrument, from_date=start.isoformat(), till_date=till.isoformat())
             )
         except (MoexAnalyticsError, JSONDecodeError) as exc:
             trade_rows = []
@@ -103,10 +105,10 @@ class MarketFlowService:
             )
 
         try:
-            futoi_rows = self.analytics.fetch_futoi(
-                instrument,
-                from_date=start.isoformat(),
-                till_date=till.isoformat(),
+            futoi_rows = (
+                self.historical.futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
+                if self.historical is not None
+                else self.analytics.fetch_futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
             )
         except (MoexAnalyticsError, JSONDecodeError) as exc:
             futoi_rows = []
