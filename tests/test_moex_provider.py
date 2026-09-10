@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.market import Candle, Instrument
@@ -41,7 +41,7 @@ def test_resolve_active_future_prefers_liquidity_then_oi():
     assert instrument.last_trade_date == "2026-09-17"
 
 
-def test_m15_aggregation_marks_complete_only_for_15_minutes():
+def test_m15_aggregation_keeps_closed_sparse_bucket_and_rejects_forming_bucket():
     candles = tuple(
         Candle(
             open=100.0 + i,
@@ -56,14 +56,19 @@ def test_m15_aggregation_marks_complete_only_for_15_minutes():
         for i in range(16)
     )
 
-    aggregated = MoexIssClient._aggregate_m15(candles)
+    historical = MoexIssClient._aggregate_m15(candles, as_of=datetime(2026, 8, 28, 11, 0))
+    forming = MoexIssClient._aggregate_m15(candles, as_of=datetime(2026, 8, 28, 10, 20))
 
-    assert len(aggregated) == 2
-    assert aggregated[0].completed is True
-    assert aggregated[0].open == 100.0
-    assert aggregated[0].close == 114.5
-    assert aggregated[0].volume == 15.0
-    assert aggregated[1].completed is False
+    assert len(historical) == 2
+    assert historical[0].completed is True
+    assert historical[0].open == 100.0
+    assert historical[0].close == 114.5
+    assert historical[0].volume == 15.0
+    assert historical[1].completed is True
+    assert historical[1].begin == "2026-08-28T10:15:00"
+    assert historical[1].end == "2026-08-28T10:29:59"
+    assert forming[0].completed is True
+    assert forming[1].completed is False
 
 class _NoopGate:
     scope = "process"

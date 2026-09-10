@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
+import httpx
 
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.market import Candle, CandleSeries, Instrument
@@ -17,6 +19,8 @@ from birzha.upstream.moex import MOEX_ISS_PUBLIC_POLICY
 
 
 ISS_BASE = "https://iss.moex.com/iss"
+MOEX_HTTP_HEADERS = {"Accept": "application/json", "User-Agent": "BIRZHA-MCP-FORECAST/0.1"}
+MOEX_TIMEZONE = timezone(timedelta(hours=3))
 
 
 @dataclass(slots=True)
@@ -52,6 +56,11 @@ class MoexIssClient:
         self._control_plane = control_plane or ProcessUpstreamControlPlane()
         self._opener = opener
         self._timeout_seconds = timeout_seconds
+        self._http_client = (
+            httpx.Client(timeout=timeout_seconds, follow_redirects=True, headers=MOEX_HTTP_HEADERS)
+            if opener is urlopen
+            else None
+        )
         self._governor = self._control_plane.governor(
             "moex-iss-public",
             MOEX_ISS_PUBLIC_POLICY,
@@ -65,41 +74,28 @@ class MoexIssClient:
         data = table.get("data") or []
         return [dict(zip(columns, row, strict=False)) for row in data]
 
+    def _one_attempt(self, url: str) -> IssResponse:
+        if self._http_client is not None:
+            try:
+                response = self._http_client.get(url)
+                return IssResponse(status_code=response.status_code, headers=dict(response.headers), body=response.content)
+            except (httpx.TimeoutException, httpx.TransportError, ConnectionError) as exc:
+                return IssResponse(status_code=503, headers={"X-BIRZHA-TRANSIENT": type(exc).__name__}, body=b"")
+        req = Request(url, headers=MOEX_HTTP_HEADERS)
+        try:
+            with self._opener(req, timeout=self._timeout_seconds) as response:
+                return IssResponse(status_code=int(getattr(response, "status", 200)), headers={str(k): str(v) for k, v in response.headers.items()}, body=response.read())
+        except HTTPError as exc:
+            return IssResponse(status_code=int(exc.code), headers={str(k): str(v) for k, v in exc.headers.items()}, body=exc.read())
+        except (URLError, TimeoutError, ConnectionError) as exc:
+            return IssResponse(status_code=503, headers={"X-BIRZHA-TRANSIENT": type(exc).__name__}, body=b"")
+
     def _request(self, path: str, params: dict[str, object] | None = None) -> IssResponse:
         query = urlencode(params or {}, doseq=True)
         url = f"{ISS_BASE}{path}"
         if query:
             url += f"?{query}"
-
-        def one_attempt() -> IssResponse:
-            req = Request(
-                url,
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "BIRZHA-MCP-FORECAST/0.1",
-                },
-            )
-            try:
-                with self._opener(req, timeout=self._timeout_seconds) as response:
-                    return IssResponse(
-                        status_code=int(getattr(response, "status", 200)),
-                        headers={str(k): str(v) for k, v in response.headers.items()},
-                        body=response.read(),
-                    )
-            except HTTPError as exc:
-                return IssResponse(
-                    status_code=int(exc.code),
-                    headers={str(k): str(v) for k, v in exc.headers.items()},
-                    body=exc.read(),
-                )
-            except (URLError, TimeoutError, ConnectionError) as exc:
-                return IssResponse(
-                    status_code=503,
-                    headers={"X-BIRZHA-TRANSIENT": type(exc).__name__},
-                    body=b"",
-                )
-
-        response = self._governor.execute([url], lambda _: one_attempt)[0]
+        response = self._governor.execute([url], lambda _: lambda: self._one_attempt(url))[0]
         if response.status_code != 200:
             raise MoexIssError(f"MOEX ISS returned HTTP {response.status_code} for {path}")
         return response
@@ -111,30 +107,7 @@ class MoexIssClient:
             path, params = task
             query = urlencode(params, doseq=True)
             url = f"{ISS_BASE}{path}?{query}" if query else f"{ISS_BASE}{path}"
-
-            def one_attempt() -> IssResponse:
-                req = Request(url, headers={"Accept": "application/json", "User-Agent": "BIRZHA-MCP-FORECAST/0.1"})
-                try:
-                    with self._opener(req, timeout=self._timeout_seconds) as response:
-                        return IssResponse(
-                            status_code=int(getattr(response, "status", 200)),
-                            headers={str(k): str(v) for k, v in response.headers.items()},
-                            body=response.read(),
-                        )
-                except HTTPError as exc:
-                    return IssResponse(
-                        status_code=int(exc.code),
-                        headers={str(k): str(v) for k, v in exc.headers.items()},
-                        body=exc.read(),
-                    )
-                except (URLError, TimeoutError, ConnectionError) as exc:
-                    return IssResponse(
-                        status_code=503,
-                        headers={"X-BIRZHA-TRANSIENT": type(exc).__name__},
-                        body=b"",
-                    )
-
-            return one_attempt
+            return lambda: self._one_attempt(url)
 
         responses = self._governor.execute(materialized, build)
         for response in responses:
@@ -289,7 +262,10 @@ class MoexIssClient:
         return tuple(candles)
 
     @staticmethod
-    def _aggregate_m15(candles: tuple[Candle, ...]) -> tuple[Candle, ...]:
+    def _aggregate_m15(
+        candles: tuple[Candle, ...], *, as_of: datetime | None = None
+    ) -> tuple[Candle, ...]:
+        cutoff = as_of or datetime.now(MOEX_TIMEZONE)
         buckets: dict[str, list[Candle]] = {}
         for candle in candles:
             try:
@@ -304,6 +280,15 @@ class MoexIssClient:
         result: list[Candle] = []
         for key in sorted(buckets):
             group = sorted(buckets[key], key=lambda candle: candle.begin)
+            bucket_start = datetime.fromisoformat(key)
+            bucket_end = bucket_start + timedelta(minutes=15) - timedelta(seconds=1)
+            comparable_cutoff = cutoff
+            if bucket_start.tzinfo is None and cutoff.tzinfo is not None:
+                comparable_cutoff = cutoff.astimezone(MOEX_TIMEZONE).replace(tzinfo=None)
+            elif bucket_start.tzinfo is not None and cutoff.tzinfo is None:
+                comparable_cutoff = cutoff.replace(tzinfo=MOEX_TIMEZONE).astimezone(bucket_start.tzinfo)
+            elif bucket_start.tzinfo is not None and cutoff.tzinfo is not None:
+                comparable_cutoff = cutoff.astimezone(bucket_start.tzinfo)
             highs = [c.high for c in group if c.high is not None]
             lows = [c.low for c in group if c.low is not None]
             values = [c.value for c in group if c.value is not None]
@@ -316,9 +301,9 @@ class MoexIssClient:
                     low=min(lows) if lows else None,
                     value=sum(values) if values else None,
                     volume=sum(volumes) if volumes else None,
-                    begin=group[0].begin,
-                    end=group[-1].end,
-                    completed=len(group) == 15,
+                    begin=key,
+                    end=bucket_end.isoformat(),
+                    completed=bucket_end <= comparable_cutoff,
                 )
             )
         return tuple(result)

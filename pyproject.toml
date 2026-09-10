@@ -9,6 +9,7 @@ description = "BIRZHA MCP Forecast System backend"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"
 dependencies = [
+  "httpx==0.28.1",
   "duckdb==1.5.5",
   "mcp==2.1.1",
   "uvicorn==0.35.0",
