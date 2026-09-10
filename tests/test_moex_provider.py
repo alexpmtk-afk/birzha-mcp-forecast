@@ -41,7 +41,7 @@ def test_resolve_active_future_prefers_liquidity_then_oi():
     assert instrument.last_trade_date == "2026-09-17"
 
 
-def test_m15_aggregation_marks_complete_only_for_15_minutes():
+def test_m15_aggregation_keeps_sparse_valid_market_buckets():
     candles = tuple(
         Candle(
             open=100.0 + i,
@@ -63,7 +63,22 @@ def test_m15_aggregation_marks_complete_only_for_15_minutes():
     assert aggregated[0].open == 100.0
     assert aggregated[0].close == 114.5
     assert aggregated[0].volume == 15.0
-    assert aggregated[1].completed is False
+    assert aggregated[1].completed is True
+    assert aggregated[1].begin.startswith("2026-08-28 10:15:00")
+    assert aggregated[1].end.startswith("2026-08-28 10:29:59")
+
+
+def test_m15_sparse_bucket_uses_canonical_quarter_hour_bounds():
+    candles = (
+        Candle(100,101,101,100,10,1,"2026-08-28T09:59:00","2026-08-28T09:59:59"),
+        Candle(101,102,102,101,20,2,"2026-08-28T10:02:00","2026-08-28T10:02:59"),
+    )
+    aggregated = MoexIssClient._aggregate_m15(candles)
+    assert len(aggregated) == 2
+    assert aggregated[0].begin == "2026-08-28 09:45:00"
+    assert aggregated[0].end == "2026-08-28 09:59:59"
+    assert aggregated[0].completed is True
+    assert aggregated[1].begin == "2026-08-28 10:00:00"
 
 class _NoopGate:
     scope = "process"

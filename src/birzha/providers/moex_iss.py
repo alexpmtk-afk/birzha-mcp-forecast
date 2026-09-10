@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -303,6 +303,7 @@ class MoexIssClient:
 
         result: list[Candle] = []
         for key in sorted(buckets):
+            bucket_dt = datetime.fromisoformat(key)
             group = sorted(buckets[key], key=lambda candle: candle.begin)
             highs = [c.high for c in group if c.high is not None]
             lows = [c.low for c in group if c.low is not None]
@@ -316,9 +317,9 @@ class MoexIssClient:
                     low=min(lows) if lows else None,
                     value=sum(values) if values else None,
                     volume=sum(volumes) if volumes else None,
-                    begin=group[0].begin,
-                    end=group[-1].end,
-                    completed=len(group) == 15,
+                    begin=bucket_dt.isoformat(sep=" "),
+                    end=(bucket_dt + timedelta(minutes=15) - timedelta(seconds=1)).isoformat(sep=" "),
+                    completed=all(c.completed for c in group),
                 )
             )
         return tuple(result)
