@@ -15,6 +15,8 @@ class HorizonValidationMetrics:
     mean_actual_return_pct: float | None
     mean_absolute_error_pct: float | None
     mean_signed_error_pct: float | None
+    raw_observations: int | None = None
+    sampling_stride: int = 1
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -32,6 +34,7 @@ class WalkForwardReport:
     metrics: tuple[HorizonValidationMetrics, ...]
     failures: tuple[str, ...]
     status: str
+    step_sessions: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -45,6 +48,7 @@ class WalkForwardReport:
             "metrics": [item.to_dict() for item in self.metrics],
             "failures": list(self.failures),
             "status": self.status,
+            "step_sessions": self.step_sessions,
         }
 
 
