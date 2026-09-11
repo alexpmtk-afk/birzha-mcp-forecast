@@ -17,6 +17,7 @@ FEASIBLE_PERIOD_ARGS = [
 
 def test_pipeline_does_not_validate_when_readiness_is_not_ready(monkeypatch) -> None:
     calls: list[str] = []
+    removed: list[str] = []
     written: list[dict[str, object]] = []
 
     def fake_run(command, *, label):
@@ -29,6 +30,7 @@ def test_pipeline_does_not_validate_when_readiness_is_not_ready(monkeypatch) -> 
 
     monkeypatch.setattr(pipeline, "_run", fake_run)
     monkeypatch.setattr(pipeline, "_read", fake_read)
+    monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
     monkeypatch.setattr(
         sys,
@@ -43,12 +45,15 @@ def test_pipeline_does_not_validate_when_readiness_is_not_ready(monkeypatch) -> 
 
     assert pipeline.main() == 2
     assert calls == ["prepare"]
+    assert len(removed) == 1
+    assert removed[0].endswith("ydb_validation_data_preparation.json")
     assert written[-1]["status"] == "PREPARE_NOT_READY"
     assert written[-1]["validation"] == {"status": "NOT_RUN"}
 
 
 def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> None:
     calls: list[str] = []
+    removed: list[str] = []
     written: list[dict[str, object]] = []
 
     def fake_run(command, *, label):
@@ -63,12 +68,15 @@ def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> 
                 "run_status": "COMPUTED",
                 "model_status": "REJECTED",
                 "selected_parameters": {"name": "baseline"},
+                "development_statuses": {"SBER": "ACCEPTED"},
+                "holdout_evaluated": True,
                 "holdout_statuses": {"SBER": "REJECTED"},
             }
         raise AssertionError(path)
 
     monkeypatch.setattr(pipeline, "_run", fake_run)
     monkeypatch.setattr(pipeline, "_read", fake_read)
+    monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
     monkeypatch.setattr(
         sys,
@@ -83,14 +91,19 @@ def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> 
 
     assert pipeline.main() == 0
     assert calls == ["prepare", "validate"]
+    assert len(removed) == 2
+    assert removed[0].endswith("ydb_validation_data_preparation.json")
+    assert removed[1].endswith("ydb_model_validation.json")
     assert written[-1]["status"] == "COMPUTED"
     assert written[-1]["model_status"] == "REJECTED"
+    assert written[-1]["holdout_evaluated"] is True
 
 
 def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample(
     monkeypatch,
 ) -> None:
     calls: list[str] = []
+    removed: list[str] = []
     written: list[dict[str, object]] = []
 
     def fake_run(command, *, label):
@@ -98,6 +111,7 @@ def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample
         raise AssertionError("external stage must not run for impossible statistics")
 
     monkeypatch.setattr(pipeline, "_run", fake_run)
+    monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
     monkeypatch.setattr(
         sys,
@@ -107,6 +121,7 @@ def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample
 
     assert pipeline.main() == 0
     assert calls == []
+    assert removed == []
     result = written[-1]
     assert result["status"] == "INSUFFICIENT_DATA"
     assert result["model_status"] == "INSUFFICIENT_DATA"
