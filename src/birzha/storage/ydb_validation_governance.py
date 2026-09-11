@@ -29,6 +29,7 @@ class HoldoutClaim:
     protocol: str
     engine_version: str
     model_fingerprint: str
+    data_fingerprint: str
     consumed_at: str
 
     def to_dict(self) -> dict[str, str]:
@@ -38,23 +39,19 @@ class HoldoutClaim:
             "protocol": self.protocol,
             "engine_version": self.engine_version,
             "model_fingerprint": self.model_fingerprint,
+            "data_fingerprint": self.data_fingerprint,
             "consumed_at": self.consumed_at,
         }
 
 
 class YdbValidationGovernanceStore:
-    """Persistently burns a holdout range before its first evaluation.
-
-    The claim is intentionally written before holdout performance is read. If a
-    process crashes after the claim, the range stays consumed. This is stricter
-    than retrying and protects the holdout from accidental repeated tuning.
-    """
+    """Persistently burns a holdout range before its first evaluation."""
 
     def __init__(
         self,
         pool: QueryPool,
         *,
-        table: str = "model_validation_holdout_claims_v2",
+        table: str = "model_validation_holdout_claims_v3",
     ) -> None:
         self._pool = pool
         self._table = _safe_table_name(table)
@@ -66,6 +63,7 @@ class YdbValidationGovernanceStore:
                 protocol Utf8 NOT NULL,
                 engine_version Utf8 NOT NULL,
                 model_fingerprint Utf8 NOT NULL,
+                data_fingerprint Utf8 NOT NULL,
                 consumed_at Utf8 NOT NULL,
                 PRIMARY KEY (holdout_start, holdout_end)
             );
@@ -78,7 +76,8 @@ class YdbValidationGovernanceStore:
             f"""
             DECLARE $holdout_start AS Utf8;
             DECLARE $holdout_end AS Utf8;
-            SELECT holdout_start, holdout_end, protocol, engine_version, model_fingerprint, consumed_at
+            SELECT holdout_start, holdout_end, protocol, engine_version,
+                   model_fingerprint, data_fingerprint, consumed_at
             FROM `{self._table}`
             WHERE holdout_start <= $holdout_end AND holdout_end >= $holdout_start
             LIMIT 1;
@@ -99,20 +98,16 @@ class YdbValidationGovernanceStore:
         protocol: str,
         engine_version: str,
         model_fingerprint: str,
+        data_fingerprint: str,
     ) -> HoldoutClaim:
-        """Atomically claim a non-overlapping holdout range.
-
-        The overlap read and conditional INSERT are one implicit serializable YDB
-        transaction. Concurrent claims touching the same key range therefore
-        cannot both commit successfully. The write is non-idempotent so an
-        ambiguous write outcome is never silently retried as a fresh claim.
-        """
+        """Atomically claim a non-overlapping holdout range."""
         claim = HoldoutClaim(
             holdout_start=holdout_start[:10],
             holdout_end=holdout_end[:10],
             protocol=protocol,
             engine_version=engine_version,
             model_fingerprint=model_fingerprint,
+            data_fingerprint=data_fingerprint,
             consumed_at=datetime.now(timezone.utc).isoformat(),
         )
         parameters = {
@@ -121,6 +116,7 @@ class YdbValidationGovernanceStore:
             "$protocol": _utf8(claim.protocol),
             "$engine_version": _utf8(claim.engine_version),
             "$model_fingerprint": _utf8(claim.model_fingerprint),
+            "$data_fingerprint": _utf8(claim.data_fingerprint),
             "$consumed_at": _utf8(claim.consumed_at),
         }
         try:
@@ -131,22 +127,26 @@ class YdbValidationGovernanceStore:
                 DECLARE $protocol AS Utf8;
                 DECLARE $engine_version AS Utf8;
                 DECLARE $model_fingerprint AS Utf8;
+                DECLARE $data_fingerprint AS Utf8;
                 DECLARE $consumed_at AS Utf8;
 
                 $existing = SELECT
-                    holdout_start, holdout_end, protocol, engine_version, model_fingerprint, consumed_at
+                    holdout_start, holdout_end, protocol, engine_version,
+                    model_fingerprint, data_fingerprint, consumed_at
                 FROM `{self._table}`
                 WHERE holdout_start <= $holdout_end AND holdout_end >= $holdout_start
                 LIMIT 1;
 
                 INSERT INTO `{self._table}`
-                    (holdout_start, holdout_end, protocol, engine_version, model_fingerprint, consumed_at)
+                    (holdout_start, holdout_end, protocol, engine_version,
+                     model_fingerprint, data_fingerprint, consumed_at)
                 SELECT
                     $holdout_start AS holdout_start,
                     $holdout_end AS holdout_end,
                     $protocol AS protocol,
                     $engine_version AS engine_version,
                     $model_fingerprint AS model_fingerprint,
+                    $data_fingerprint AS data_fingerprint,
                     $consumed_at AS consumed_at
                 WHERE NOT EXISTS (SELECT * FROM $existing);
 
@@ -182,6 +182,7 @@ def _claim_from_row(row: object | None) -> HoldoutClaim | None:
         protocol=str(_row_value(row, "protocol")),
         engine_version=str(_row_value(row, "engine_version")),
         model_fingerprint=str(_row_value(row, "model_fingerprint")),
+        data_fingerprint=str(_row_value(row, "data_fingerprint")),
         consumed_at=str(_row_value(row, "consumed_at")),
     )
 
