@@ -1,3 +1,5 @@
+from datetime import date
+
 from birzha.application.model_lab import assess_walk_forward
 from birzha.application.validation import (
     independent_sample_capacity,
@@ -140,6 +142,19 @@ def test_capacity_can_reach_twenty_long_horizon_samples_with_enough_history() ->
     )
 
     assert capacity == {5: 80, 10: 40, 20: 20}
+
+
+def test_current_default_development_window_is_provably_too_short() -> None:
+    calendar_days = (date(2025, 10, 1) - date(2025, 1, 1)).days + 1
+    capacity = independent_sample_capacity(
+        calendar_days, step_sessions=5, max_points=80
+    )
+
+    # This is an absolute upper bound because real exchange sessions are fewer
+    # than calendar days. Therefore the current default period cannot possibly
+    # reach the unchanged 20-observation minimum for the 20-session horizon.
+    assert capacity[20] == 13
+    assert capacity[20] < 20
 
 
 def test_non_overlapping_summary_rejects_invalid_step() -> None:
