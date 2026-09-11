@@ -29,7 +29,12 @@ class _Calendar:
         pass
 
     def dates(self, **kwargs):
-        return (date(2026, 9, 1), date(2026, 9, 2))
+        candidates = (date(2026, 9, 1), date(2026, 9, 2))
+        return tuple(
+            day
+            for day in candidates
+            if kwargs["from_date"] <= day <= kwargs["till_date"]
+        )
 
 
 class _Market:
@@ -44,11 +49,16 @@ class _Market:
         self, instrument, *, timeframe, from_date, till_date, completed_only=True
     ):
         self.fetches.append((from_date, till_date))
-        candles = (
+        candidates = (
             Candle(100, 101, 102, 99, 1000, 10, "2026-09-01 10:00:00", "2026-09-01 10:14:59"),
             Candle(101, 102, 103, 100, 1100, 11, "2026-09-01 10:15:00", "2026-09-01 10:29:59"),
             Candle(102, 103, 104, 101, 1200, 12, "2026-09-02 10:00:00", "2026-09-02 10:14:59"),
             Candle(103, 104, 105, 102, 1300, 13, "2026-09-02 10:15:00", "2026-09-02 10:29:59"),
+        )
+        candles = tuple(
+            candle
+            for candle in candidates
+            if from_date <= candle.begin[:10] <= till_date
         )
         return CandleSeries(instrument=instrument, timeframe=timeframe, candles=candles)
 
@@ -86,3 +96,28 @@ def test_legacy_m15_marker_and_partial_day_do_not_skip_full_refetch(monkeypatch)
     )
     assert second.reused_verified_range is True
     assert market.fetches == [("2026-09-01", "2026-09-02")]
+
+
+def test_m15_range_extension_fetches_only_new_unverified_sessions(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    market = _Market()
+    service = HistoricalDataService(market_data=market, store=store)  # type: ignore[arg-type]
+
+    service.sync(
+        "SBER", timeframe="M15", from_date="2026-09-01", till_date="2026-09-01"
+    )
+    assert market.fetches == [("2026-09-01", "2026-09-01")]
+
+    market.fetches.clear()
+    result = service.sync(
+        "SBER", timeframe="M15", from_date="2026-09-01", till_date="2026-09-02"
+    )
+
+    assert result.reused_verified_range is False
+    assert market.fetches == [("2026-09-02", "2026-09-02")]
+    verification_key = f"SBER#{M15_FULL_VERIFICATION_VERSION}"
+    assert store.is_verified(verification_key, "M15", "2026-09-01", "2026-09-02") is True
+    store.close()
