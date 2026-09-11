@@ -95,7 +95,12 @@ def main() -> int:
     parser.add_argument(
         "--expected-model-fingerprint",
         default=None,
-        help="Fingerprint from the prior sealed development result; required with --open-holdout.",
+        help="Model fingerprint from the prior sealed development result; required with --open-holdout.",
+    )
+    parser.add_argument(
+        "--expected-data-fingerprint",
+        default=None,
+        help="Dataset fingerprint from the prior sealed development result; required with --open-holdout.",
     )
     parser.add_argument(
         "--prepare-artifact",
@@ -117,13 +122,17 @@ def main() -> int:
         raise ValueError("step_sessions must be between 1 and 50")
     if args.max_points <= 0 or args.max_points > 240:
         raise ValueError("max_points must be between 1 and 240")
-    if args.open_holdout and not args.expected_model_fingerprint:
+    if args.open_holdout and (
+        not args.expected_model_fingerprint or not args.expected_data_fingerprint
+    ):
         raise ValueError(
-            "--expected-model-fingerprint is required when --open-holdout is used"
+            "--expected-model-fingerprint and --expected-data-fingerprint are required when --open-holdout is used"
         )
-    if not args.open_holdout and args.expected_model_fingerprint:
+    if not args.open_holdout and (
+        args.expected_model_fingerprint or args.expected_data_fingerprint
+    ):
         raise ValueError(
-            "--expected-model-fingerprint is only valid together with --open-holdout"
+            "expected fingerprints are only valid together with --open-holdout"
         )
 
     holdout_start = (
@@ -182,10 +191,12 @@ def main() -> int:
     python = sys.executable
     scripts_dir = Path(__file__).resolve().parent
 
-    # Preparation is allowed only on the development-stage run. The final
-    # holdout-opening run must consume the already frozen prepared YDB dataset.
     if args.open_holdout:
-        prepare = {"label": "prepare", "returncode": 0, "status": "SKIPPED_FROZEN_DATA"}
+        prepare = {
+            "label": "prepare",
+            "returncode": 0,
+            "status": "SKIPPED_FROZEN_DATA",
+        }
         artifact["prepare"] = prepare
     else:
         _remove_existing(args.prepare_artifact)
@@ -216,7 +227,9 @@ def main() -> int:
             prepare_evidence = _read(args.prepare_artifact)
         except Exception as exc:
             artifact["status"] = (
-                "PREPARE_FAILED" if prepare["status"] != "PASS" else "PREPARE_EVIDENCE_INVALID"
+                "PREPARE_FAILED"
+                if prepare["status"] != "PASS"
+                else "PREPARE_EVIDENCE_INVALID"
             )
             artifact["prepare_evidence_error"] = f"{type(exc).__name__}:{exc}"
             artifact["validation"] = {"status": "NOT_RUN"}
@@ -228,8 +241,12 @@ def main() -> int:
         artifact["prepare_evidence_status"] = prepare_evidence_status
         artifact["session_capacity"] = prepare_evidence.get("session_capacity")
         artifact["capacity_shortfall"] = prepare_evidence.get("capacity_shortfall")
-        artifact["price_operation_failures"] = prepare_evidence.get("price_operation_failures")
-        artifact["optional_flow_status"] = prepare_evidence.get("optional_flow_status")
+        artifact["price_operation_failures"] = prepare_evidence.get(
+            "price_operation_failures"
+        )
+        artifact["optional_flow_status"] = prepare_evidence.get(
+            "optional_flow_status"
+        )
 
         if prepare_evidence_status == "INSUFFICIENT_DATA":
             artifact["status"] = "INSUFFICIENT_DATA"
@@ -241,7 +258,9 @@ def main() -> int:
             return 0
 
         readiness = prepare_evidence.get("readiness")
-        readiness_status = readiness.get("status") if isinstance(readiness, dict) else None
+        readiness_status = (
+            readiness.get("status") if isinstance(readiness, dict) else None
+        )
         artifact["readiness_status"] = readiness_status
         if readiness_status != "READY":
             artifact["status"] = (
@@ -286,6 +305,8 @@ def main() -> int:
                 "--open-holdout",
                 "--expected-model-fingerprint",
                 str(args.expected_model_fingerprint),
+                "--expected-data-fingerprint",
+                str(args.expected_data_fingerprint),
             ]
         )
     validation = _run(validation_command, label="validate")
@@ -309,16 +330,31 @@ def main() -> int:
     artifact["validation_run_status"] = run_status
     artifact["model_status"] = model_status
     artifact["selected_parameters"] = validation_evidence.get("selected_parameters")
-    artifact["selected_model_fingerprint"] = validation_evidence.get("selected_model_fingerprint")
-    artifact["development_statuses"] = validation_evidence.get("development_statuses")
-    artifact["development_capacity"] = validation_evidence.get("development_capacity")
+    artifact["selected_model_fingerprint"] = validation_evidence.get(
+        "selected_model_fingerprint"
+    )
+    artifact["selected_data_fingerprint"] = validation_evidence.get(
+        "selected_data_fingerprint"
+    )
+    artifact["dataset_fingerprint"] = validation_evidence.get("dataset_fingerprint")
+    artifact["development_statuses"] = validation_evidence.get(
+        "development_statuses"
+    )
+    artifact["development_capacity"] = validation_evidence.get(
+        "development_capacity"
+    )
     artifact["holdout_capacity"] = validation_evidence.get("holdout_capacity")
     artifact["capacity_shortfall"] = validation_evidence.get("capacity_shortfall")
     artifact["holdout_evaluated"] = validation_evidence.get("holdout_evaluated")
     artifact["holdout_sealed"] = validation_evidence.get("holdout_sealed")
     artifact["holdout_statuses"] = validation_evidence.get("holdout_statuses")
     artifact["holdout_claim"] = validation_evidence.get("holdout_claim")
-    artifact["actual_model_fingerprint"] = validation_evidence.get("actual_model_fingerprint")
+    artifact["actual_model_fingerprint"] = validation_evidence.get(
+        "actual_model_fingerprint"
+    )
+    artifact["actual_data_fingerprint"] = validation_evidence.get(
+        "actual_data_fingerprint"
+    )
 
     if validation["status"] != "PASS":
         artifact["status"] = (
@@ -331,6 +367,7 @@ def main() -> int:
     protected_terminal = {
         "HOLDOUT_ALREADY_CONSUMED",
         "MODEL_FINGERPRINT_MISMATCH",
+        "DATA_FINGERPRINT_MISMATCH",
     }
     if run_status in protected_terminal and model_status == "NOT_EVALUATED":
         artifact["status"] = run_status
@@ -344,7 +381,9 @@ def main() -> int:
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
         return 3
 
-    artifact["status"] = model_status if model_status == DEVELOPMENT_READY_STATUS else "COMPUTED"
+    artifact["status"] = (
+        model_status if model_status == DEVELOPMENT_READY_STATUS else "COMPUTED"
+    )
     _write(args.pipeline_artifact, artifact)
     print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
     return 0
