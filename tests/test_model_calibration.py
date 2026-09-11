@@ -63,6 +63,7 @@ def test_calibration_selects_on_development_then_checks_holdout(monkeypatch) -> 
 
     assert result.selected.name == "better"
     assert result.status == "ACCEPTED"
+    assert result.holdout is not None
     assert calls.count(("baseline", "2024-01-01")) == 1
     assert calls.count(("better", "2024-01-01")) == 1
     assert calls.count(("better", "2025-01-02")) == 1
@@ -101,6 +102,36 @@ def test_single_symbol_calibration_prefers_accepted_over_higher_rejected_score(m
     )
 
     assert result.selected.name == "robust_accepted"
+
+
+def test_single_symbol_rejected_development_never_opens_holdout(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeAssessor:
+        def assess(self, symbol: str, *, start_date: str, **kwargs):
+            calls.append(start_date)
+            if start_date != "2024-01-01":
+                raise AssertionError("holdout must remain untouched after development rejection")
+            return _report(0.95, 0.80, "REJECTED")
+
+    monkeypatch.setattr(
+        ModelCalibrationService,
+        "_acceptance_for",
+        lambda self, parameters: FakeAssessor(),
+    )
+    service = ModelCalibrationService(validator=object())  # type: ignore[arg-type]
+    result = service.calibrate(
+        "SBER",
+        development_start="2024-01-01",
+        split_date="2025-01-01",
+        holdout_end="2026-01-01",
+        candidates=(ForecastParameters(name="rejected"),),
+    )
+
+    assert result.status == "REJECTED"
+    assert result.holdout is None
+    assert calls == ["2024-01-01"]
+    assert result.to_dict()["holdout_evaluated"] is False
 
 
 def test_multisymbol_calibration_uses_shared_parameters_and_all_holdouts(monkeypatch) -> None:
@@ -189,3 +220,94 @@ def test_multisymbol_calibration_prefers_candidate_accepted_on_every_market(monk
     )
 
     assert result.selected.name == "robust_all"
+
+
+def test_multisymbol_rejected_development_never_opens_holdout(monkeypatch) -> None:
+    from birzha.application.calibration import calibrate_across_symbols
+
+    calls: list[tuple[str, str]] = []
+
+    class FakeAssessor:
+        def assess(self, symbol: str, *, start_date: str, **kwargs):
+            calls.append((symbol, start_date))
+            if start_date != "2024-01-01":
+                raise AssertionError("holdout must remain untouched after development rejection")
+            return _report(0.70, 0.55, "REJECTED")
+
+    monkeypatch.setattr(
+        ModelCalibrationService,
+        "_acceptance_for",
+        lambda self, parameters: FakeAssessor(),
+    )
+    service = ModelCalibrationService(validator=object())  # type: ignore[arg-type]
+    result = calibrate_across_symbols(
+        service,
+        ("SBER", "Si"),
+        development_start="2024-01-01",
+        split_date="2025-01-01",
+        holdout_end="2026-01-01",
+        candidates=(ForecastParameters(name="rejected"),),
+    )
+
+    assert result.status == "REJECTED"
+    assert result.holdout == ()
+    assert calls == [("SBER", "2024-01-01"), ("Si", "2024-01-01")]
+    assert result.to_dict()["holdout_evaluated"] is False
+
+
+def test_multisymbol_fully_evaluated_candidate_beats_candidate_with_failed_market(monkeypatch) -> None:
+    from birzha.application.calibration import calibrate_across_symbols
+
+    symbols = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
+    incomplete_status = {
+        "SBER": "ACCEPTED",
+        "Si": "ACCEPTED",
+        "BR": "ACCEPTED",
+        "GOLD": "ACCEPTED",
+        "IMOEX": "ACCEPTED",
+        "RTSI": "FAILED",
+    }
+    complete_status = {
+        "SBER": "ACCEPTED",
+        "Si": "ACCEPTED",
+        "BR": "ACCEPTED",
+        "GOLD": "ACCEPTED",
+        "IMOEX": "REJECTED",
+        "RTSI": "REJECTED",
+    }
+
+    class FakeAssessor:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def assess(self, symbol: str, *, start_date: str, **kwargs):
+            if start_date != "2024-01-01":
+                raise AssertionError("neither candidate passed all development markets")
+            status = (
+                incomplete_status[symbol]
+                if self.name == "five_plus_failure"
+                else complete_status[symbol]
+            )
+            return _report(0.90, 0.75, status)
+
+    monkeypatch.setattr(
+        ModelCalibrationService,
+        "_acceptance_for",
+        lambda self, parameters: FakeAssessor(parameters.name),
+    )
+    service = ModelCalibrationService(validator=object())  # type: ignore[arg-type]
+    result = calibrate_across_symbols(
+        service,
+        symbols,
+        development_start="2024-01-01",
+        split_date="2025-01-01",
+        holdout_end="2026-01-01",
+        candidates=(
+            ForecastParameters(name="five_plus_failure"),
+            ForecastParameters(name="four_complete", direction_threshold=0.8),
+        ),
+    )
+
+    assert result.selected.name == "four_complete"
+    assert result.status == "REJECTED"
+    assert result.holdout == ()
