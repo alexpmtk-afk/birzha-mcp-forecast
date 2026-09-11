@@ -5,11 +5,20 @@ import sys
 import scripts.run_authorized_ydb_model_pipeline as pipeline
 
 
-FEASIBLE_PERIOD_ARGS = [
+CALENDAR_FEASIBLE_TEST_ARGS = [
     "--validation-start",
-    "2023-01-01",
+    "2020-01-01",
     "--split-date",
-    "2024-10-01",
+    "2021-12-31",
+    "--validation-end",
+    "2023-12-31",
+]
+
+LEGACY_SHORT_PERIOD_ARGS = [
+    "--validation-start",
+    "2025-01-01",
+    "--split-date",
+    "2025-10-01",
     "--validation-end",
     "2026-05-31",
 ]
@@ -39,7 +48,7 @@ def test_pipeline_does_not_validate_when_readiness_is_not_ready(monkeypatch) -> 
             "pipeline",
             "--connection-string",
             "grpcs://example.invalid/db",
-            *FEASIBLE_PERIOD_ARGS,
+            *CALENDAR_FEASIBLE_TEST_ARGS,
         ],
     )
 
@@ -90,7 +99,7 @@ def test_pipeline_stops_when_real_session_capacity_is_insufficient(monkeypatch) 
             "pipeline",
             "--connection-string",
             "grpcs://example.invalid/db",
-            *FEASIBLE_PERIOD_ARGS,
+            *CALENDAR_FEASIBLE_TEST_ARGS,
         ],
     )
 
@@ -140,7 +149,7 @@ def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> 
             "pipeline",
             "--connection-string",
             "grpcs://example.invalid/db",
-            *FEASIBLE_PERIOD_ARGS,
+            *CALENDAR_FEASIBLE_TEST_ARGS,
         ],
     )
 
@@ -171,7 +180,12 @@ def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample
     monkeypatch.setattr(
         sys,
         "argv",
-        ["pipeline", "--connection-string", "grpcs://example.invalid/db"],
+        [
+            "pipeline",
+            "--connection-string",
+            "grpcs://example.invalid/db",
+            *LEGACY_SHORT_PERIOD_ARGS,
+        ],
     )
 
     assert pipeline.main() == 0
@@ -185,3 +199,9 @@ def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample
     assert result["holdout_evaluated"] is False
     assert result["capacity_shortfall_upper_bound"]["development"]["20"] < 20
     assert result["capacity_shortfall_upper_bound"]["holdout"]["20"] < 20
+
+
+def test_governed_defaults_are_not_the_consumed_legacy_window() -> None:
+    assert pipeline.DEFAULT_VALIDATION_START == "2021-01-01"
+    assert pipeline.DEFAULT_SPLIT_DATE == "2022-12-31"
+    assert pipeline.DEFAULT_VALIDATION_END == "2024-12-31"
