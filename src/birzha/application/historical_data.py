@@ -11,9 +11,12 @@ from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCoverage
 
 
-M15_MAX_SESSIONS_PER_FETCH = 3
+INTRADAY_MAX_SESSIONS_PER_FETCH = 3
+D1_SESSION_VERIFICATION_VERSION = "D1_SESSION_V1"
+H1_FULL_VERIFICATION_VERSION = "H1_FULL_V1"
 M15_FULL_VERIFICATION_VERSION = "M15_FULL_V1"
 ROLLING_HISTORY_VERIFICATION_VERSION = "ROLLING_HISTORY_V1"
+FULL_SESSION_TIMEFRAMES = frozenset({"H1", "M15"})
 
 
 class HistoricalDataIncompleteError(RuntimeError):
@@ -102,8 +105,8 @@ class HistoricalDataService:
 
         # Store-first: a verification marker created by the current semantics
         # is sufficient to reuse history without any resolver/network call.
-        # Old rolling-root and old date-only M15 markers use different keys and
-        # therefore cannot accidentally satisfy this check.
+        # Validation timeframes use versioned keys, so legacy markers cannot
+        # accidentally prove readiness after the M23 correctness audit.
         price_verified = self.store.is_verified(
             verification_symbol, timeframe, from_date[:10], till_date[:10]
         )
@@ -130,12 +133,10 @@ class HistoricalDataService:
                 f"{timeframe} {start.isoformat()}..{finish.isoformat()}"
             )
 
-        # M15 historically used date-level presence as a gap test. A day with
-        # one stale candle could therefore look complete even when most 15m
-        # buckets were absent. M15_FULL_V1 re-fetches each unverified session as
-        # a complete bounded range. Per-session/chunk markers make a failed long
-        # pass resumable and make future range extensions fetch only new days.
-        force_full_m15_sessions = timeframe == "M15" and resolver_known
+        # H1/M15 are certified from complete provider responses for each
+        # expected session. Per-chunk markers make a failed long pass resumable
+        # and future range extensions fetch only newly unverified sessions.
+        force_full_sessions = timeframe in FULL_SESSION_TIMEFRAMES and resolver_known
         results = tuple(
             self._sync_contract(
                 symbol,
@@ -143,9 +144,9 @@ class HistoricalDataService:
                 timeframe,
                 left,
                 right,
-                force_full_sessions=force_full_m15_sessions,
+                force_full_sessions=force_full_sessions,
                 verification_symbol=(
-                    verification_symbol if force_full_m15_sessions else None
+                    verification_symbol if force_full_sessions else None
                 ),
             )
             for instrument, left, right in segments
@@ -350,9 +351,10 @@ class HistoricalDataService:
                 remaining_chunk = _missing_session_ranges(expected_chunk, stored_chunk)
                 if remaining_chunk:
                     compact = ",".join(
-                        day.isoformat()
-                        for chunk in remaining_chunk
-                        for day in chunk
+                        left_day.isoformat()
+                        if left_day == right_day
+                        else f"{left_day.isoformat()}..{right_day.isoformat()}"
+                        for left_day, right_day in remaining_chunk[:10]
                     )
                     raise HistoricalDataIncompleteError(
                         f"full-session verification remains incomplete for "
@@ -401,7 +403,12 @@ class HistoricalDataService:
 
 
 def _verification_symbol(symbol: str, timeframe: str, *, is_root: bool) -> str:
-    if timeframe.upper() == "M15":
+    tf = timeframe.upper()
+    if tf == "D1":
+        return f"{symbol}#{D1_SESSION_VERIFICATION_VERSION}"
+    if tf == "H1":
+        return f"{symbol}#{H1_FULL_VERIFICATION_VERSION}"
+    if tf == "M15":
         return f"{symbol}#{M15_FULL_VERIFICATION_VERSION}"
     if is_root:
         return f"{symbol}#{ROLLING_HISTORY_VERIFICATION_VERSION}"
@@ -438,13 +445,13 @@ def _bounded_missing_ranges(
     timeframe: str,
 ) -> tuple[tuple[date, date], ...]:
     ranges = _missing_session_ranges(expected_sessions, stored_trade_dates)
-    if timeframe.upper() != "M15":
+    if timeframe.upper() not in FULL_SESSION_TIMEFRAMES:
         return ranges
     bounded: list[tuple[date, date]] = []
     for left, right in ranges:
         missing_days = [day for day in expected_sessions if left <= day <= right]
-        for index in range(0, len(missing_days), M15_MAX_SESSIONS_PER_FETCH):
-            chunk = missing_days[index : index + M15_MAX_SESSIONS_PER_FETCH]
+        for index in range(0, len(missing_days), INTRADAY_MAX_SESSIONS_PER_FETCH):
+            chunk = missing_days[index : index + INTRADAY_MAX_SESSIONS_PER_FETCH]
             if chunk:
                 bounded.append((chunk[0], chunk[-1]))
     return tuple(bounded)
