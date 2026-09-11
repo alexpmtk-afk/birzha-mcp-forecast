@@ -28,7 +28,9 @@ from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 RETRY_DELAYS = (0, 5, 15)
 TRADESTATS_EXPECTED_SYMBOLS = frozenset({"SBER", "Si", "BR", "GOLD"})
 FUTOI_EXPECTED_SYMBOLS = frozenset({"Si", "BR", "GOLD"})
-DEFAULT_SPLIT_DATE = "2025-10-01"
+DEFAULT_VALIDATION_START = "2021-01-01"
+DEFAULT_SPLIT_DATE = "2022-12-31"
+DEFAULT_VALIDATION_END = "2024-12-31"
 DEFAULT_MAX_POINTS = 80
 MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
 
@@ -157,9 +159,9 @@ def main() -> int:
         description="Prepare exactly the YDB history required by six-market validation"
     )
     parser.add_argument("--connection-string", required=True)
-    parser.add_argument("--validation-start", default="2025-01-01")
+    parser.add_argument("--validation-start", default=DEFAULT_VALIDATION_START)
     parser.add_argument("--split-date", default=DEFAULT_SPLIT_DATE)
-    parser.add_argument("--validation-end", default="2026-05-31")
+    parser.add_argument("--validation-end", default=DEFAULT_VALIDATION_END)
     parser.add_argument("--step-sessions", type=int, default=5)
     parser.add_argument("--max-points", type=int, default=DEFAULT_MAX_POINTS)
     parser.add_argument(
@@ -215,6 +217,7 @@ def main() -> int:
                 price_failures.append(payload)
 
         base_artifact: dict[str, object] = {
+            "validation_protocol": "M23_HISTORICAL_GOVERNED_V1",
             "validation_start": args.validation_start,
             "split_date": args.split_date,
             "validation_end": args.validation_end,
