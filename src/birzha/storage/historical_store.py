@@ -49,6 +49,10 @@ class HistoricalCandleStore(Protocol):
 
     def stored_sessions(self, symbol: str, from_date: str, till_date: str) -> tuple[str, ...]: ...
 
+    def stored_session_contracts(
+        self, symbol: str, from_date: str, till_date: str
+    ) -> tuple[tuple[str, str], ...]: ...
+
     def stored_session_secids(self, symbol: str, trade_date: str) -> tuple[str, ...]: ...
 
     def stored_instrument(self, secid: str) -> Instrument | None: ...
@@ -203,6 +207,16 @@ class DuckDBHistoricalCandleStore:
                 [symbol, from_date[:10], till_date[:10]],
             ).fetchall()
         return tuple(str(row[0]) for row in rows)
+
+    def stored_session_contracts(
+        self, symbol: str, from_date: str, till_date: str
+    ) -> tuple[tuple[str, str], ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT trade_date, secid FROM historical_sessions WHERE symbol=? AND trade_date>=? AND trade_date<=? ORDER BY trade_date, secid",
+                [symbol, from_date[:10], till_date[:10]],
+            ).fetchall()
+        return tuple((str(row[0]), str(row[1])) for row in rows)
 
     def stored_session_secids(self, symbol: str, trade_date: str) -> tuple[str, ...]:
         with self._lock:
