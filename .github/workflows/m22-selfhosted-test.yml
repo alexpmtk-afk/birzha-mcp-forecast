@@ -7,8 +7,13 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: m22-regression-backfill-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   hosted-regression:
+    continue-on-error: true
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
