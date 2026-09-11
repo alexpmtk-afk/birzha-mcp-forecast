@@ -37,7 +37,7 @@ class ModelCalibrationReport:
     holdout_end: str
     selected: ForecastParameters
     candidates: tuple[CalibrationCandidateResult, ...]
-    holdout: ModelAcceptanceReport
+    holdout: ModelAcceptanceReport | None
     status: str
 
     def to_dict(self) -> dict[str, object]:
@@ -48,7 +48,8 @@ class ModelCalibrationReport:
             "holdout_end": self.holdout_end,
             "selected": self.selected.to_dict(),
             "candidates": [item.to_dict() for item in self.candidates],
-            "holdout": self.holdout.to_dict(),
+            "holdout": self.holdout.to_dict() if self.holdout is not None else None,
+            "holdout_evaluated": self.holdout is not None,
             "status": self.status,
         }
 
@@ -90,6 +91,19 @@ class ModelCalibrationService:
             results.append(CalibrationCandidateResult(parameters, _objective(report), report))
         ranked = tuple(sorted(results, key=_single_candidate_rank, reverse=True))
         selected = ranked[0].parameters
+        development = ranked[0].development
+        if development.status != "ACCEPTED":
+            return ModelCalibrationReport(
+                symbol=symbol,
+                development_start=development_start,
+                split_date=split_date,
+                holdout_end=holdout_end,
+                selected=selected,
+                candidates=ranked,
+                holdout=None,
+                status=development.status,
+            )
+
         holdout = self._acceptance_for(selected).assess(
             symbol,
             start_date=holdout_start,
@@ -97,13 +111,6 @@ class ModelCalibrationService:
             step_sessions=step_sessions,
             max_points=max_points,
         )
-        development = ranked[0].development
-        if development.status == "ACCEPTED" and holdout.status == "ACCEPTED":
-            status = "ACCEPTED"
-        elif holdout.status in {"FAILED", "INSUFFICIENT_SAMPLE"}:
-            status = holdout.status
-        else:
-            status = "REJECTED"
         return ModelCalibrationReport(
             symbol=symbol,
             development_start=development_start,
@@ -112,7 +119,7 @@ class ModelCalibrationService:
             selected=selected,
             candidates=ranked,
             holdout=holdout,
-            status=status,
+            status=holdout.status,
         )
 
     def _acceptance_for(self, parameters: ForecastParameters) -> ModelAcceptanceService:
@@ -194,19 +201,24 @@ class MultiSymbolCalibrationReport:
             "selected": self.selected.to_dict(),
             "candidates": [item.to_dict() for item in self.candidates],
             "holdout": [item.to_dict() for item in self.holdout],
+            "holdout_evaluated": bool(self.holdout),
             "status": self.status,
         }
 
 
 def _multi_candidate_rank(
     item: MultiSymbolCandidateResult,
-) -> tuple[int, int, int, float, str]:
+) -> tuple[int, int, int, int, float, str]:
     statuses = tuple(report.status for report in item.development)
     accepted_count = sum(status == "ACCEPTED" for status in statuses)
     all_accepted = int(accepted_count == len(statuses))
+    fully_evaluated = int(
+        all(status in {"ACCEPTED", "REJECTED"} for status in statuses)
+    )
     worst_status = min((_status_rank(status) for status in statuses), default=0)
     return (
         all_accepted,
+        fully_evaluated,
         accepted_count,
         worst_status,
         item.objective,
@@ -253,6 +265,34 @@ def calibrate_across_symbols(
 
     ranked = tuple(sorted(ranked_items, key=_multi_candidate_rank, reverse=True))
     selected = ranked[0].parameters
+    selected_development = ranked[0].development
+    development_statuses = tuple(item.status for item in selected_development)
+    if any(
+        status in {"FAILED", "INSUFFICIENT_SAMPLE"}
+        for status in development_statuses
+    ):
+        return MultiSymbolCalibrationReport(
+            symbols=symbols,
+            development_start=development_start,
+            split_date=split_date,
+            holdout_end=holdout_end,
+            selected=selected,
+            candidates=ranked,
+            holdout=(),
+            status="INSUFFICIENT_OR_FAILED",
+        )
+    if not all(status == "ACCEPTED" for status in development_statuses):
+        return MultiSymbolCalibrationReport(
+            symbols=symbols,
+            development_start=development_start,
+            split_date=split_date,
+            holdout_end=holdout_end,
+            selected=selected,
+            candidates=ranked,
+            holdout=(),
+            status="REJECTED",
+        )
+
     holdout_assessor = service._acceptance_for(selected)
     holdout = tuple(
         holdout_assessor.assess(
@@ -264,11 +304,11 @@ def calibrate_across_symbols(
         )
         for symbol in symbols
     )
-    development_ok = all(item.status == "ACCEPTED" for item in ranked[0].development)
-    holdout_ok = all(item.status == "ACCEPTED" for item in holdout)
-    if development_ok and holdout_ok:
+    if all(item.status == "ACCEPTED" for item in holdout):
         status = "ACCEPTED"
-    elif any(item.status in {"FAILED", "INSUFFICIENT_SAMPLE"} for item in holdout):
+    elif any(
+        item.status in {"FAILED", "INSUFFICIENT_SAMPLE"} for item in holdout
+    ):
         status = "INSUFFICIENT_OR_FAILED"
     else:
         status = "REJECTED"
