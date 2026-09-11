@@ -43,7 +43,7 @@ def main() -> int:
 
     driver = ydb.Driver(
         connection_string=args.connection_string,
-        credentials=ydb.AuthTokenCredentials(_token()),
+        credentials=ydb.AccessTokenCredentials(_token()),
     )
     driver.wait(timeout=15, fail_fast=True)
     pool = ydb.QuerySessionPool(driver)
