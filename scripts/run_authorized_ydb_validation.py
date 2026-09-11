@@ -11,7 +11,7 @@ import ydb
 
 from birzha.application.calibration import ModelCalibrationService, calibrate_across_symbols
 from birzha.application.flow import MarketFlowService
-from birzha.application.forecast import ForecastService
+from birzha.application.forecast import ENGINE_VERSION, ForecastService
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.market_data import MarketDataService
@@ -91,6 +91,7 @@ def _period_capacity(
 def _model_fingerprint(parameters: object, *, development_start: str, split_date: str) -> str:
     payload = {
         "validation_protocol": VALIDATION_PROTOCOL,
+        "engine_version": ENGINE_VERSION,
         "symbols": list(CORE_VALIDATION_SYMBOLS),
         "development_start": development_start,
         "split_date": split_date,
@@ -154,6 +155,7 @@ def main() -> int:
         )
         artifact: dict[str, object] = {
             "validation_protocol": VALIDATION_PROTOCOL,
+            "engine_version": ENGINE_VERSION,
             "development_start": args.development_start,
             "split_date": args.split_date,
             "holdout_start": holdout_start,
@@ -270,6 +272,7 @@ def main() -> int:
                 model_fingerprint=fingerprint,
             )
             claimed.update(claim.to_dict())
+            claimed["engine_version"] = ENGINE_VERSION
 
         try:
             report = calibrate_across_symbols(
