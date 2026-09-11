@@ -48,7 +48,9 @@ The pipeline is fail-closed and deliberately staged:
 10. Statistical windows do not overlap. With T0 every 5 sessions, 5-session results use every observation, 10-session results every second, and 20-session results every fourth. Reports preserve raw count and sampling stride.
 11. Candidate selection is development-only and acceptance-first. A rejected candidate cannot beat an accepted candidate merely through a better average score.
 12. Holdout stays sealed until the selected configuration passes development. If development is rejected, failed, or insufficient, `holdout_evaluated=false`.
-13. `REJECTED` and `INSUFFICIENT_DATA` are valid scientific results, not software failures.
+13. Immediately before the first holdout read, the period is durably claimed in YDB. The claim stores the holdout dates, protocol, selected-model fingerprint and timestamp. A later run on the same or overlapping holdout is blocked as `HOLDOUT_ALREADY_CONSUMED`.
+14. The holdout claim is intentionally written before performance is read. A crash after claiming still burns the holdout rather than allowing a second look.
+15. `REJECTED`, `INSUFFICIENT_DATA` and `HOLDOUT_ALREADY_CONSUMED` are governed scientific/operational outcomes, not reasons to weaken the model criteria.
 
 ## Statistical gates
 
@@ -65,7 +67,7 @@ The old 24–60 forecast-point limits were incompatible with 20 independent obse
 The pipeline writes up to three JSON artifacts:
 
 - `artifacts/ydb_validation_data_preparation.json` — D1 calendar phase, exact session capacity, price/flow preparation, readiness and warnings;
-- `artifacts/ydb_model_validation.json` — protocol identity, exact development/holdout capacity, selected parameters when evaluated, calibration/holdout results, and `model_status`;
+- `artifacts/ydb_model_validation.json` — protocol identity, exact development/holdout capacity, selected parameters when evaluated, calibration/holdout results, `model_status`, and the durable holdout-claim evidence when the holdout is opened;
 - `artifacts/ydb_model_pipeline.json` — top-level execution summary.
 
 Important statuses:
@@ -73,7 +75,8 @@ Important statuses:
 - `ACCEPTED`;
 - `REJECTED`;
 - `INSUFFICIENT_DATA` / `INSUFFICIENT_SAMPLE`;
-- `NOT_EVALUATED` when mandatory data is not ready.
+- `HOLDOUT_ALREADY_CONSUMED`;
+- `NOT_EVALUATED` when mandatory data is not ready or a governed holdout is already spent.
 
 ## Data verification semantics
 
@@ -99,6 +102,7 @@ Important statuses:
 - Empty resolver/contract segments and incomplete expected sessions fail closed.
 - Development and holdout never share the split date.
 - Holdout is never opened merely to see whether a rejected development model would have worked.
+- A consumed or overlapping holdout is never reused, even under a different model fingerprint or protocol run.
 - Acceptance thresholds are never relaxed to force PASS.
 
 ## Promotion gate
@@ -113,5 +117,6 @@ Do not merge/promote M23 until all are true:
 - optional flow warnings/errors are reviewed;
 - six-market development is computed from frozen prepared data;
 - holdout is opened only if development passes;
+- the durable one-shot holdout claim is proven against real YDB;
 - final evidence is reviewed without relabelling rejection as software failure;
 - execution-channel failures are reported precisely and never as a generic `Windows offline` status.
