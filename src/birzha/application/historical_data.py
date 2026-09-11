@@ -13,6 +13,7 @@ from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCov
 
 M15_MAX_SESSIONS_PER_FETCH = 3
 M15_FULL_VERIFICATION_VERSION = "M15_FULL_V1"
+ROLLING_HISTORY_VERIFICATION_VERSION = "ROLLING_HISTORY_V1"
 
 
 class HistoricalDataIncompleteError(RuntimeError):
@@ -100,39 +101,19 @@ class HistoricalDataService:
             else None
         )
         is_direct = direct is not None and direct.asset_class != "unknown"
-
-        # M15 historically used date-level presence as a gap test.  A day with
-        # one stale candle could therefore look complete even when most 15m
-        # buckets were absent.  Real services now use a versioned verification
-        # marker that can only be written after every expected exchange session
-        # has been fetched as a complete bounded session range.
-        verification_symbol = _verification_symbol(symbol, timeframe) if resolver_known else symbol
-        m15_full_verified = (
-            timeframe == "M15"
-            and resolver_known
-            and self.store.is_verified(
-                verification_symbol, timeframe, from_date[:10], till_date[:10]
-            )
+        verification_symbol = (
+            _verification_symbol(symbol, timeframe, is_root=is_root)
+            if resolver_known
+            else symbol
         )
-        if m15_full_verified:
-            return HistoricalSyncResult(
-                symbol=symbol,
-                timeframe=timeframe,
-                requested_from=from_date,
-                requested_till=till_date,
-                contracts=(),
-                reused_verified_range=True,
-            )
 
-        # Root futures must re-resolve their historical contract timeline. Older
-        # root-level verified markers cannot prove that every rollover contract
-        # was actually stored, so they are intentionally not trusted here.
-        # Minimal test/custom market-data stubs without resolver capability keep
-        # the legacy verified-range shortcut because they cannot classify roots.
-        trust_verified = (is_direct and not is_root) or not resolver_known
-        if timeframe != "M15" and trust_verified:
+        # Real services may only reuse a range after the current verification
+        # generation proves the relevant semantics.  This deliberately ignores
+        # old root-level markers and old M15 date-only markers.
+        can_reuse_verified = not resolver_known or is_direct or is_root
+        if can_reuse_verified:
             price_verified = self.store.is_verified(
-                symbol, timeframe, from_date[:10], till_date[:10]
+                verification_symbol, timeframe, from_date[:10], till_date[:10]
             )
             sessions_verified = (
                 timeframe != "D1"
@@ -149,18 +130,12 @@ class HistoricalDataService:
                     contracts=(),
                     reused_verified_range=True,
                 )
-        elif timeframe == "M15" and not resolver_known:
-            if self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10]):
-                return HistoricalSyncResult(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    requested_from=from_date,
-                    requested_till=till_date,
-                    contracts=(),
-                    reused_verified_range=True,
-                )
 
         segments = self._segments(symbol, start, finish)
+        # M15 historically used date-level presence as a gap test.  A day with
+        # one stale candle could therefore look complete even when most 15m
+        # buckets were absent.  Until M15_FULL_V1 exists, fetch every expected
+        # session as a complete bounded range. UPSERT keeps this idempotent.
         force_full_m15_sessions = timeframe == "M15" and resolver_known
         results = tuple(
             self._sync_contract(
@@ -174,7 +149,7 @@ class HistoricalDataService:
             for instrument, left, right in segments
         )
         self.store.mark_verified(symbol, timeframe, from_date[:10], till_date[:10])
-        if force_full_m15_sessions:
+        if verification_symbol != symbol:
             self.store.mark_verified(
                 verification_symbol, timeframe, from_date[:10], till_date[:10]
             )
@@ -187,6 +162,33 @@ class HistoricalDataService:
             requested_till=till_date,
             contracts=results,
         )
+
+    def is_range_verified(
+        self,
+        symbol: str,
+        *,
+        timeframe: str,
+        from_date: str,
+        till_date: str,
+    ) -> bool:
+        """Pure readiness check; never fetch or mutate market history."""
+        timeframe = timeframe.upper()
+        resolver_known = hasattr(self.market_data, "direct_resolver")
+        is_root = is_futures_root_symbol(symbol)
+        verification_symbol = (
+            _verification_symbol(symbol, timeframe, is_root=is_root)
+            if resolver_known
+            else symbol
+        )
+        if not self.store.is_verified(
+            verification_symbol, timeframe, from_date[:10], till_date[:10]
+        ):
+            return False
+        if timeframe == "D1" and not self.store.is_session_range_verified(
+            symbol, from_date[:10], till_date[:10]
+        ):
+            return False
+        return True
 
     def sync_many(
         self, symbols: list[str], timeframes: list[str], *, from_date: str, till_date: str
@@ -355,9 +357,11 @@ class HistoricalDataService:
         )
 
 
-def _verification_symbol(symbol: str, timeframe: str) -> str:
+def _verification_symbol(symbol: str, timeframe: str, *, is_root: bool) -> str:
     if timeframe.upper() == "M15":
         return f"{symbol}#{M15_FULL_VERIFICATION_VERSION}"
+    if is_root:
+        return f"{symbol}#{ROLLING_HISTORY_VERIFICATION_VERSION}"
     return symbol
 
 
