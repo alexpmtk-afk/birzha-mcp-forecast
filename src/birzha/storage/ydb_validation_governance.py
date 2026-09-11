@@ -140,7 +140,7 @@ class YdbValidationGovernanceStore:
                     "$model_fingerprint": _utf8(claim.model_fingerprint),
                     "$consumed_at": _utf8(claim.consumed_at),
                 },
-                retry_settings=ydb.RetrySettings(idempotent=True),
+                retry_settings=ydb.RetrySettings(idempotent=False),
             )
         except Exception:
             existing = self.overlapping_claim(left, right)
