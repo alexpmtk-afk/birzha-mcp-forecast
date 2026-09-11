@@ -29,10 +29,11 @@ SI = Instrument(
 GOLD_DIRECT = Instrument(
     symbol="GOLD",
     secid="GOLD",
-    board="RFUD",
-    engine="futures",
-    market="forts",
-    asset_class="future",
+    board="TQTF",
+    engine="stock",
+    market="shares",
+    asset_class="equity",
+    name="ВИМ - Золото",
 )
 GOLD_FUTURE = Instrument(
     symbol="GOLD",
@@ -89,12 +90,15 @@ class _GoldProvider:
         return GOLD_FUTURE
 
 
-def test_gold_root_bypasses_colliding_exact_secid() -> None:
+def test_gold_root_bypasses_colliding_exact_stock_market_fund() -> None:
     provider = _GoldProvider()
     service = MarketDataService(
         provider=provider,  # type: ignore[arg-type]
         direct_resolver=_AmbiguousGoldDirectResolver(),  # type: ignore[arg-type]
     )
+
+    assert GOLD_DIRECT.engine == "stock"
+    assert GOLD_DIRECT.asset_class == "equity"
 
     resolved = service.resolve("GOLD")
 
