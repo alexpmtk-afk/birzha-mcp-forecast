@@ -93,48 +93,40 @@ class HistoricalDataService:
             raise ValueError("till_date must be on or after from_date")
 
         resolver_known = hasattr(self.market_data, "direct_resolver")
-        direct_resolver = getattr(self.market_data, "direct_resolver", None)
         is_root = is_futures_root_symbol(symbol)
-        direct = (
-            direct_resolver.resolve(symbol)
-            if direct_resolver is not None and not is_root
-            else None
-        )
-        is_direct = direct is not None and direct.asset_class != "unknown"
         verification_symbol = (
             _verification_symbol(symbol, timeframe, is_root=is_root)
             if resolver_known
             else symbol
         )
 
-        # Real services may only reuse a range after the current verification
-        # generation proves the relevant semantics.  This deliberately ignores
-        # old root-level markers and old M15 date-only markers.
-        can_reuse_verified = not resolver_known or is_direct or is_root
-        if can_reuse_verified:
-            price_verified = self.store.is_verified(
-                verification_symbol, timeframe, from_date[:10], till_date[:10]
+        # Store-first: a verification marker created by the current semantics
+        # is sufficient to reuse history without any resolver/network call.
+        # Old rolling-root and old date-only M15 markers use different keys and
+        # therefore cannot accidentally satisfy this check.
+        price_verified = self.store.is_verified(
+            verification_symbol, timeframe, from_date[:10], till_date[:10]
+        )
+        sessions_verified = (
+            timeframe != "D1"
+            or self.store.is_session_range_verified(
+                symbol, from_date[:10], till_date[:10]
             )
-            sessions_verified = (
-                timeframe != "D1"
-                or self.store.is_session_range_verified(
-                    symbol, from_date[:10], till_date[:10]
-                )
+        )
+        if price_verified and sessions_verified:
+            return HistoricalSyncResult(
+                symbol=symbol,
+                timeframe=timeframe,
+                requested_from=from_date,
+                requested_till=till_date,
+                contracts=(),
+                reused_verified_range=True,
             )
-            if price_verified and sessions_verified:
-                return HistoricalSyncResult(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    requested_from=from_date,
-                    requested_till=till_date,
-                    contracts=(),
-                    reused_verified_range=True,
-                )
 
         segments = self._segments(symbol, start, finish)
         # M15 historically used date-level presence as a gap test.  A day with
         # one stale candle could therefore look complete even when most 15m
-        # buckets were absent.  Until M15_FULL_V1 exists, fetch every expected
+        # buckets were absent. Until M15_FULL_V1 exists, fetch every expected
         # session as a complete bounded range. UPSERT keeps this idempotent.
         force_full_m15_sessions = timeframe == "M15" and resolver_known
         results = tuple(
