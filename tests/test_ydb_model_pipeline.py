@@ -24,7 +24,16 @@ LEGACY_SHORT_PERIOD_ARGS = [
 ]
 
 
-def test_pipeline_does_not_validate_when_readiness_is_not_ready(monkeypatch) -> None:
+def _argv(*extra: str) -> list[str]:
+    return [
+        "pipeline",
+        "--connection-string",
+        "grpcs://example.invalid/db",
+        *extra,
+    ]
+
+
+def test_pipeline_preserves_data_not_ready_reason(monkeypatch) -> None:
     calls: list[str] = []
     removed: list[str] = []
     written: list[dict[str, object]] = []
@@ -41,22 +50,45 @@ def test_pipeline_does_not_validate_when_readiness_is_not_ready(monkeypatch) -> 
     monkeypatch.setattr(pipeline, "_read", fake_read)
     monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "pipeline",
-            "--connection-string",
-            "grpcs://example.invalid/db",
-            *CALENDAR_FEASIBLE_TEST_ARGS,
-        ],
-    )
+    monkeypatch.setattr(sys, "argv", _argv(*CALENDAR_FEASIBLE_TEST_ARGS))
 
     assert pipeline.main() == 2
     assert calls == ["prepare"]
     assert len(removed) == 1
     assert removed[0].endswith("ydb_validation_data_preparation.json")
-    assert written[-1]["status"] == "PREPARE_NOT_READY"
+    assert written[-1]["status"] == "DATA_NOT_READY"
+    assert written[-1]["validation"] == {"status": "NOT_RUN"}
+
+
+def test_pipeline_preserves_calendar_not_ready_even_when_prepare_exit_is_error(monkeypatch) -> None:
+    calls: list[str] = []
+    written: list[dict[str, object]] = []
+
+    def fake_run(command, *, label):
+        calls.append(label)
+        return {"label": label, "returncode": 2, "status": "ERROR"}
+
+    def fake_read(path):
+        assert path.endswith("ydb_validation_data_preparation.json")
+        return {
+            "status": "CALENDAR_NOT_READY",
+            "readiness": {
+                "status": "NOT_EVALUATED",
+                "reason": "D1 calendar preparation failed",
+            },
+            "price_operation_failures": [{"label": "price:GOLD:D1"}],
+        }
+
+    monkeypatch.setattr(pipeline, "_run", fake_run)
+    monkeypatch.setattr(pipeline, "_read", fake_read)
+    monkeypatch.setattr(pipeline, "_remove_existing", lambda path: None)
+    monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
+    monkeypatch.setattr(sys, "argv", _argv(*CALENDAR_FEASIBLE_TEST_ARGS))
+
+    assert pipeline.main() == 2
+    assert calls == ["prepare"]
+    assert written[-1]["status"] == "CALENDAR_NOT_READY"
+    assert written[-1]["price_operation_failures"] == [{"label": "price:GOLD:D1"}]
     assert written[-1]["validation"] == {"status": "NOT_RUN"}
 
 
@@ -92,16 +124,7 @@ def test_pipeline_stops_when_real_session_capacity_is_insufficient(monkeypatch) 
     monkeypatch.setattr(pipeline, "_read", fake_read)
     monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "pipeline",
-            "--connection-string",
-            "grpcs://example.invalid/db",
-            *CALENDAR_FEASIBLE_TEST_ARGS,
-        ],
-    )
+    monkeypatch.setattr(sys, "argv", _argv(*CALENDAR_FEASIBLE_TEST_ARGS))
 
     assert pipeline.main() == 0
     assert calls == ["prepare"]
@@ -142,16 +165,7 @@ def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> 
     monkeypatch.setattr(pipeline, "_read", fake_read)
     monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "pipeline",
-            "--connection-string",
-            "grpcs://example.invalid/db",
-            *CALENDAR_FEASIBLE_TEST_ARGS,
-        ],
-    )
+    monkeypatch.setattr(sys, "argv", _argv(*CALENDAR_FEASIBLE_TEST_ARGS))
 
     assert pipeline.main() == 0
     assert calls == ["prepare", "validate"]
@@ -163,9 +177,7 @@ def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> 
     assert written[-1]["holdout_evaluated"] is True
 
 
-def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample(
-    monkeypatch,
-) -> None:
+def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample(monkeypatch) -> None:
     calls: list[str] = []
     removed: list[str] = []
     written: list[dict[str, object]] = []
@@ -177,16 +189,7 @@ def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample
     monkeypatch.setattr(pipeline, "_run", fake_run)
     monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "pipeline",
-            "--connection-string",
-            "grpcs://example.invalid/db",
-            *LEGACY_SHORT_PERIOD_ARGS,
-        ],
-    )
+    monkeypatch.setattr(sys, "argv", _argv(*LEGACY_SHORT_PERIOD_ARGS))
 
     assert pipeline.main() == 0
     assert calls == []
@@ -202,6 +205,7 @@ def test_pipeline_stops_before_prepare_when_dates_cannot_support_required_sample
 
 
 def test_governed_defaults_are_not_the_consumed_legacy_window() -> None:
+    assert pipeline.VALIDATION_PROTOCOL == "M23_HISTORICAL_GOVERNED_V1"
     assert pipeline.DEFAULT_VALIDATION_START == "2021-01-01"
     assert pipeline.DEFAULT_SPLIT_DATE == "2022-12-31"
     assert pipeline.DEFAULT_VALIDATION_END == "2024-12-31"
