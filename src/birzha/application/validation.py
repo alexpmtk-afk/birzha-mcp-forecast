@@ -11,7 +11,7 @@ from birzha.application.historical_data import HistoricalDataService
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.stored_market_data import StoredMarketDataView
-from birzha.application.market_data import MarketDataService
+from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.outcome import OutcomeService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.forecast import ForecastRecord
@@ -157,7 +157,7 @@ class WalkForwardValidator:
         """Build a real-session calendar from exact securities, including rolls."""
 
         resolver = self.market_data.direct_resolver
-        if resolver is not None:
+        if resolver is not None and not is_futures_root_symbol(symbol):
             direct = resolver.resolve(symbol)
             if direct is not None and direct.asset_class != "unknown":
                 return self.calendar.dates(
