@@ -387,13 +387,8 @@ class HistoricalDataService:
             fetched += series.count
             self.store.upsert_series(series)
             expected_chunk = tuple(day for day in expected if left <= day <= right)
-            stored_chunk = self.store.stored_trade_dates(
-                instrument.secid,
-                timeframe,
-                left.isoformat(),
-                right.isoformat(),
-            )
-            if not _missing_session_ranges(expected_chunk, stored_chunk):
+            response_dates = _series_trade_dates(series)
+            if not _missing_session_ranges(expected_chunk, response_dates):
                 self.store.mark_verified(
                     verification_symbol,
                     timeframe,
@@ -465,13 +460,10 @@ class HistoricalDataService:
             if force_full_sessions:
                 assert verification_symbol is not None
                 expected_chunk = tuple(day for day in expected if left <= day <= right)
-                stored_chunk = self.store.stored_trade_dates(
-                    instrument.secid,
-                    timeframe,
-                    left.isoformat(),
-                    right.isoformat(),
+                response_dates = _series_trade_dates(series)
+                remaining_chunk = _missing_session_ranges(
+                    expected_chunk, response_dates
                 )
-                remaining_chunk = _missing_session_ranges(expected_chunk, stored_chunk)
                 if remaining_chunk:
                     compact = ",".join(
                         left_day.isoformat()
@@ -480,7 +472,7 @@ class HistoricalDataService:
                         for left_day, right_day in remaining_chunk[:10]
                     )
                     raise HistoricalDataIncompleteError(
-                        f"full-session verification remains incomplete for "
+                        f"full-session provider response incomplete for "
                         f"{instrument.secid} {timeframe}: {compact}"
                     )
                 self.store.mark_verified(
@@ -539,6 +531,18 @@ def _verification_symbol(symbol: str, timeframe: str, *, is_root: bool) -> str:
     if not versions:
         return symbol
     return f"{symbol}#" + "#".join(versions)
+
+
+def _series_trade_dates(series: CandleSeries) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                candle.begin[:10]
+                for candle in series.candles
+                if len(candle.begin) >= 10
+            }
+        )
+    )
 
 
 def _missing_session_ranges(
