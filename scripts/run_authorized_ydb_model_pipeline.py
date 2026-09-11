@@ -10,9 +10,9 @@ from pathlib import Path
 from birzha.application.validation import independent_sample_capacity
 
 
-DEFAULT_VALIDATION_START = "2025-01-01"
-DEFAULT_SPLIT_DATE = "2025-10-01"
-DEFAULT_VALIDATION_END = "2026-05-31"
+DEFAULT_VALIDATION_START = "2021-01-01"
+DEFAULT_SPLIT_DATE = "2022-12-31"
+DEFAULT_VALIDATION_END = "2024-12-31"
 DEFAULT_MAX_POINTS = 80
 MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
 
@@ -136,6 +136,7 @@ def main() -> int:
     impossible = {period: values for period, values in impossible.items() if values}
 
     artifact: dict[str, object] = {
+        "validation_protocol": "M23_HISTORICAL_GOVERNED_V1",
         "validation_start": args.validation_start,
         "split_date": args.split_date,
         "validation_end": args.validation_end,
