@@ -30,6 +30,14 @@ def _write(path: str, payload: dict[str, object]) -> None:
     )
 
 
+def _remove_existing(path: str) -> None:
+    target = Path(path)
+    if target.exists():
+        if not target.is_file():
+            raise RuntimeError(f"artifact path exists but is not a file: {path}")
+        target.unlink()
+
+
 def _read(path: str) -> dict[str, object]:
     target = Path(path)
     if not target.is_file():
@@ -76,6 +84,7 @@ def main() -> int:
 
     python = sys.executable
     scripts_dir = Path(__file__).resolve().parent
+    _remove_existing(args.prepare_artifact)
     prepare = _run(
         [
             python,
@@ -129,6 +138,7 @@ def main() -> int:
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
         return 2
 
+    _remove_existing(args.validation_artifact)
     validation = _run(
         [
             python,
