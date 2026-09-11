@@ -102,6 +102,7 @@ def main() -> int:
         if readiness.status != "READY":
             artifact["run_status"] = "DATA_NOT_READY"
             artifact["model_status"] = "NOT_EVALUATED"
+            artifact["holdout_evaluated"] = False
             _write_artifact(args.artifact, artifact)
             print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
             return 2
@@ -138,9 +139,14 @@ def main() -> int:
             step_sessions=args.step_sessions,
             max_points=args.max_points,
         )
+        selected_development = report.candidates[0].development
         artifact["run_status"] = "COMPUTED"
         artifact["model_status"] = report.status
         artifact["selected_parameters"] = report.selected.to_dict()
+        artifact["development_statuses"] = {
+            item.symbol: item.status for item in selected_development
+        }
+        artifact["holdout_evaluated"] = bool(report.holdout)
         artifact["holdout_statuses"] = {
             item.symbol: item.status for item in report.holdout
         }
