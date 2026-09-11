@@ -97,6 +97,7 @@ def main() -> int:
             "max_points": args.max_points,
             "symbols": list(CORE_VALIDATION_SYMBOLS),
             "readiness": readiness.to_dict(),
+            "data_mode": "FROZEN_PREPARED_YDB",
         }
         if readiness.status != "READY":
             artifact["run_status"] = "DATA_NOT_READY"
@@ -110,6 +111,7 @@ def main() -> int:
             market_data=market,
             analytics=analytics,
             store=YdbHistoricalFlowStore(pool),
+            read_only=True,
         )
         flow = MarketFlowService(
             market_data=market,
@@ -124,6 +126,7 @@ def main() -> int:
             calendar=MoexTradingCalendar(market.provider),
             history=history,
             historical_flow=historical_flow,
+            prepare_history_before_run=False,
         )
         calibration = ModelCalibrationService(validator=validator)
         report = calibrate_across_symbols(
