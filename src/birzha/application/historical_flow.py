@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.domain.market import Instrument
@@ -12,6 +12,7 @@ from birzha.storage.historical_flow_store import HistoricalFlowStore
 
 
 TRADESTATS_ASSET_CLASSES = frozenset({"future", "equity", "fx"})
+FLOW_MAX_CALENDAR_DAYS_PER_FETCH = 60
 
 
 @dataclass(slots=True)
@@ -24,8 +25,8 @@ class HistoricalFlowDataService:
         self, instrument: Instrument, *, from_date: str, till_date: str
     ) -> list[dict[str, object]]:
         # ALGOPACK TradeStats is optional context. Unsupported asset classes
-        # (notably broad indices) must degrade to an empty feed, exactly like
-        # the live MarketFlowService, rather than blocking price validation.
+        # (notably broad indices) degrade to an empty feed rather than blocking
+        # the mandatory price path.
         if instrument.asset_class not in TRADESTATS_ASSET_CLASSES:
             return []
         dataset = "TRADESTATS"
@@ -61,26 +62,14 @@ class HistoricalFlowDataService:
         segments = self._segments(symbol, start, finish)
         trade_count = 0
         for instrument, left, right in segments:
-            trade_count += len(
-                self.tradestats(
-                    instrument,
-                    from_date=left.isoformat(),
-                    till_date=right.isoformat(),
-                )
-            )
+            trade_count += len(self._tradestats_bounded(instrument, left, right))
         futoi_count = 0
         future = next(
             (item[0] for item in reversed(segments) if item[0].asset_class == "future"),
             None,
         )
         if future is not None:
-            futoi_count = len(
-                self.futoi(
-                    future,
-                    from_date=start.isoformat(),
-                    till_date=finish.isoformat(),
-                )
-            )
+            futoi_count = len(self._futoi_bounded(future, start, finish))
         return {
             "symbol": symbol,
             "from_date": start.isoformat(),
@@ -89,6 +78,34 @@ class HistoricalFlowDataService:
             "tradestats_rows": trade_count,
             "futoi_rows": futoi_count,
         }
+
+    def _tradestats_bounded(
+        self, instrument: Instrument, start: date, finish: date
+    ) -> list[dict[str, object]]:
+        if instrument.asset_class not in TRADESTATS_ASSET_CLASSES:
+            return []
+        dataset = "TRADESTATS"
+        key = instrument.secid
+        if self.store.is_verified(dataset, key, start.isoformat(), finish.isoformat()):
+            return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
+        for left, right in _bounded_date_ranges(start, finish):
+            self.tradestats(
+                instrument, from_date=left.isoformat(), till_date=right.isoformat()
+            )
+        self.store.mark_verified(dataset, key, start.isoformat(), finish.isoformat())
+        return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
+
+    def _futoi_bounded(
+        self, instrument: Instrument, start: date, finish: date
+    ) -> list[dict[str, object]]:
+        dataset = "FUTOI"
+        key = (instrument.root_symbol or instrument.symbol).strip()
+        if self.store.is_verified(dataset, key, start.isoformat(), finish.isoformat()):
+            return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
+        for left, right in _bounded_date_ranges(start, finish):
+            self.futoi(instrument, from_date=left.isoformat(), till_date=right.isoformat())
+        self.store.mark_verified(dataset, key, start.isoformat(), finish.isoformat())
+        return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
 
     def _segments(self, symbol: str, start: date, finish: date):
         direct = None
@@ -116,3 +133,16 @@ class HistoricalFlowDataService:
             right = day
         result.append((current, left, right))
         return tuple(result)
+
+
+def _bounded_date_ranges(start: date, finish: date) -> tuple[tuple[date, date], ...]:
+    ranges: list[tuple[date, date]] = []
+    cursor = start
+    while cursor <= finish:
+        right = min(
+            finish,
+            cursor + timedelta(days=FLOW_MAX_CALENDAR_DAYS_PER_FETCH - 1),
+        )
+        ranges.append((cursor, right))
+        cursor = right + timedelta(days=1)
+    return tuple(ranges)
