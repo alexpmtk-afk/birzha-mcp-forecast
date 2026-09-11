@@ -67,6 +67,18 @@ class ModelAcceptanceService:
             step_sessions=step_sessions,
             max_points=max_points,
         )
+        if development.status != "ACCEPTED":
+            return DevelopmentHoldoutReport(
+                symbol=symbol,
+                development_start=development_start,
+                development_end=split_date,
+                holdout_start=holdout_start,
+                holdout_end=holdout_end,
+                development=development,
+                holdout=None,
+                status=development.status,
+            )
+
         holdout = self.assess(
             symbol,
             start_date=holdout_start,
@@ -74,12 +86,6 @@ class ModelAcceptanceService:
             step_sessions=step_sessions,
             max_points=max_points,
         )
-        if holdout.status == "ACCEPTED" and development.status == "ACCEPTED":
-            status = "ACCEPTED"
-        elif holdout.status in {"FAILED", "INSUFFICIENT_SAMPLE"}:
-            status = holdout.status
-        else:
-            status = "REJECTED"
         return DevelopmentHoldoutReport(
             symbol=symbol,
             development_start=development_start,
@@ -88,7 +94,7 @@ class ModelAcceptanceService:
             holdout_end=holdout_end,
             development=development,
             holdout=holdout,
-            status=status,
+            status=holdout.status,
         )
 
 
