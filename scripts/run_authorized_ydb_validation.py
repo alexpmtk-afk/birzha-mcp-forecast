@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from datetime import date, timedelta
 from pathlib import Path
 
 import ydb
@@ -53,6 +54,43 @@ def _write_artifact(path: str, payload: dict[str, object]) -> None:
     )
 
 
+def _period_capacity(
+    history: HistoricalDataService,
+    *,
+    start_date: str,
+    end_date: str,
+    step_sessions: int,
+    max_points: int,
+) -> tuple[dict[str, object], dict[str, object]]:
+    capacity_by_symbol: dict[str, object] = {}
+    shortfall_by_symbol: dict[str, object] = {}
+    for symbol in CORE_VALIDATION_SYMBOLS:
+        sessions = history.session_dates(
+            symbol,
+            from_date=start_date,
+            till_date=end_date,
+        )
+        capacity = independent_sample_capacity(
+            len(sessions),
+            step_sessions=step_sessions,
+            max_points=max_points,
+        )
+        capacity_by_symbol[symbol] = {
+            "sessions": len(sessions),
+            "non_overlapping_observations": {
+                str(horizon): count for horizon, count in capacity.items()
+            },
+        }
+        missing = {
+            str(horizon): count
+            for horizon, count in capacity.items()
+            if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
+        }
+        if missing:
+            shortfall_by_symbol[symbol] = missing
+    return capacity_by_symbol, shortfall_by_symbol
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fail-closed six-market model validation against authorized YDB history"
@@ -70,6 +108,14 @@ def main() -> int:
 
     if not args.development_start < args.split_date < args.holdout_end:
         raise ValueError("expected development_start < split_date < holdout_end")
+    if args.step_sessions <= 0 or args.step_sessions > 50:
+        raise ValueError("step_sessions must be between 1 and 50")
+    if args.max_points <= 0 or args.max_points > 240:
+        raise ValueError("max_points must be between 1 and 240")
+
+    holdout_start = (
+        date.fromisoformat(args.split_date[:10]) + timedelta(days=1)
+    ).isoformat()
 
     driver = ydb.Driver(
         connection_string=args.connection_string,
@@ -97,6 +143,7 @@ def main() -> int:
         artifact: dict[str, object] = {
             "development_start": args.development_start,
             "split_date": args.split_date,
+            "holdout_start": holdout_start,
             "holdout_end": args.holdout_end,
             "step_sessions": args.step_sessions,
             "max_points": args.max_points,
@@ -113,40 +160,39 @@ def main() -> int:
             print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
             return 2
 
-        development_capacity: dict[str, object] = {}
-        insufficient_capacity: dict[str, object] = {}
-        for symbol in CORE_VALIDATION_SYMBOLS:
-            sessions = history.session_dates(
-                symbol,
-                from_date=args.development_start,
-                till_date=args.split_date,
-            )
-            capacity = independent_sample_capacity(
-                len(sessions),
-                step_sessions=args.step_sessions,
-                max_points=args.max_points,
-            )
-            development_capacity[symbol] = {
-                "sessions": len(sessions),
-                "non_overlapping_observations": {
-                    str(horizon): count for horizon, count in capacity.items()
-                },
-            }
-            missing = {
-                str(horizon): count
-                for horizon, count in capacity.items()
-                if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
-            }
-            if missing:
-                insufficient_capacity[symbol] = missing
-
+        development_capacity, development_shortfall = _period_capacity(
+            history,
+            start_date=args.development_start,
+            end_date=args.split_date,
+            step_sessions=args.step_sessions,
+            max_points=args.max_points,
+        )
+        holdout_capacity, holdout_shortfall = _period_capacity(
+            history,
+            start_date=holdout_start,
+            end_date=args.holdout_end,
+            step_sessions=args.step_sessions,
+            max_points=args.max_points,
+        )
         artifact["development_capacity"] = development_capacity
-        if insufficient_capacity:
+        artifact["holdout_capacity"] = holdout_capacity
+
+        capacity_shortfall: dict[str, object] = {}
+        if development_shortfall:
+            capacity_shortfall["development"] = development_shortfall
+        if holdout_shortfall:
+            capacity_shortfall["holdout"] = holdout_shortfall
+
+        if capacity_shortfall:
             artifact["run_status"] = "COMPUTED"
             artifact["model_status"] = "INSUFFICIENT_DATA"
-            artifact["capacity_shortfall"] = insufficient_capacity
+            artifact["capacity_shortfall"] = capacity_shortfall
             artifact["development_statuses"] = {
-                symbol: "INSUFFICIENT_SAMPLE"
+                symbol: (
+                    "INSUFFICIENT_SAMPLE"
+                    if symbol in development_shortfall
+                    else "NOT_EVALUATED"
+                )
                 for symbol in CORE_VALIDATION_SYMBOLS
             }
             artifact["holdout_evaluated"] = False
