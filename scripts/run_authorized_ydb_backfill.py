@@ -8,7 +8,7 @@ import time
 import ydb
 
 from birzha.application.historical_data import HistoricalDataService
-from birzha.application.market_data import MarketDataService
+from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
@@ -71,6 +71,15 @@ def main() -> int:
                             from_date=args.from_date,
                             till_date=args.till_date,
                         )
+                        if is_futures_root_symbol(symbol):
+                            empty_contracts = tuple(
+                                item.secid for item in result.contracts if item.stored_candles == 0
+                            )
+                            if empty_contracts:
+                                raise RuntimeError(
+                                    "rolling futures sync produced empty contract segments: "
+                                    + ",".join(empty_contracts)
+                                )
                     except Exception as exc:
                         event = {
                             "status": "RETRY" if attempt < len(RETRY_DELAYS) else "ERROR",
