@@ -35,6 +35,7 @@ class WalkForwardValidator:
     calendar: MoexTradingCalendar
     history: HistoricalDataService | None = None
     historical_flow: HistoricalFlowDataService | None = None
+    prepare_history_before_run: bool = True
 
     @classmethod
     def default(cls) -> "WalkForwardValidator":
@@ -67,7 +68,8 @@ class WalkForwardValidator:
         forecast_service = self.forecasts
         outcome_market = self.market_data
         if self.history is not None:
-            self._prepare_history(symbol, start=start, end=end)
+            if self.prepare_history_before_run:
+                self._prepare_history(symbol, start=start, end=end)
             stored = StoredMarketDataView(self.market_data, self.history)
             forecast_service = ForecastService(
                 MarketSnapshotService(
