@@ -12,6 +12,7 @@ from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCov
 
 
 M15_MAX_SESSIONS_PER_FETCH = 3
+M15_FULL_VERIFICATION_VERSION = "M15_FULL_V1"
 
 
 class HistoricalDataIncompleteError(RuntimeError):
@@ -99,27 +100,93 @@ class HistoricalDataService:
             else None
         )
         is_direct = direct is not None and direct.asset_class != "unknown"
+
+        # M15 historically used date-level presence as a gap test.  A day with
+        # one stale candle could therefore look complete even when most 15m
+        # buckets were absent.  Real services now use a versioned verification
+        # marker that can only be written after every expected exchange session
+        # has been fetched as a complete bounded session range.
+        verification_symbol = _verification_symbol(symbol, timeframe) if resolver_known else symbol
+        m15_full_verified = (
+            timeframe == "M15"
+            and resolver_known
+            and self.store.is_verified(
+                verification_symbol, timeframe, from_date[:10], till_date[:10]
+            )
+        )
+        if m15_full_verified:
+            return HistoricalSyncResult(
+                symbol=symbol,
+                timeframe=timeframe,
+                requested_from=from_date,
+                requested_till=till_date,
+                contracts=(),
+                reused_verified_range=True,
+            )
+
         # Root futures must re-resolve their historical contract timeline. Older
         # root-level verified markers cannot prove that every rollover contract
         # was actually stored, so they are intentionally not trusted here.
         # Minimal test/custom market-data stubs without resolver capability keep
         # the legacy verified-range shortcut because they cannot classify roots.
         trust_verified = (is_direct and not is_root) or not resolver_known
-        if trust_verified:
-            price_verified = self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10])
-            sessions_verified = timeframe != "D1" or self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10])
+        if timeframe != "M15" and trust_verified:
+            price_verified = self.store.is_verified(
+                symbol, timeframe, from_date[:10], till_date[:10]
+            )
+            sessions_verified = (
+                timeframe != "D1"
+                or self.store.is_session_range_verified(
+                    symbol, from_date[:10], till_date[:10]
+                )
+            )
             if price_verified and sessions_verified:
-                return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=(), reused_verified_range=True)
+                return HistoricalSyncResult(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    requested_from=from_date,
+                    requested_till=till_date,
+                    contracts=(),
+                    reused_verified_range=True,
+                )
+        elif timeframe == "M15" and not resolver_known:
+            if self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10]):
+                return HistoricalSyncResult(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    requested_from=from_date,
+                    requested_till=till_date,
+                    contracts=(),
+                    reused_verified_range=True,
+                )
 
         segments = self._segments(symbol, start, finish)
+        force_full_m15_sessions = timeframe == "M15" and resolver_known
         results = tuple(
-            self._sync_contract(symbol, instrument, timeframe, left, right)
+            self._sync_contract(
+                symbol,
+                instrument,
+                timeframe,
+                left,
+                right,
+                force_full_sessions=force_full_m15_sessions,
+            )
             for instrument, left, right in segments
         )
         self.store.mark_verified(symbol, timeframe, from_date[:10], till_date[:10])
+        if force_full_m15_sessions:
+            self.store.mark_verified(
+                verification_symbol, timeframe, from_date[:10], till_date[:10]
+            )
         if timeframe == "D1":
             self.store.mark_session_range_verified(symbol, from_date[:10], till_date[:10])
-        return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=results)
+        return HistoricalSyncResult(
+            symbol=symbol,
+            timeframe=timeframe,
+            requested_from=from_date,
+            requested_till=till_date,
+            contracts=results,
+        )
 
     def sync_many(
         self, symbols: list[str], timeframes: list[str], *, from_date: str, till_date: str
@@ -130,12 +197,28 @@ class HistoricalDataService:
         for symbol in symbols:
             for timeframe in timeframes:
                 try:
-                    result = self.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date)
+                    result = self.sync(
+                        symbol, timeframe=timeframe, from_date=from_date, till_date=till_date
+                    )
                     items.append({"status": "PASS", **result.to_dict()})
                 except Exception as exc:
-                    items.append({"status": "ERROR", "symbol": symbol, "timeframe": timeframe, "error_type": type(exc).__name__, "error": str(exc)[:1000]})
-        passed=sum(1 for item in items if item["status"] == "PASS")
-        return {"status": "PASS" if passed == len(items) else "PARTIAL", "requested": len(items), "passed": passed, "failed": len(items)-passed, "items": items}
+                    items.append(
+                        {
+                            "status": "ERROR",
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc)[:1000],
+                        }
+                    )
+        passed = sum(1 for item in items if item["status"] == "PASS")
+        return {
+            "status": "PASS" if passed == len(items) else "PARTIAL",
+            "requested": len(items),
+            "passed": passed,
+            "failed": len(items) - passed,
+            "items": items,
+        }
 
     def load_exact(
         self,
@@ -147,10 +230,15 @@ class HistoricalDataService:
     ) -> CandleSeries:
         return self.store.read(instrument, timeframe, from_date, till_date)
 
-    def session_dates(self, symbol: str, *, from_date: str, till_date: str) -> tuple[date, ...]:
+    def session_dates(
+        self, symbol: str, *, from_date: str, till_date: str
+    ) -> tuple[date, ...]:
         if not self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10]):
             raise RuntimeError("stored session calendar is not verified for requested range")
-        return tuple(date.fromisoformat(item[:10]) for item in self.store.stored_sessions(symbol, from_date, till_date))
+        return tuple(
+            date.fromisoformat(item[:10])
+            for item in self.store.stored_sessions(symbol, from_date, till_date)
+        )
 
     def _segments(
         self,
@@ -196,6 +284,8 @@ class HistoricalDataService:
         timeframe: str,
         start: date,
         finish: date,
+        *,
+        force_full_sessions: bool = False,
     ) -> ContractSyncResult:
         calendar = MoexTradingCalendar(self.market_data.provider)
         expected = calendar.dates(
@@ -207,14 +297,17 @@ class HistoricalDataService:
             till_date=finish,
         )
         if timeframe.upper() == "D1":
-            self.store.record_sessions(symbol, instrument.secid, tuple(day.isoformat() for day in expected))
+            self.store.record_sessions(
+                symbol, instrument.secid, tuple(day.isoformat() for day in expected)
+            )
         stored_dates = self.store.stored_trade_dates(
             instrument.secid,
             timeframe,
             start.isoformat(),
             finish.isoformat(),
         )
-        missing_ranges = _bounded_missing_ranges(expected, stored_dates, timeframe)
+        source_dates = () if force_full_sessions else stored_dates
+        missing_ranges = _bounded_missing_ranges(expected, source_dates, timeframe)
         fetched = 0
         for left, right in missing_ranges:
             series = self.market_data.candles_for_instrument(
@@ -233,7 +326,9 @@ class HistoricalDataService:
         remaining = _missing_session_ranges(expected, stored_dates_after)
         if remaining:
             compact = ",".join(
-                left.isoformat() if left == right else f"{left.isoformat()}..{right.isoformat()}"
+                left.isoformat()
+                if left == right
+                else f"{left.isoformat()}..{right.isoformat()}"
                 for left, right in remaining[:10]
             )
             raise HistoricalDataIncompleteError(
@@ -251,11 +346,19 @@ class HistoricalDataService:
             secid=instrument.secid,
             from_date=start.isoformat(),
             till_date=finish.isoformat(),
-            fetched_ranges=tuple((left.isoformat(), right.isoformat()) for left, right in missing_ranges),
+            fetched_ranges=tuple(
+                (left.isoformat(), right.isoformat()) for left, right in missing_ranges
+            ),
             fetched_candles=fetched,
             stored_candles=stored.count,
             coverage=coverage,
         )
+
+
+def _verification_symbol(symbol: str, timeframe: str) -> str:
+    if timeframe.upper() == "M15":
+        return f"{symbol}#{M15_FULL_VERIFICATION_VERSION}"
+    return symbol
 
 
 def _missing_session_ranges(
