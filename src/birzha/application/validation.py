@@ -149,7 +149,7 @@ class WalkForwardValidator:
             forecast_store.close()
             outcome_store.close()
 
-        metrics = summarize_walk_forward(pairs)
+        metrics = summarize_walk_forward(pairs, step_sessions=step_sessions)
         if not candidates:
             status = "NO_ELIGIBLE_POINTS"
         elif completed == 0:
@@ -169,6 +169,7 @@ class WalkForwardValidator:
             metrics=metrics,
             failures=tuple(failures[:100]),
             status=status,
+            step_sessions=step_sessions,
         )
 
     def _prepare_history(self, symbol: str, *, start: date, end: date) -> None:
@@ -304,15 +305,34 @@ def _mandatory_price_quality_pass(snapshot: MarketSnapshot) -> bool:
 
 def summarize_walk_forward(
     pairs: list[tuple[ForecastRecord, HorizonOutcome]],
+    *,
+    step_sessions: int = 1,
 ) -> tuple[HorizonValidationMetrics, ...]:
+    """Summarize only non-overlapping forecast windows for each horizon.
+
+    Forecast T0s are generated every ``step_sessions`` exchange sessions. For a
+    horizon ``h`` we therefore keep every ceil(h / step_sessions)-th successful
+    forecast. Failed/missing forecasts can only increase the actual separation,
+    so this deterministic thinning never creates overlap that was not already
+    present. It removes label overlap; it does not claim that market observations
+    are otherwise statistically independent.
+    """
+    if step_sessions <= 0:
+        raise ValueError("step_sessions must be > 0")
+
     result: list[HorizonValidationMetrics] = []
     horizons = sorted({outcome.horizon_sessions for _, outcome in pairs})
     for sessions in horizons:
-        subset = [
-            (forecast, outcome)
-            for forecast, outcome in pairs
-            if outcome.horizon_sessions == sessions
-        ]
+        raw_subset = sorted(
+            (
+                (forecast, outcome)
+                for forecast, outcome in pairs
+                if outcome.horizon_sessions == sessions
+            ),
+            key=lambda item: item[0].created_at_t0,
+        )
+        sampling_stride = max(1, (sessions + step_sessions - 1) // step_sessions)
+        subset = raw_subset[::sampling_stride]
         directional = [
             outcome for _, outcome in subset if outcome.direction_hit is not None
         ]
@@ -350,6 +370,8 @@ def summarize_walk_forward(
                 mean_signed_error_pct=(
                     round(fmean(errors), 6) if errors else None
                 ),
+                raw_observations=len(raw_subset),
+                sampling_stride=sampling_stride,
             )
         )
     return tuple(result)
