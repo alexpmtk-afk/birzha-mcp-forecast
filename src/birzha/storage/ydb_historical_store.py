@@ -210,6 +210,32 @@ class YdbHistoricalCandleStore:
         )
         return tuple(sorted({str(_row_value(row, "trade_date")) for row in _rows(result)}))
 
+    def stored_session_contracts(
+        self, symbol: str, from_date: str, till_date: str
+    ) -> tuple[tuple[str, str], ...]:
+        query = f"""
+        DECLARE $symbol AS Utf8;
+        DECLARE $from_date AS Utf8;
+        DECLARE $till_date AS Utf8;
+        SELECT trade_date, secid
+        FROM `{self._sessions_table}`
+        WHERE symbol=$symbol AND trade_date>=$from_date AND trade_date<=$till_date
+        ORDER BY trade_date, secid;
+        """
+        result = self._pool.execute_with_retries(
+            query,
+            {
+                "$symbol": _utf8(symbol),
+                "$from_date": _utf8(from_date[:10]),
+                "$till_date": _utf8(till_date[:10]),
+            },
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+        return tuple(
+            (str(_row_value(row, "trade_date")), str(_row_value(row, "secid")))
+            for row in _rows(result)
+        )
+
     def stored_session_secids(self, symbol: str, trade_date: str) -> tuple[str, ...]:
         query = f"""DECLARE $symbol AS Utf8; DECLARE $trade_date AS Utf8; SELECT secid FROM `{self._sessions_table}` WHERE symbol=$symbol AND trade_date=$trade_date ORDER BY secid;"""
         result = self._pool.execute_with_retries(
