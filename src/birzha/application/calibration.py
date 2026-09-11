@@ -72,6 +72,7 @@ class ModelCalibrationService:
         step_sessions: int = 5,
         max_points: int = 60,
         candidates: tuple[ForecastParameters, ...] = DEFAULT_CANDIDATES,
+        open_holdout: bool = True,
         holdout_gate: Callable[[ForecastParameters], None] | None = None,
     ) -> ModelCalibrationReport:
         if not development_start < split_date < holdout_end:
@@ -104,6 +105,18 @@ class ModelCalibrationService:
                 candidates=ranked,
                 holdout=None,
                 status=development.status,
+            )
+
+        if not open_holdout:
+            return ModelCalibrationReport(
+                symbol=symbol,
+                development_start=development_start,
+                split_date=split_date,
+                holdout_end=holdout_end,
+                selected=selected,
+                candidates=ranked,
+                holdout=None,
+                status="DEVELOPMENT_ACCEPTED_HOLDOUT_SEALED",
             )
 
         if holdout_gate is not None:
@@ -240,6 +253,7 @@ def calibrate_across_symbols(
     step_sessions: int = 5,
     max_points: int = 60,
     candidates: tuple[ForecastParameters, ...] = DEFAULT_CANDIDATES,
+    open_holdout: bool = True,
     holdout_gate: Callable[[ForecastParameters], None] | None = None,
 ) -> MultiSymbolCalibrationReport:
     if not symbols:
@@ -296,6 +310,18 @@ def calibrate_across_symbols(
             candidates=ranked,
             holdout=(),
             status="REJECTED",
+        )
+
+    if not open_holdout:
+        return MultiSymbolCalibrationReport(
+            symbols=symbols,
+            development_start=development_start,
+            split_date=split_date,
+            holdout_end=holdout_end,
+            selected=selected,
+            candidates=ranked,
+            holdout=(),
+            status="DEVELOPMENT_ACCEPTED_HOLDOUT_SEALED",
         )
 
     if holdout_gate is not None:
