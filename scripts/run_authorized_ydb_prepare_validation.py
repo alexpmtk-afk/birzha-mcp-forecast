@@ -13,7 +13,7 @@ from birzha.application.historical_data import HistoricalDataService
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.market_data import MarketDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.application.validation import independent_sample_capacity
+from birzha.application.validation_capacity import stored_contract_capacity
 from birzha.application.validation_readiness import (
     CORE_VALIDATION_SYMBOLS,
     ValidationDataReadinessService,
@@ -130,21 +130,18 @@ def _session_capacity(
         period_capacity: dict[str, object] = {}
         period_shortfall: dict[str, object] = {}
         for symbol in CORE_VALIDATION_SYMBOLS:
-            sessions = history.session_dates(symbol, from_date=left, till_date=right)
-            counts = independent_sample_capacity(
-                len(sessions),
+            item = stored_contract_capacity(
+                history,
+                symbol,
+                from_date=left,
+                till_date=right,
                 step_sessions=step_sessions,
                 max_points=max_points,
             )
-            period_capacity[symbol] = {
-                "sessions": len(sessions),
-                "non_overlapping_observations": {
-                    str(horizon): count for horizon, count in counts.items()
-                },
-            }
+            period_capacity[symbol] = item.to_dict()
             missing = {
                 str(horizon): count
-                for horizon, count in counts.items()
+                for horizon, count in item.non_overlapping_observations.items()
                 if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
             }
             if missing:
@@ -255,7 +252,7 @@ def main() -> int:
             base_artifact["capacity_shortfall"] = capacity_shortfall
             base_artifact["readiness"] = {
                 "status": "NOT_EVALUATED",
-                "reason": "real exchange-session capacity is insufficient",
+                "reason": "contract-aware exchange-session capacity is insufficient",
             }
             _write(args.artifact, base_artifact)
             print(json.dumps(base_artifact, ensure_ascii=False, sort_keys=True), flush=True)
