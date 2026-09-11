@@ -31,9 +31,10 @@ from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 
 
-DEFAULT_DEVELOPMENT_START = "2025-01-01"
-DEFAULT_SPLIT_DATE = "2025-10-01"
-DEFAULT_HOLDOUT_END = "2026-05-31"
+VALIDATION_PROTOCOL = "M23_HISTORICAL_GOVERNED_V1"
+DEFAULT_DEVELOPMENT_START = "2021-01-01"
+DEFAULT_SPLIT_DATE = "2022-12-31"
+DEFAULT_HOLDOUT_END = "2024-12-31"
 DEFAULT_MAX_POINTS = 80
 MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
 
@@ -141,6 +142,7 @@ def main() -> int:
             validation_end=args.holdout_end,
         )
         artifact: dict[str, object] = {
+            "validation_protocol": VALIDATION_PROTOCOL,
             "development_start": args.development_start,
             "split_date": args.split_date,
             "holdout_start": holdout_start,
