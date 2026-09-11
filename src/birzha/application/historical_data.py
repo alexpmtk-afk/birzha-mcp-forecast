@@ -157,6 +157,16 @@ class HistoricalDataService:
             )
             for instrument, left, right in segments
         )
+        if is_root:
+            empty_contracts = tuple(
+                item.secid for item in results if item.stored_candles == 0
+            )
+            if empty_contracts:
+                raise HistoricalDataIncompleteError(
+                    "rolling futures history contains empty contract segments: "
+                    + ",".join(empty_contracts)
+                )
+
         self.store.mark_verified(symbol, timeframe, from_date[:10], till_date[:10])
         if verification_symbol != symbol:
             self.store.mark_verified(
