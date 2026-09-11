@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from birzha.application.market_data import MarketDataService
+from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.domain.market import Instrument
 from birzha.providers.moex_analytics import MoexAnalyticsClient
 from birzha.storage.historical_flow_store import HistoricalFlowStore
@@ -52,7 +52,9 @@ class HistoricalFlowDataService:
         return {"symbol":symbol,"from_date":start.isoformat(),"till_date":finish.isoformat(),"contract_segments":len(segments),"tradestats_rows":trade_count,"futoi_rows":futoi_count}
 
     def _segments(self, symbol: str, start: date, finish: date):
-        direct=self.market_data.direct_resolver.resolve(symbol) if self.market_data.direct_resolver else None
+        direct=None
+        if not is_futures_root_symbol(symbol) and self.market_data.direct_resolver:
+            direct=self.market_data.direct_resolver.resolve(symbol)
         if direct is not None and direct.asset_class != "unknown":
             return ((direct,start,finish),)
         resolver=self.market_data.historical_future_resolver
