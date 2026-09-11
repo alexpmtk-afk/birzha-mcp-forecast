@@ -282,6 +282,7 @@ def main() -> int:
     artifact["capacity_shortfall"] = validation_evidence.get("capacity_shortfall")
     artifact["holdout_evaluated"] = validation_evidence.get("holdout_evaluated")
     artifact["holdout_statuses"] = validation_evidence.get("holdout_statuses")
+    artifact["holdout_claim"] = validation_evidence.get("holdout_claim")
 
     if validation["status"] != "PASS":
         artifact["status"] = (
@@ -290,6 +291,12 @@ def main() -> int:
         _write(args.pipeline_artifact, artifact)
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
         return 3
+
+    if run_status == "HOLDOUT_ALREADY_CONSUMED" and model_status == "NOT_EVALUATED":
+        artifact["status"] = "HOLDOUT_ALREADY_CONSUMED"
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 0
 
     if run_status != "COMPUTED" or not isinstance(model_status, str):
         artifact["status"] = "VALIDATION_EVIDENCE_INVALID"
