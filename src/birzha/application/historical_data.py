@@ -124,6 +124,12 @@ class HistoricalDataService:
             )
 
         segments = self._segments(symbol, start, finish)
+        if not segments:
+            raise HistoricalDataIncompleteError(
+                f"historical resolver produced no segments for {symbol} "
+                f"{timeframe} {start.isoformat()}..{finish.isoformat()}"
+            )
+
         # M15 historically used date-level presence as a gap test.  A day with
         # one stale candle could therefore look complete even when most 15m
         # buckets were absent. Until M15_FULL_V1 exists, fetch every expected
