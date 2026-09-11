@@ -10,6 +10,7 @@ from pathlib import Path
 DEFAULT_VALIDATION_START = "2025-01-01"
 DEFAULT_SPLIT_DATE = "2025-10-01"
 DEFAULT_VALIDATION_END = "2026-05-31"
+DEFAULT_MAX_POINTS = 80
 
 
 def _run(command: list[str], *, label: str) -> dict[str, object]:
@@ -60,7 +61,7 @@ def main() -> int:
     parser.add_argument("--split-date", default=DEFAULT_SPLIT_DATE)
     parser.add_argument("--validation-end", default=DEFAULT_VALIDATION_END)
     parser.add_argument("--step-sessions", type=int, default=5)
-    parser.add_argument("--max-points", type=int, default=24)
+    parser.add_argument("--max-points", type=int, default=DEFAULT_MAX_POINTS)
     parser.add_argument(
         "--prepare-artifact",
         default="artifacts/ydb_validation_data_preparation.json",
@@ -181,6 +182,10 @@ def main() -> int:
     artifact["validation_run_status"] = run_status
     artifact["model_status"] = model_status
     artifact["selected_parameters"] = validation_evidence.get("selected_parameters")
+    artifact["development_statuses"] = validation_evidence.get("development_statuses")
+    artifact["development_capacity"] = validation_evidence.get("development_capacity")
+    artifact["capacity_shortfall"] = validation_evidence.get("capacity_shortfall")
+    artifact["holdout_evaluated"] = validation_evidence.get("holdout_evaluated")
     artifact["holdout_statuses"] = validation_evidence.get("holdout_statuses")
     if run_status != "COMPUTED" or not isinstance(model_status, str):
         artifact["status"] = "VALIDATION_EVIDENCE_INVALID"
