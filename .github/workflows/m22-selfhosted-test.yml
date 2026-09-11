@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: [self-hosted, Windows, X64, codex-bridge-service]
+    runs-on: [self-hosted, Windows, X64, codex-bridge-admin]
     timeout-minutes: 20
     steps:
       - name: Checkout exact branch commit
