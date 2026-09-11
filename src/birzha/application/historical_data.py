@@ -130,10 +130,11 @@ class HistoricalDataService:
                 f"{timeframe} {start.isoformat()}..{finish.isoformat()}"
             )
 
-        # M15 historically used date-level presence as a gap test.  A day with
+        # M15 historically used date-level presence as a gap test. A day with
         # one stale candle could therefore look complete even when most 15m
-        # buckets were absent. Until M15_FULL_V1 exists, fetch every expected
-        # session as a complete bounded range. UPSERT keeps this idempotent.
+        # buckets were absent. M15_FULL_V1 re-fetches each unverified session as
+        # a complete bounded range. Per-session/chunk markers make a failed long
+        # pass resumable and make future range extensions fetch only new days.
         force_full_m15_sessions = timeframe == "M15" and resolver_known
         results = tuple(
             self._sync_contract(
@@ -143,6 +144,9 @@ class HistoricalDataService:
                 left,
                 right,
                 force_full_sessions=force_full_m15_sessions,
+                verification_symbol=(
+                    verification_symbol if force_full_m15_sessions else None
+                ),
             )
             for instrument, left, right in segments
         )
@@ -286,6 +290,7 @@ class HistoricalDataService:
         finish: date,
         *,
         force_full_sessions: bool = False,
+        verification_symbol: str | None = None,
     ) -> ContractSyncResult:
         calendar = MoexTradingCalendar(self.market_data.provider)
         expected = calendar.dates(
@@ -306,7 +311,21 @@ class HistoricalDataService:
             start.isoformat(),
             finish.isoformat(),
         )
-        source_dates = () if force_full_sessions else stored_dates
+        if force_full_sessions:
+            if not verification_symbol:
+                raise ValueError("verification_symbol is required for full-session sync")
+            source_dates = tuple(
+                day.isoformat()
+                for day in expected
+                if self.store.is_verified(
+                    verification_symbol,
+                    timeframe,
+                    day.isoformat(),
+                    day.isoformat(),
+                )
+            )
+        else:
+            source_dates = stored_dates
         missing_ranges = _bounded_missing_ranges(expected, source_dates, timeframe)
         fetched = 0
         for left, right in missing_ranges:
@@ -319,6 +338,32 @@ class HistoricalDataService:
             )
             fetched += series.count
             self.store.upsert_series(series)
+            if force_full_sessions:
+                assert verification_symbol is not None
+                expected_chunk = tuple(day for day in expected if left <= day <= right)
+                stored_chunk = self.store.stored_trade_dates(
+                    instrument.secid,
+                    timeframe,
+                    left.isoformat(),
+                    right.isoformat(),
+                )
+                remaining_chunk = _missing_session_ranges(expected_chunk, stored_chunk)
+                if remaining_chunk:
+                    compact = ",".join(
+                        day.isoformat()
+                        for chunk in remaining_chunk
+                        for day in chunk
+                    )
+                    raise HistoricalDataIncompleteError(
+                        f"full-session verification remains incomplete for "
+                        f"{instrument.secid} {timeframe}: {compact}"
+                    )
+                self.store.mark_verified(
+                    verification_symbol,
+                    timeframe,
+                    left.isoformat(),
+                    right.isoformat(),
+                )
 
         stored_dates_after = self.store.stored_trade_dates(
             instrument.secid, timeframe, start.isoformat(), finish.isoformat()
