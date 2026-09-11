@@ -30,6 +30,16 @@ def _write(path: str, payload: dict[str, object]) -> None:
     )
 
 
+def _read(path: str) -> dict[str, object]:
+    target = Path(path)
+    if not target.is_file():
+        raise RuntimeError(f"required artifact was not created: {path}")
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"artifact must contain a JSON object: {path}")
+    return payload
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -65,10 +75,11 @@ def main() -> int:
         raise ValueError("max_points must be > 0")
 
     python = sys.executable
+    scripts_dir = Path(__file__).resolve().parent
     prepare = _run(
         [
             python,
-            "scripts/run_authorized_ydb_prepare_validation.py",
+            str(scripts_dir / "run_authorized_ydb_prepare_validation.py"),
             "--connection-string",
             args.connection_string,
             "--validation-start",
@@ -98,10 +109,30 @@ def main() -> int:
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
         return 2
 
+    try:
+        prepare_evidence = _read(args.prepare_artifact)
+    except Exception as exc:
+        artifact["status"] = "PREPARE_EVIDENCE_INVALID"
+        artifact["prepare_evidence_error"] = f"{type(exc).__name__}:{exc}"
+        artifact["validation"] = {"status": "NOT_RUN"}
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 2
+    artifact["prepare_evidence_status"] = prepare_evidence.get("status")
+    readiness = prepare_evidence.get("readiness")
+    readiness_status = readiness.get("status") if isinstance(readiness, dict) else None
+    artifact["readiness_status"] = readiness_status
+    if readiness_status != "READY":
+        artifact["status"] = "PREPARE_NOT_READY"
+        artifact["validation"] = {"status": "NOT_RUN"}
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 2
+
     validation = _run(
         [
             python,
-            "scripts/run_authorized_ydb_validation.py",
+            str(scripts_dir / "run_authorized_ydb_validation.py"),
             "--connection-string",
             args.connection_string,
             "--development-start",
@@ -120,10 +151,37 @@ def main() -> int:
         label="validate",
     )
     artifact["validation"] = validation
-    artifact["status"] = "COMPUTED" if validation["status"] == "PASS" else "VALIDATION_FAILED"
+    if validation["status"] != "PASS":
+        artifact["status"] = "VALIDATION_FAILED"
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 3
+
+    try:
+        validation_evidence = _read(args.validation_artifact)
+    except Exception as exc:
+        artifact["status"] = "VALIDATION_EVIDENCE_INVALID"
+        artifact["validation_evidence_error"] = f"{type(exc).__name__}:{exc}"
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 3
+
+    run_status = validation_evidence.get("run_status")
+    model_status = validation_evidence.get("model_status")
+    artifact["validation_run_status"] = run_status
+    artifact["model_status"] = model_status
+    artifact["selected_parameters"] = validation_evidence.get("selected_parameters")
+    artifact["holdout_statuses"] = validation_evidence.get("holdout_statuses")
+    if run_status != "COMPUTED" or not isinstance(model_status, str):
+        artifact["status"] = "VALIDATION_EVIDENCE_INVALID"
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 3
+
+    artifact["status"] = "COMPUTED"
     _write(args.pipeline_artifact, artifact)
     print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
-    return 0 if validation["status"] == "PASS" else 3
+    return 0
 
 
 if __name__ == "__main__":
