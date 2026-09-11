@@ -26,6 +26,7 @@ from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 
 MANDATORY_PRICE_TIMEFRAMES = ("D1", "H1", "M15")
 MINIMUM_PRICE_CANDLES = 50
+VALIDATION_HORIZONS = (5, 10, 20)
 
 
 @dataclass(slots=True)
@@ -62,8 +63,8 @@ class WalkForwardValidator:
             raise ValueError("start_date must be before end_date")
         if step_sessions <= 0 or step_sessions > 50:
             raise ValueError("step_sessions must be between 1 and 50")
-        if max_points <= 0 or max_points > 60:
-            raise ValueError("max_points must be between 1 and 60")
+        if max_points <= 0 or max_points > 240:
+            raise ValueError("max_points must be between 1 and 240")
 
         forecast_service = self.forecasts
         outcome_market = self.market_data
@@ -128,12 +129,6 @@ class WalkForwardValidator:
                         item.horizon_sessions: item for item in evaluation.outcomes
                     }
                     if any(h.sessions not in by_horizon for h in record.horizons):
-                        # Exact-contract outcomes intentionally do not jump across
-                        # an expiry into a different futures contract. A T0 too
-                        # close to expiry is therefore not a valid full-horizon
-                        # observation. Keep the diagnostic and continue to later
-                        # independent T0s until the requested completed sample is
-                        # filled or the candidate calendar is exhausted.
                         failures.append(
                             f"{forecast_day.isoformat()}:incomplete_outcome"
                         )
@@ -301,6 +296,46 @@ def _mandatory_price_quality_pass(snapshot: MarketSnapshot) -> bool:
         state.candles >= MINIMUM_PRICE_CANDLES
         for state in (snapshot.d1, snapshot.h1, snapshot.m15)
     )
+
+
+def independent_sample_capacity(
+    total_sessions: int,
+    *,
+    step_sessions: int,
+    max_points: int,
+    horizons: tuple[int, ...] = VALIDATION_HORIZONS,
+) -> dict[int, int]:
+    """Upper bound on non-overlapping observations available before a run.
+
+    The longest forecast horizon must mature inside the period, matching the
+    walk-forward rule that excludes the final horizon-length sessions. The
+    result is deliberately an upper bound: data-quality failures or contract
+    expiry can only reduce the realized sample further.
+    """
+    if total_sessions < 0:
+        raise ValueError("total_sessions must be >= 0")
+    if step_sessions <= 0:
+        raise ValueError("step_sessions must be > 0")
+    if max_points <= 0:
+        raise ValueError("max_points must be > 0")
+    if not horizons or any(item <= 0 for item in horizons):
+        raise ValueError("horizons must contain positive session counts")
+
+    longest = max(horizons)
+    eligible_sessions = max(0, total_sessions - longest)
+    raw_candidates = min(
+        max_points,
+        (eligible_sessions + step_sessions - 1) // step_sessions,
+    )
+    return {
+        horizon: (
+            raw_candidates
+            + max(1, (horizon + step_sessions - 1) // step_sessions)
+            - 1
+        )
+        // max(1, (horizon + step_sessions - 1) // step_sessions)
+        for horizon in horizons
+    }
 
 
 def summarize_walk_forward(
