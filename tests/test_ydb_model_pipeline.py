@@ -23,6 +23,9 @@ LEGACY_SHORT_PERIOD_ARGS = [
     "2026-05-31",
 ]
 
+MODEL_FP = "model-fp"
+DATA_FP = "data-fp"
+
 
 def _argv(*extra: str) -> list[str]:
     return [
@@ -138,40 +141,53 @@ def test_pipeline_stops_when_real_session_capacity_is_insufficient(monkeypatch) 
     assert result["capacity_shortfall"]["development"]["SBER"]["20"] == 19
 
 
-def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> None:
+def test_final_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> None:
     calls: list[str] = []
     removed: list[str] = []
     written: list[dict[str, object]] = []
+    commands: list[list[str]] = []
 
     def fake_run(command, *, label):
         calls.append(label)
+        commands.append(list(command))
         return {"label": label, "returncode": 0, "status": "PASS"}
 
     def fake_read(path):
-        if path.endswith("ydb_validation_data_preparation.json"):
-            return {"status": "READY", "readiness": {"status": "READY"}}
-        if path.endswith("ydb_model_validation.json"):
-            return {
-                "run_status": "COMPUTED",
-                "model_status": "REJECTED",
-                "selected_parameters": {"name": "baseline"},
-                "development_statuses": {"SBER": "ACCEPTED"},
-                "holdout_evaluated": True,
-                "holdout_statuses": {"SBER": "REJECTED"},
-            }
-        raise AssertionError(path)
+        assert path.endswith("ydb_model_validation.json")
+        return {
+            "run_status": "COMPUTED",
+            "model_status": "REJECTED",
+            "selected_parameters": {"name": "baseline"},
+            "selected_model_fingerprint": MODEL_FP,
+            "selected_data_fingerprint": DATA_FP,
+            "development_statuses": {"SBER": "ACCEPTED"},
+            "holdout_evaluated": True,
+            "holdout_sealed": False,
+            "holdout_statuses": {"SBER": "REJECTED"},
+        }
 
     monkeypatch.setattr(pipeline, "_run", fake_run)
     monkeypatch.setattr(pipeline, "_read", fake_read)
     monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
     monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
-    monkeypatch.setattr(sys, "argv", _argv(*CALENDAR_FEASIBLE_TEST_ARGS))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        _argv(
+            *CALENDAR_FEASIBLE_TEST_ARGS,
+            "--open-holdout",
+            "--expected-model-fingerprint",
+            MODEL_FP,
+            "--expected-data-fingerprint",
+            DATA_FP,
+        ),
+    )
 
     assert pipeline.main() == 0
-    assert calls == ["prepare", "validate"]
-    assert len(removed) == 2
-    assert removed[0].endswith("ydb_validation_data_preparation.json")
-    assert removed[1].endswith("ydb_model_validation.json")
+    assert calls == ["validate"]
+    assert len(removed) == 1
+    assert removed[0].endswith("ydb_model_validation.json")
+    assert "--open-holdout" in commands[0]
     assert written[-1]["status"] == "COMPUTED"
     assert written[-1]["model_status"] == "REJECTED"
     assert written[-1]["holdout_evaluated"] is True
