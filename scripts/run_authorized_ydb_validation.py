@@ -16,10 +16,8 @@ from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.market_data import MarketDataService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.application.validation import (
-    WalkForwardValidator,
-    independent_sample_capacity,
-)
+from birzha.application.validation import WalkForwardValidator
+from birzha.application.validation_capacity import stored_contract_capacity
 from birzha.application.validation_readiness import (
     CORE_VALIDATION_SYMBOLS,
     ValidationDataReadinessService,
@@ -66,25 +64,18 @@ def _period_capacity(
     capacity_by_symbol: dict[str, object] = {}
     shortfall_by_symbol: dict[str, object] = {}
     for symbol in CORE_VALIDATION_SYMBOLS:
-        sessions = history.session_dates(
+        item = stored_contract_capacity(
+            history,
             symbol,
             from_date=start_date,
             till_date=end_date,
-        )
-        capacity = independent_sample_capacity(
-            len(sessions),
             step_sessions=step_sessions,
             max_points=max_points,
         )
-        capacity_by_symbol[symbol] = {
-            "sessions": len(sessions),
-            "non_overlapping_observations": {
-                str(horizon): count for horizon, count in capacity.items()
-            },
-        }
+        capacity_by_symbol[symbol] = item.to_dict()
         missing = {
             str(horizon): count
-            for horizon, count in capacity.items()
+            for horizon, count in item.non_overlapping_observations.items()
             if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
         }
         if missing:
