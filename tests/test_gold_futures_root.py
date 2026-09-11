@@ -63,6 +63,23 @@ class _NoopAnalytics:
     pass
 
 
+class _FutoiAnalytics:
+    def __init__(self):
+        self.calls = 0
+
+    def fetch_futoi(self, instrument, *, from_date, till_date):
+        self.calls += 1
+        assert instrument.root_symbol == "GOLD"
+        assert _futoi_security_code(instrument) == "GD"
+        return [
+            {
+                "TRADEDATE": from_date,
+                "SYSTIME": f"{from_date} 12:00:00",
+                "clgroup": "YUR",
+            }
+        ]
+
+
 def _market(direct, history):
     return MarketDataService(
         provider=object(),  # type: ignore[arg-type]
@@ -81,6 +98,30 @@ def test_gold_futoi_uses_official_short_code_without_changing_other_roots() -> N
     assert _futoi_security_code(GDH5) == "GD"
     assert _futoi_security_code(SIH5) == "Si"
     assert _futoi_security_code(BRH5) == "BR"
+
+
+def test_legacy_gold_futoi_marker_does_not_suppress_new_gd_fetch() -> None:
+    store = DuckDBHistoricalFlowStore(":memory:")
+    store.mark_verified("FUTOI", "GOLD", "2025-01-01", "2025-01-03")
+    analytics = _FutoiAnalytics()
+    service = HistoricalFlowDataService(
+        market_data=_market(_DirectResolver(), _HistoricalResolver()),
+        analytics=analytics,  # type: ignore[arg-type]
+        store=store,
+    )
+
+    rows = service.futoi(
+        GDH5,
+        from_date="2025-01-01",
+        till_date="2025-01-03",
+    )
+
+    assert analytics.calls == 1
+    assert len(rows) == 1
+    assert store.is_verified(
+        "FUTOI#FLOW_V1", "GOLD", "2025-01-01", "2025-01-03"
+    )
+    store.close()
 
 
 def test_gold_historical_segments_ignore_colliding_direct_secid() -> None:
