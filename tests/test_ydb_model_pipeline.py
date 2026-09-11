@@ -51,6 +51,61 @@ def test_pipeline_does_not_validate_when_readiness_is_not_ready(monkeypatch) -> 
     assert written[-1]["validation"] == {"status": "NOT_RUN"}
 
 
+def test_pipeline_stops_when_real_session_capacity_is_insufficient(monkeypatch) -> None:
+    calls: list[str] = []
+    removed: list[str] = []
+    written: list[dict[str, object]] = []
+
+    def fake_run(command, *, label):
+        calls.append(label)
+        if label != "prepare":
+            raise AssertionError("validation must not run after capacity shortfall")
+        return {"label": label, "returncode": 0, "status": "PASS"}
+
+    def fake_read(path):
+        assert path.endswith("ydb_validation_data_preparation.json")
+        return {
+            "status": "INSUFFICIENT_DATA",
+            "session_capacity": {
+                "development": {"SBER": {"sessions": 390}},
+                "holdout": {"SBER": {"sessions": 405}},
+            },
+            "capacity_shortfall": {
+                "development": {"SBER": {"20": 19}}
+            },
+            "readiness": {
+                "status": "NOT_EVALUATED",
+                "reason": "real exchange-session capacity is insufficient",
+            },
+        }
+
+    monkeypatch.setattr(pipeline, "_run", fake_run)
+    monkeypatch.setattr(pipeline, "_read", fake_read)
+    monkeypatch.setattr(pipeline, "_remove_existing", lambda path: removed.append(path))
+    monkeypatch.setattr(pipeline, "_write", lambda path, payload: written.append(payload.copy()))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "pipeline",
+            "--connection-string",
+            "grpcs://example.invalid/db",
+            *FEASIBLE_PERIOD_ARGS,
+        ],
+    )
+
+    assert pipeline.main() == 0
+    assert calls == ["prepare"]
+    assert len(removed) == 1
+    assert removed[0].endswith("ydb_validation_data_preparation.json")
+    result = written[-1]
+    assert result["status"] == "INSUFFICIENT_DATA"
+    assert result["model_status"] == "INSUFFICIENT_DATA"
+    assert result["validation"] == {"status": "NOT_RUN"}
+    assert result["holdout_evaluated"] is False
+    assert result["capacity_shortfall"]["development"]["SBER"]["20"] == 19
+
+
 def test_pipeline_keeps_rejected_model_as_valid_computed_result(monkeypatch) -> None:
     calls: list[str] = []
     removed: list[str] = []
