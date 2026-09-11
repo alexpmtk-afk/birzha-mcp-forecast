@@ -21,6 +21,7 @@ from birzha.upstream.moex import MOEX_AUTHENTICATED_POLICY, MOEX_ISS_PUBLIC_POLI
 
 ISS_BASE = "https://iss.moex.com/iss"
 APIM_BASE = "https://apim.moex.com/iss"
+FUTOI_SECURITY_CODES = {"GOLD": "GD"}
 
 
 @dataclass(slots=True)
@@ -217,10 +218,8 @@ class MoexAnalyticsClient:
 
         if instrument.asset_class != "future":
             raise MoexAnalyticsError("FUTOI is only applicable to futures instruments")
-        root = (instrument.root_symbol or instrument.symbol).strip()
-        if not root:
-            raise ValueError("instrument root symbol is required for FUTOI")
-        path = f"/analyticalproducts/futoi/securities/{root}.json"
+        security_code = _futoi_security_code(instrument)
+        path = f"/analyticalproducts/futoi/securities/{security_code}.json"
         return self._paged_rows(
             base=ISS_BASE,
             path=path,
@@ -233,6 +232,13 @@ class MoexAnalyticsClient:
             table="futoi",
             authenticated_policy=False,
         )
+
+
+def _futoi_security_code(instrument: Instrument) -> str:
+    root = (instrument.root_symbol or instrument.symbol).strip()
+    if not root:
+        raise ValueError("instrument root symbol is required for FUTOI")
+    return FUTOI_SECURITY_CODES.get(root.upper(), root)
 
 
 def _algopack_market_code(instrument: Instrument) -> str:
