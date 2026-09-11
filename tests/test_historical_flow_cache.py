@@ -3,6 +3,7 @@ from datetime import date
 from birzha.application.historical_flow import (
     HistoricalFlowDataService,
     _bounded_date_ranges,
+    _verification_dataset,
 )
 from birzha.domain.market import Instrument
 from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
@@ -87,6 +88,24 @@ def test_repeated_futoi_range_uses_store_without_second_upstream_call():
     store.close()
 
 
+def test_legacy_futoi_marker_does_not_hide_current_flow_semantics():
+    analytics = FakeAnalytics()
+    store = DuckDBHistoricalFlowStore(":memory:")
+    store.mark_verified("FUTOI", "Si", "2026-09-01", "2026-09-02")
+    service = HistoricalFlowDataService(
+        market_data=FakeMarketData(), analytics=analytics, store=store
+    )
+
+    rows = service.futoi(FUT, from_date="2026-09-01", till_date="2026-09-02")
+
+    assert len(rows) == 1
+    assert analytics.futoi_calls == 1
+    assert store.is_verified(
+        _verification_dataset("FUTOI"), "Si", "2026-09-01", "2026-09-02"
+    ) is True
+    store.close()
+
+
 def test_unsupported_index_tradestats_degrades_without_upstream_call():
     analytics = FakeAnalytics()
     store = DuckDBHistoricalFlowStore(":memory:")
@@ -123,5 +142,7 @@ def test_bounded_futoi_marks_whole_range_after_all_chunks():
 
     assert analytics.futoi_calls == 3
     assert len(rows) == 3
-    assert store.is_verified("FUTOI", "Si", "2026-01-01", "2026-05-01") is True
+    assert store.is_verified(
+        _verification_dataset("FUTOI"), "Si", "2026-01-01", "2026-05-01"
+    ) is True
     store.close()
