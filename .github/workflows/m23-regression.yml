@@ -1,0 +1,30 @@
+name: M23 temporary regression
+
+on:
+  push:
+    branches:
+      - m23-ydb-model-validation
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m23-temporary-regression
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Pytest
+        run: python -m pytest -q
+      - name: Compileall
+        run: python -m compileall -q src scripts
