@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 from birzha.application.model_lab import assess_walk_forward
 from birzha.application.validation import (
@@ -11,11 +11,12 @@ from birzha.domain.validation import WalkForwardReport
 
 
 def _forecast(index: int) -> ForecastRecord:
+    forecast_day = date(2025, 1, 1) + timedelta(days=index)
     return ForecastRecord(
         forecast_id=f"fcst_{index}",
         symbol="SBER",
         secid="SBER",
-        created_at_t0=f"2025-01-{index + 1:02d}T18:50:00+03:00",
+        created_at_t0=f"{forecast_day.isoformat()}T18:50:00+03:00",
         engine_version="TEST",
         direction="UP",
         signal_strength=1.0,
