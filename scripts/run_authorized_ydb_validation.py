@@ -40,6 +40,11 @@ DEFAULT_SPLIT_DATE = "2022-12-31"
 DEFAULT_HOLDOUT_END = "2024-12-31"
 DEFAULT_MAX_POINTS = 80
 MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
+DEVELOPMENT_READY_STATUS = "DEVELOPMENT_ACCEPTED_HOLDOUT_SEALED"
+
+
+class SelectedModelFingerprintMismatchError(RuntimeError):
+    pass
 
 
 def _token() -> str:
@@ -115,6 +120,16 @@ def main() -> int:
     parser.add_argument("--step-sessions", type=int, default=5)
     parser.add_argument("--max-points", type=int, default=DEFAULT_MAX_POINTS)
     parser.add_argument(
+        "--open-holdout",
+        action="store_true",
+        help="Explicitly permit the one-shot governed holdout evaluation.",
+    )
+    parser.add_argument(
+        "--expected-model-fingerprint",
+        default=None,
+        help="Fingerprint emitted by a prior sealed development run; required with --open-holdout.",
+    )
+    parser.add_argument(
         "--artifact", default="artifacts/ydb_model_validation.json"
     )
     args = parser.parse_args()
@@ -125,6 +140,14 @@ def main() -> int:
         raise ValueError("step_sessions must be between 1 and 50")
     if args.max_points <= 0 or args.max_points > 240:
         raise ValueError("max_points must be between 1 and 240")
+    if args.open_holdout and not args.expected_model_fingerprint:
+        raise ValueError(
+            "--expected-model-fingerprint is required when --open-holdout is used"
+        )
+    if not args.open_holdout and args.expected_model_fingerprint:
+        raise ValueError(
+            "--expected-model-fingerprint is only valid together with --open-holdout"
+        )
 
     holdout_start = (
         date.fromisoformat(args.split_date[:10]) + timedelta(days=1)
@@ -166,6 +189,7 @@ def main() -> int:
             "readiness": readiness.to_dict(),
             "data_mode": "FROZEN_PREPARED_YDB",
             "minimum_acceptance_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
+            "holdout_open_requested": bool(args.open_holdout),
         }
         if readiness.status != "READY":
             artifact["run_status"] = "DATA_NOT_READY"
@@ -217,17 +241,19 @@ def main() -> int:
             print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
             return 0
 
-        governance = YdbValidationGovernanceStore(pool)
-        previous_claim = governance.overlapping_claim(holdout_start, args.holdout_end)
-        if previous_claim is not None:
-            artifact["run_status"] = "HOLDOUT_ALREADY_CONSUMED"
-            artifact["model_status"] = "NOT_EVALUATED"
-            artifact["holdout_evaluated"] = False
-            artifact["holdout_claim"] = previous_claim.to_dict()
-            artifact["calibration"] = None
-            _write_artifact(args.artifact, artifact)
-            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
-            return 0
+        governance: YdbValidationGovernanceStore | None = None
+        if args.open_holdout:
+            governance = YdbValidationGovernanceStore(pool)
+            previous_claim = governance.overlapping_claim(holdout_start, args.holdout_end)
+            if previous_claim is not None:
+                artifact["run_status"] = "HOLDOUT_ALREADY_CONSUMED"
+                artifact["model_status"] = "NOT_EVALUATED"
+                artifact["holdout_evaluated"] = False
+                artifact["holdout_claim"] = previous_claim.to_dict()
+                artifact["calibration"] = None
+                _write_artifact(args.artifact, artifact)
+                print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+                return 0
 
         analytics = MoexAnalyticsClient(control_plane=control)
         historical_flow = HistoricalFlowDataService(
@@ -258,19 +284,26 @@ def main() -> int:
             )
 
         claimed: dict[str, object] = {}
+        actual_fingerprint: str | None = None
 
         def claim_holdout(parameters: object) -> None:
-            fingerprint = _model_fingerprint(
+            nonlocal actual_fingerprint
+            actual_fingerprint = _model_fingerprint(
                 parameters,
                 development_start=args.development_start,
                 split_date=args.split_date,
             )
+            if actual_fingerprint != args.expected_model_fingerprint:
+                raise SelectedModelFingerprintMismatchError(
+                    "selected development model does not match the sealed fingerprint"
+                )
+            assert governance is not None
             claim = governance.claim_once(
                 holdout_start=holdout_start,
                 holdout_end=args.holdout_end,
                 protocol=VALIDATION_PROTOCOL,
                 engine_version=ENGINE_VERSION,
-                model_fingerprint=fingerprint,
+                model_fingerprint=actual_fingerprint,
             )
             claimed.update(claim.to_dict())
 
@@ -283,9 +316,22 @@ def main() -> int:
                 holdout_end=args.holdout_end,
                 step_sessions=args.step_sessions,
                 max_points=args.max_points,
-                holdout_gate=claim_holdout,
+                open_holdout=bool(args.open_holdout),
+                holdout_gate=claim_holdout if args.open_holdout else None,
             )
+        except SelectedModelFingerprintMismatchError:
+            artifact["run_status"] = "MODEL_FINGERPRINT_MISMATCH"
+            artifact["model_status"] = "NOT_EVALUATED"
+            artifact["expected_model_fingerprint"] = args.expected_model_fingerprint
+            artifact["actual_model_fingerprint"] = actual_fingerprint
+            artifact["holdout_evaluated"] = False
+            artifact["holdout_claim"] = None
+            artifact["calibration"] = None
+            _write_artifact(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 0
         except HoldoutAlreadyConsumedError:
+            assert governance is not None
             previous_claim = governance.overlapping_claim(
                 holdout_start, args.holdout_end
             )
@@ -301,13 +347,20 @@ def main() -> int:
             return 0
 
         selected_development = report.candidates[0].development
+        selected_fingerprint = _model_fingerprint(
+            report.selected,
+            development_start=args.development_start,
+            split_date=args.split_date,
+        )
         artifact["run_status"] = "COMPUTED"
         artifact["model_status"] = report.status
         artifact["selected_parameters"] = report.selected.to_dict()
+        artifact["selected_model_fingerprint"] = selected_fingerprint
         artifact["development_statuses"] = {
             item.symbol: item.status for item in selected_development
         }
         artifact["holdout_evaluated"] = bool(report.holdout)
+        artifact["holdout_sealed"] = not bool(report.holdout)
         artifact["holdout_statuses"] = {
             item.symbol: item.status for item in report.holdout
         }
