@@ -39,18 +39,20 @@ The pipeline is fail-closed:
 
 1. `run_authorized_ydb_prepare_validation.py` repairs/validates required price history and prepares optional historical flow.
 2. Data readiness must report all 18 mandatory price requirements as `READY`.
-3. Only then `run_authorized_ydb_validation.py` runs six-market development calibration and untouched holdout evaluation.
+3. Only then `run_authorized_ydb_validation.py` runs six-market development calibration.
 4. The validation phase uses `FROZEN_PREPARED_YDB`: price history is read from the prepared YDB store without another preparation pass; optional TradeStats/FUTOI is read only when the current `FLOW_V1` cache range is verified and is otherwise treated as missing/`DEGRADED` rather than fetched during candidate comparison.
-5. Walk-forward counts only snapshots whose mandatory D1/H1/M15 price timeframes pass their minimum-history quality checks. Optional flow may be degraded without invalidating an otherwise complete price snapshot.
-6. Calibration never prefers a development-rejected candidate over a development-accepted candidate merely because its average numeric score is higher. For the shared six-market model, passing all development markets outranks average score; if none pass all markets, the ranking falls back through accepted-market count, worst development status, and then objective score.
-7. A statistical `REJECTED` result is a valid computed model result, not a software failure and must not be relabelled as PASS.
+5. Historical instrument identity is also store-backed in frozen validation. Direct instruments are recovered from stored metadata; `Si/BR/GOLD` T0 contracts are recovered from the versioned D1 session calendar (`trade_date -> exact SECID -> stored Instrument`). Missing or ambiguous stored identity fails closed instead of falling back to live MOEX resolution. Outcome evaluation prefers the same stored exact-contract identity.
+6. Walk-forward counts only snapshots whose mandatory D1/H1/M15 price timeframes pass their minimum-history quality checks. Optional flow may be degraded without invalidating an otherwise complete price snapshot.
+7. Calibration never prefers a development-rejected candidate over a development-accepted candidate merely because its average numeric score is higher. For the shared six-market model, passing all development markets outranks average score. A fully evaluated candidate also outranks one containing `FAILED`/`INSUFFICIENT_SAMPLE`, even if the incomplete candidate has more accepted markets.
+8. Holdout is not opened at all until the selected configuration is `ACCEPTED` on every required development market. If development is rejected/insufficient/failed, the report records `holdout_evaluated=false` and no holdout metrics are produced. This preserves the holdout for a later genuinely independent final check.
+9. A statistical `REJECTED` result is a valid computed model result, not a software failure and must not be relabelled as PASS.
 
 ## Evidence artifacts
 
 The pipeline writes three JSON artifacts:
 
 - `artifacts/ydb_validation_data_preparation.json` — preparation operations, 18-item readiness evidence, optional-flow failures and zero-row warnings;
-- `artifacts/ydb_model_validation.json` — selected parameters, development/holdout reports, explicit `data_mode=FROZEN_PREPARED_YDB`, and `model_status`;
+- `artifacts/ydb_model_validation.json` — selected parameters, development/holdout reports, explicit `data_mode=FROZEN_PREPARED_YDB`, and `model_status`; holdout may intentionally be empty when development has not passed;
 - `artifacts/ydb_model_pipeline.json` — compact top-level execution summary.
 
 Important preparation statuses include:
@@ -84,6 +86,7 @@ Historical analytical flow is also versioned with `FLOW_V1`. Legacy TradeStats/F
 - All MOEX/ALGOPACK requests during preparation remain behind `ProcessUpstreamControlPlane`.
 - Remote preparation uses the distributed `YdbSlotPacingGate`; limits are never bypassed for backfill speed.
 - Model validation does not repair or extend prepared price/flow datasets while candidates are being compared.
+- Frozen validation does not silently use live MOEX instrument resolution when prepared identity is missing.
 - Intraday full-session repair is bounded to small exchange-session chunks and is resumable.
 - A resolver returning no historical segments fails closed and cannot create a verified marker.
 - A rolling-futures contract segment that contains zero stored candles fails closed.
@@ -91,6 +94,7 @@ Historical analytical flow is also versioned with `FLOW_V1`. Legacy TradeStats/F
 - Unsupported index TradeStats is optional degraded context and must not block the mandatory price path.
 - Supported optional feeds that return zero rows are surfaced explicitly in preparation evidence.
 - Development and holdout do not share the split date.
+- Holdout is not evaluated when development has not passed.
 - Acceptance thresholds are not relaxed to force a PASS.
 
 ## Promotion gate
