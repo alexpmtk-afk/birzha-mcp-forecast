@@ -13,6 +13,11 @@ from birzha.storage.historical_flow_store import HistoricalFlowStore
 
 TRADESTATS_ASSET_CLASSES = frozenset({"future", "equity", "fx"})
 FLOW_MAX_CALENDAR_DAYS_PER_FETCH = 60
+FLOW_VERIFICATION_VERSION = "FLOW_V1"
+
+
+def _verification_dataset(dataset: str) -> str:
+    return f"{dataset}#{FLOW_VERIFICATION_VERSION}"
 
 
 @dataclass(slots=True)
@@ -30,28 +35,38 @@ class HistoricalFlowDataService:
         if instrument.asset_class not in TRADESTATS_ASSET_CLASSES:
             return []
         dataset = "TRADESTATS"
+        verification_dataset = _verification_dataset(dataset)
         key = instrument.secid
-        if not self.store.is_verified(dataset, key, from_date, till_date):
+        if not self.store.is_verified(
+            verification_dataset, key, from_date, till_date
+        ):
             rows = self.analytics.fetch_tradestats(
                 instrument, from_date=from_date, till_date=till_date
             )
             self.store.upsert_rows(dataset, key, rows, "MOEX_ALGOPACK")
-            self.store.mark_verified(dataset, key, from_date, till_date)
+            self.store.mark_verified(
+                verification_dataset, key, from_date, till_date
+            )
         return self.store.read_rows(dataset, key, from_date, till_date)
 
     def futoi(
         self, instrument: Instrument, *, from_date: str, till_date: str
     ) -> list[dict[str, object]]:
         dataset = "FUTOI"
+        verification_dataset = _verification_dataset(dataset)
         key = (instrument.root_symbol or instrument.symbol).strip()
         if instrument.asset_class != "future":
             return []
-        if not self.store.is_verified(dataset, key, from_date, till_date):
+        if not self.store.is_verified(
+            verification_dataset, key, from_date, till_date
+        ):
             rows = self.analytics.fetch_futoi(
                 instrument, from_date=from_date, till_date=till_date
             )
             self.store.upsert_rows(dataset, key, rows, "MOEX_FUTOI")
-            self.store.mark_verified(dataset, key, from_date, till_date)
+            self.store.mark_verified(
+                verification_dataset, key, from_date, till_date
+            )
         return self.store.read_rows(dataset, key, from_date, till_date)
 
     def sync(self, symbol: str, *, from_date: str, till_date: str) -> dict[str, object]:
@@ -85,26 +100,36 @@ class HistoricalFlowDataService:
         if instrument.asset_class not in TRADESTATS_ASSET_CLASSES:
             return []
         dataset = "TRADESTATS"
+        verification_dataset = _verification_dataset(dataset)
         key = instrument.secid
-        if self.store.is_verified(dataset, key, start.isoformat(), finish.isoformat()):
+        if self.store.is_verified(
+            verification_dataset, key, start.isoformat(), finish.isoformat()
+        ):
             return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
         for left, right in _bounded_date_ranges(start, finish):
             self.tradestats(
                 instrument, from_date=left.isoformat(), till_date=right.isoformat()
             )
-        self.store.mark_verified(dataset, key, start.isoformat(), finish.isoformat())
+        self.store.mark_verified(
+            verification_dataset, key, start.isoformat(), finish.isoformat()
+        )
         return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
 
     def _futoi_bounded(
         self, instrument: Instrument, start: date, finish: date
     ) -> list[dict[str, object]]:
         dataset = "FUTOI"
+        verification_dataset = _verification_dataset(dataset)
         key = (instrument.root_symbol or instrument.symbol).strip()
-        if self.store.is_verified(dataset, key, start.isoformat(), finish.isoformat()):
+        if self.store.is_verified(
+            verification_dataset, key, start.isoformat(), finish.isoformat()
+        ):
             return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
         for left, right in _bounded_date_ranges(start, finish):
             self.futoi(instrument, from_date=left.isoformat(), till_date=right.isoformat())
-        self.store.mark_verified(dataset, key, start.isoformat(), finish.isoformat())
+        self.store.mark_verified(
+            verification_dataset, key, start.isoformat(), finish.isoformat()
+        )
         return self.store.read_rows(dataset, key, start.isoformat(), finish.isoformat())
 
     def _segments(self, symbol: str, start: date, finish: date):
