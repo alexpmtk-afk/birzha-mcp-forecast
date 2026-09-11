@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+from pathlib import Path
+
+import ydb
+
+from birzha.application.calibration import ModelCalibrationService, calibrate_across_symbols
+from birzha.application.flow import MarketFlowService
+from birzha.application.forecast import ForecastService
+from birzha.application.historical_data import HistoricalDataService
+from birzha.application.historical_flow import HistoricalFlowDataService
+from birzha.application.market_data import MarketDataService
+from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
+from birzha.application.validation import WalkForwardValidator
+from birzha.application.validation_readiness import (
+    CORE_VALIDATION_SYMBOLS,
+    ValidationDataReadinessService,
+)
+from birzha.providers.moex_analytics import MoexAnalyticsClient
+from birzha.providers.moex_calendar import MoexTradingCalendar
+from birzha.storage.ydb_historical_flow_store import YdbHistoricalFlowStore
+from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
+from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+
+
+DEFAULT_DEVELOPMENT_START = "2025-01-01"
+DEFAULT_SPLIT_DATE = "2025-10-01"
+DEFAULT_HOLDOUT_END = "2026-05-31"
+
+
+def _token() -> str:
+    value = subprocess.check_output(["yc", "iam", "create-token"], text=True).strip()
+    if not value:
+        raise RuntimeError("yc returned an empty IAM token")
+    return value
+
+
+def _write_artifact(path: str, payload: dict[str, object]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Fail-closed six-market model validation against authorized YDB history"
+    )
+    parser.add_argument("--connection-string", required=True)
+    parser.add_argument("--development-start", default=DEFAULT_DEVELOPMENT_START)
+    parser.add_argument("--split-date", default=DEFAULT_SPLIT_DATE)
+    parser.add_argument("--holdout-end", default=DEFAULT_HOLDOUT_END)
+    parser.add_argument("--step-sessions", type=int, default=5)
+    parser.add_argument("--max-points", type=int, default=24)
+    parser.add_argument(
+        "--artifact", default="artifacts/ydb_model_validation.json"
+    )
+    args = parser.parse_args()
+
+    if not args.development_start < args.split_date < args.holdout_end:
+        raise ValueError("expected development_start < split_date < holdout_end")
+
+    driver = ydb.Driver(
+        connection_string=args.connection_string,
+        credentials=ydb.AccessTokenCredentials(_token()),
+    )
+    driver.wait(timeout=15, fail_fast=True)
+    pool = ydb.QuerySessionPool(driver)
+    try:
+        control = ProcessUpstreamControlPlane(
+            gate_factory=lambda provider_key: YdbSlotPacingGate(
+                pool, provider_key=provider_key
+            ),
+            require_distributed_gate=True,
+        )
+        market = MarketDataService.default(control_plane=control)
+        history = HistoricalDataService(
+            market_data=market,
+            store=YdbHistoricalCandleStore(pool),
+        )
+        readiness = ValidationDataReadinessService(history=history).check(
+            CORE_VALIDATION_SYMBOLS,
+            validation_start=args.development_start,
+            validation_end=args.holdout_end,
+        )
+        artifact: dict[str, object] = {
+            "development_start": args.development_start,
+            "split_date": args.split_date,
+            "holdout_end": args.holdout_end,
+            "step_sessions": args.step_sessions,
+            "max_points": args.max_points,
+            "symbols": list(CORE_VALIDATION_SYMBOLS),
+            "readiness": readiness.to_dict(),
+        }
+        if readiness.status != "READY":
+            artifact["status"] = "DATA_NOT_READY"
+            _write_artifact(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 2
+
+        analytics = MoexAnalyticsClient(control_plane=control)
+        historical_flow = HistoricalFlowDataService(
+            market_data=market,
+            analytics=analytics,
+            store=YdbHistoricalFlowStore(pool),
+        )
+        flow = MarketFlowService(
+            market_data=market,
+            analytics=analytics,
+            historical=historical_flow,
+        )
+        snapshot = MarketSnapshotService(market_data=market, flow=flow)
+        forecast = ForecastService(snapshots=snapshot)
+        validator = WalkForwardValidator(
+            market_data=market,
+            forecasts=forecast,
+            calendar=MoexTradingCalendar(market.provider),
+            history=history,
+            historical_flow=historical_flow,
+        )
+        calibration = ModelCalibrationService(validator=validator)
+        report = calibrate_across_symbols(
+            calibration,
+            CORE_VALIDATION_SYMBOLS,
+            development_start=args.development_start,
+            split_date=args.split_date,
+            holdout_end=args.holdout_end,
+            step_sessions=args.step_sessions,
+            max_points=args.max_points,
+        )
+        artifact["status"] = "COMPUTED"
+        artifact["calibration"] = report.to_dict()
+        _write_artifact(args.artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 0
+    finally:
+        stop = getattr(pool, "stop", None) or getattr(pool, "close", None)
+        if callable(stop):
+            stop()
+        driver.stop(timeout=5)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
