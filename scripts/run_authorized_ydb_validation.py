@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 from datetime import date, timedelta
@@ -27,6 +28,10 @@ from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.ydb_historical_flow_store import YdbHistoricalFlowStore
 from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_validation_governance import (
+    HoldoutAlreadyConsumedError,
+    YdbValidationGovernanceStore,
+)
 
 
 VALIDATION_PROTOCOL = "M23_HISTORICAL_GOVERNED_V1"
@@ -81,6 +86,21 @@ def _period_capacity(
         if missing:
             shortfall_by_symbol[symbol] = missing
     return capacity_by_symbol, shortfall_by_symbol
+
+
+def _model_fingerprint(parameters: object, *, development_start: str, split_date: str) -> str:
+    payload = {
+        "validation_protocol": VALIDATION_PROTOCOL,
+        "symbols": list(CORE_VALIDATION_SYMBOLS),
+        "development_start": development_start,
+        "split_date": split_date,
+        "parameters": parameters.to_dict(),  # type: ignore[attr-defined]
+        "minimum_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
+    }
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def main() -> int:
@@ -195,6 +215,18 @@ def main() -> int:
             print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
             return 0
 
+        governance = YdbValidationGovernanceStore(pool)
+        previous_claim = governance.overlapping_claim(holdout_start, args.holdout_end)
+        if previous_claim is not None:
+            artifact["run_status"] = "HOLDOUT_ALREADY_CONSUMED"
+            artifact["model_status"] = "NOT_EVALUATED"
+            artifact["holdout_evaluated"] = False
+            artifact["holdout_claim"] = previous_claim.to_dict()
+            artifact["calibration"] = None
+            _write_artifact(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 0
+
         analytics = MoexAnalyticsClient(control_plane=control)
         historical_flow = HistoricalFlowDataService(
             market_data=market,
@@ -222,15 +254,49 @@ def main() -> int:
             raise RuntimeError(
                 "capacity precheck minimum does not match model acceptance minimum"
             )
-        report = calibrate_across_symbols(
-            calibration,
-            CORE_VALIDATION_SYMBOLS,
-            development_start=args.development_start,
-            split_date=args.split_date,
-            holdout_end=args.holdout_end,
-            step_sessions=args.step_sessions,
-            max_points=args.max_points,
-        )
+
+        claimed: dict[str, object] = {}
+
+        def claim_holdout(parameters: object) -> None:
+            fingerprint = _model_fingerprint(
+                parameters,
+                development_start=args.development_start,
+                split_date=args.split_date,
+            )
+            claim = governance.claim_once(
+                holdout_start=holdout_start,
+                holdout_end=args.holdout_end,
+                protocol=VALIDATION_PROTOCOL,
+                model_fingerprint=fingerprint,
+            )
+            claimed.update(claim.to_dict())
+
+        try:
+            report = calibrate_across_symbols(
+                calibration,
+                CORE_VALIDATION_SYMBOLS,
+                development_start=args.development_start,
+                split_date=args.split_date,
+                holdout_end=args.holdout_end,
+                step_sessions=args.step_sessions,
+                max_points=args.max_points,
+                holdout_gate=claim_holdout,
+            )
+        except HoldoutAlreadyConsumedError:
+            previous_claim = governance.overlapping_claim(
+                holdout_start, args.holdout_end
+            )
+            artifact["run_status"] = "HOLDOUT_ALREADY_CONSUMED"
+            artifact["model_status"] = "NOT_EVALUATED"
+            artifact["holdout_evaluated"] = False
+            artifact["holdout_claim"] = (
+                previous_claim.to_dict() if previous_claim is not None else None
+            )
+            artifact["calibration"] = None
+            _write_artifact(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 0
+
         selected_development = report.candidates[0].development
         artifact["run_status"] = "COMPUTED"
         artifact["model_status"] = report.status
@@ -242,6 +308,7 @@ def main() -> int:
         artifact["holdout_statuses"] = {
             item.symbol: item.status for item in report.holdout
         }
+        artifact["holdout_claim"] = claimed or None
         artifact["calibration"] = report.to_dict()
         _write_artifact(args.artifact, artifact)
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
