@@ -104,7 +104,7 @@ class DevelopmentHoldoutReport:
     holdout_start: str
     holdout_end: str
     development: ModelAcceptanceReport
-    holdout: ModelAcceptanceReport
+    holdout: ModelAcceptanceReport | None
     status: str
 
     def to_dict(self) -> dict[str, object]:
@@ -115,6 +115,7 @@ class DevelopmentHoldoutReport:
             "holdout_start": self.holdout_start,
             "holdout_end": self.holdout_end,
             "development": self.development.to_dict(),
-            "holdout": self.holdout.to_dict(),
+            "holdout": self.holdout.to_dict() if self.holdout is not None else None,
+            "holdout_evaluated": self.holdout is not None,
             "status": self.status,
         }
