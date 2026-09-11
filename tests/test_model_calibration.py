@@ -70,6 +70,39 @@ def test_calibration_selects_on_development_then_checks_holdout(monkeypatch) -> 
     assert ("better", "2025-01-01") not in calls
 
 
+def test_single_symbol_calibration_prefers_accepted_over_higher_rejected_score(monkeypatch) -> None:
+    reports = {
+        "flashy_rejected": _report(0.95, 0.80, "REJECTED"),
+        "robust_accepted": _report(0.66, 0.52, "ACCEPTED"),
+    }
+
+    class FakeAssessor:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def assess(self, symbol: str, **kwargs):
+            return reports[self.name]
+
+    monkeypatch.setattr(
+        ModelCalibrationService,
+        "_acceptance_for",
+        lambda self, parameters: FakeAssessor(parameters.name),
+    )
+    service = ModelCalibrationService(validator=object())  # type: ignore[arg-type]
+    result = service.calibrate(
+        "SBER",
+        development_start="2024-01-01",
+        split_date="2025-01-01",
+        holdout_end="2026-01-01",
+        candidates=(
+            ForecastParameters(name="flashy_rejected"),
+            ForecastParameters(name="robust_accepted", direction_threshold=0.8),
+        ),
+    )
+
+    assert result.selected.name == "robust_accepted"
+
+
 def test_multisymbol_calibration_uses_shared_parameters_and_all_holdouts(monkeypatch) -> None:
     from birzha.application.calibration import calibrate_across_symbols
 
@@ -114,3 +147,45 @@ def test_multisymbol_calibration_uses_shared_parameters_and_all_holdouts(monkeyp
     assert calls.count(("better", "Si", "2025-01-02")) == 1
     assert ("better", "SBER", "2025-01-01") not in calls
     assert ("better", "Si", "2025-01-01") not in calls
+
+
+def test_multisymbol_calibration_prefers_candidate_accepted_on_every_market(monkeypatch) -> None:
+    from birzha.application.calibration import calibrate_across_symbols
+
+    reports = {
+        "average_star": {
+            "SBER": _report(0.95, 0.80, "ACCEPTED"),
+            "Si": _report(0.95, 0.80, "REJECTED"),
+        },
+        "robust_all": {
+            "SBER": _report(0.66, 0.52, "ACCEPTED"),
+            "Si": _report(0.66, 0.52, "ACCEPTED"),
+        },
+    }
+
+    class FakeAssessor:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def assess(self, symbol: str, **kwargs):
+            return reports[self.name][symbol]
+
+    monkeypatch.setattr(
+        ModelCalibrationService,
+        "_acceptance_for",
+        lambda self, parameters: FakeAssessor(parameters.name),
+    )
+    service = ModelCalibrationService(validator=object())  # type: ignore[arg-type]
+    result = calibrate_across_symbols(
+        service,
+        ("SBER", "Si"),
+        development_start="2024-01-01",
+        split_date="2025-01-01",
+        holdout_end="2026-01-01",
+        candidates=(
+            ForecastParameters(name="average_star"),
+            ForecastParameters(name="robust_all", direction_threshold=0.8),
+        ),
+    )
+
+    assert result.selected.name == "robust_all"
