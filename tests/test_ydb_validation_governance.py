@@ -8,6 +8,9 @@ from birzha.storage.ydb_validation_governance import (
 )
 
 
+ENGINE = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
+
+
 class FakePool:
     def __init__(self) -> None:
         self.claims: list[dict[str, str]] = []
@@ -36,6 +39,7 @@ class FakePool:
                 "holdout_start": left,
                 "holdout_end": right,
                 "protocol": parameters["$protocol"][0],
+                "engine_version": parameters["$engine_version"][0],
                 "model_fingerprint": parameters["$model_fingerprint"][0],
                 "consumed_at": parameters["$consumed_at"][0],
             }
@@ -53,19 +57,28 @@ class FakePool:
         raise AssertionError(compact)
 
 
+def _claim(store: YdbValidationGovernanceStore, **overrides):
+    values = {
+        "holdout_start": "2023-01-01",
+        "holdout_end": "2024-12-31",
+        "protocol": "TEST",
+        "engine_version": ENGINE,
+        "model_fingerprint": "abc",
+    }
+    values.update(overrides)
+    return store.claim_once(**values)
+
+
 def test_first_holdout_claim_succeeds_and_is_persisted_atomically() -> None:
     pool = FakePool()
     store = YdbValidationGovernanceStore(pool)
 
-    claim = store.claim_once(
-        holdout_start="2023-01-01",
-        holdout_end="2024-12-31",
-        protocol="TEST",
-        model_fingerprint="abc",
-    )
+    claim = _claim(store)
 
     assert claim.holdout_start == "2023-01-01"
     assert claim.holdout_end == "2024-12-31"
+    assert claim.engine_version == ENGINE
+    assert pool.claims[0]["engine_version"] == ENGINE
     assert pool.claims[0]["model_fingerprint"] == "abc"
     assert pool.retry_idempotent[-1] is False
     assert pool.atomic_claim_queries == 1
@@ -74,18 +87,13 @@ def test_first_holdout_claim_succeeds_and_is_persisted_atomically() -> None:
 def test_same_holdout_cannot_be_claimed_twice() -> None:
     pool = FakePool()
     store = YdbValidationGovernanceStore(pool)
-    store.claim_once(
-        holdout_start="2023-01-01",
-        holdout_end="2024-12-31",
-        protocol="TEST",
-        model_fingerprint="abc",
-    )
+    _claim(store)
 
     with pytest.raises(HoldoutAlreadyConsumedError):
-        store.claim_once(
-            holdout_start="2023-01-01",
-            holdout_end="2024-12-31",
+        _claim(
+            store,
             protocol="TEST2",
+            engine_version="DIFFERENT_ENGINE",
             model_fingerprint="different",
         )
 
@@ -95,18 +103,15 @@ def test_same_holdout_cannot_be_claimed_twice() -> None:
 def test_overlapping_holdout_is_also_blocked() -> None:
     pool = FakePool()
     store = YdbValidationGovernanceStore(pool)
-    store.claim_once(
-        holdout_start="2023-01-01",
-        holdout_end="2024-12-31",
-        protocol="TEST",
-        model_fingerprint="abc",
-    )
+    _claim(store)
 
     with pytest.raises(HoldoutAlreadyConsumedError):
-        store.claim_once(
+        _claim(
+            store,
             holdout_start="2024-06-01",
             holdout_end="2025-06-01",
             protocol="TEST2",
+            engine_version="DIFFERENT_ENGINE",
             model_fingerprint="def",
         )
 
