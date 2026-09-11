@@ -85,6 +85,36 @@ def test_stored_view_reads_persisted_candles():
     store.close()
 
 
+def test_frozen_direct_instrument_resolves_from_store_without_live_lookup():
+    store = DuckDBHistoricalCandleStore(":memory:")
+    store.upsert_series(_d1(INST, "2026-09-01"))
+    history = HistoricalDataService(market_data=SimpleNamespace(), store=store)
+    view = StoredMarketDataView(
+        NoLiveResolveBase(),
+        history,
+        require_stored_resolution=True,
+    )
+
+    instrument = view.resolve("SBER", as_of=date(2026, 9, 1))
+
+    assert instrument.secid == "SBER"
+    store.close()
+
+
+def test_frozen_direct_instrument_missing_metadata_fails_closed_without_live_lookup():
+    store = DuckDBHistoricalCandleStore(":memory:")
+    history = HistoricalDataService(market_data=SimpleNamespace(), store=store)
+    view = StoredMarketDataView(
+        NoLiveResolveBase(),
+        history,
+        require_stored_resolution=True,
+    )
+
+    with pytest.raises(RuntimeError, match="stored instrument metadata missing"):
+        view.resolve("SBER", as_of=date(2026, 9, 1))
+    store.close()
+
+
 def test_rolling_future_resolves_from_versioned_stored_session_without_live_lookup():
     store = DuckDBHistoricalCandleStore(":memory:")
     store.upsert_series(_d1(GDM5, "2025-01-10"))
@@ -95,7 +125,9 @@ def test_rolling_future_resolves_from_versioned_stored_session_without_live_look
         market_data=SimpleNamespace(direct_resolver=object()),
         store=store,
     )
-    view = StoredMarketDataView(NoLiveResolveBase(), history)
+    view = StoredMarketDataView(
+        NoLiveResolveBase(), history, require_stored_resolution=True
+    )
 
     instrument = view.resolve("GOLD", as_of=date(2025, 1, 10))
 
@@ -116,7 +148,9 @@ def test_rolling_future_stored_session_fails_closed_if_contract_is_ambiguous():
         market_data=SimpleNamespace(direct_resolver=object()),
         store=store,
     )
-    view = StoredMarketDataView(NoLiveResolveBase(), history)
+    view = StoredMarketDataView(
+        NoLiveResolveBase(), history, require_stored_resolution=True
+    )
 
     with pytest.raises(RuntimeError, match="exactly one contract"):
         view.resolve("GOLD", as_of=date(2025, 1, 10))
@@ -130,7 +164,9 @@ def test_rolling_future_stored_session_requires_current_verified_calendar():
         market_data=SimpleNamespace(direct_resolver=object()),
         store=store,
     )
-    view = StoredMarketDataView(NoLiveResolveBase(), history)
+    view = StoredMarketDataView(
+        NoLiveResolveBase(), history, require_stored_resolution=True
+    )
 
     with pytest.raises(RuntimeError, match="stored futures session is not verified"):
         view.resolve("GOLD", as_of=date(2025, 1, 10))
