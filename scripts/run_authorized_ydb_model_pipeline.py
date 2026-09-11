@@ -4,13 +4,17 @@ import argparse
 import json
 import subprocess
 import sys
+from datetime import date, timedelta
 from pathlib import Path
+
+from birzha.application.validation import independent_sample_capacity
 
 
 DEFAULT_VALIDATION_START = "2025-01-01"
 DEFAULT_SPLIT_DATE = "2025-10-01"
 DEFAULT_VALIDATION_END = "2026-05-31"
 DEFAULT_MAX_POINTS = 80
+MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
 
 
 def _run(command: list[str], *, label: str) -> dict[str, object]:
@@ -49,6 +53,25 @@ def _read(path: str) -> dict[str, object]:
     return payload
 
 
+def _calendar_capacity_upper_bound(
+    start_date: str,
+    end_date: str,
+    *,
+    step_sessions: int,
+    max_points: int,
+) -> dict[int, int]:
+    start = date.fromisoformat(start_date[:10])
+    end = date.fromisoformat(end_date[:10])
+    if end < start:
+        raise ValueError("capacity period end must not be before start")
+    calendar_days = (end - start).days + 1
+    return independent_sample_capacity(
+        calendar_days,
+        step_sessions=step_sessions,
+        max_points=max_points,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -83,6 +106,57 @@ def main() -> int:
     if args.max_points <= 0:
         raise ValueError("max_points must be > 0")
 
+    holdout_start = (
+        date.fromisoformat(args.split_date[:10]) + timedelta(days=1)
+    ).isoformat()
+    development_upper = _calendar_capacity_upper_bound(
+        args.validation_start,
+        args.split_date,
+        step_sessions=args.step_sessions,
+        max_points=args.max_points,
+    )
+    holdout_upper = _calendar_capacity_upper_bound(
+        holdout_start,
+        args.validation_end,
+        step_sessions=args.step_sessions,
+        max_points=args.max_points,
+    )
+    capacity_upper_bound = {
+        "development": {str(k): v for k, v in development_upper.items()},
+        "holdout": {str(k): v for k, v in holdout_upper.items()},
+    }
+    impossible = {
+        period: {
+            horizon: count
+            for horizon, count in values.items()
+            if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
+        }
+        for period, values in capacity_upper_bound.items()
+    }
+    impossible = {period: values for period, values in impossible.items() if values}
+
+    artifact: dict[str, object] = {
+        "validation_start": args.validation_start,
+        "split_date": args.split_date,
+        "validation_end": args.validation_end,
+        "step_sessions": args.step_sessions,
+        "max_points": args.max_points,
+        "minimum_acceptance_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
+        "calendar_capacity_upper_bound": capacity_upper_bound,
+        "prepare_artifact": args.prepare_artifact,
+        "validation_artifact": args.validation_artifact,
+    }
+    if impossible:
+        artifact["status"] = "INSUFFICIENT_DATA"
+        artifact["model_status"] = "INSUFFICIENT_DATA"
+        artifact["capacity_shortfall_upper_bound"] = impossible
+        artifact["prepare"] = {"status": "NOT_RUN"}
+        artifact["validation"] = {"status": "NOT_RUN"}
+        artifact["holdout_evaluated"] = False
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 0
+
     python = sys.executable
     scripts_dir = Path(__file__).resolve().parent
     _remove_existing(args.prepare_artifact)
@@ -101,17 +175,7 @@ def main() -> int:
         ],
         label="prepare",
     )
-
-    artifact: dict[str, object] = {
-        "validation_start": args.validation_start,
-        "split_date": args.split_date,
-        "validation_end": args.validation_end,
-        "step_sessions": args.step_sessions,
-        "max_points": args.max_points,
-        "prepare": prepare,
-        "prepare_artifact": args.prepare_artifact,
-        "validation_artifact": args.validation_artifact,
-    }
+    artifact["prepare"] = prepare
     if prepare["status"] != "PASS":
         artifact["status"] = "PREPARE_FAILED"
         artifact["validation"] = {"status": "NOT_RUN"}
