@@ -27,6 +27,7 @@ class HoldoutClaim:
     holdout_start: str
     holdout_end: str
     protocol: str
+    engine_version: str
     model_fingerprint: str
     consumed_at: str
 
@@ -35,6 +36,7 @@ class HoldoutClaim:
             "holdout_start": self.holdout_start,
             "holdout_end": self.holdout_end,
             "protocol": self.protocol,
+            "engine_version": self.engine_version,
             "model_fingerprint": self.model_fingerprint,
             "consumed_at": self.consumed_at,
         }
@@ -52,7 +54,7 @@ class YdbValidationGovernanceStore:
         self,
         pool: QueryPool,
         *,
-        table: str = "model_validation_holdout_claims_v1",
+        table: str = "model_validation_holdout_claims_v2",
     ) -> None:
         self._pool = pool
         self._table = _safe_table_name(table)
@@ -62,6 +64,7 @@ class YdbValidationGovernanceStore:
                 holdout_start Utf8 NOT NULL,
                 holdout_end Utf8 NOT NULL,
                 protocol Utf8 NOT NULL,
+                engine_version Utf8 NOT NULL,
                 model_fingerprint Utf8 NOT NULL,
                 consumed_at Utf8 NOT NULL,
                 PRIMARY KEY (holdout_start, holdout_end)
@@ -75,7 +78,7 @@ class YdbValidationGovernanceStore:
             f"""
             DECLARE $holdout_start AS Utf8;
             DECLARE $holdout_end AS Utf8;
-            SELECT holdout_start, holdout_end, protocol, model_fingerprint, consumed_at
+            SELECT holdout_start, holdout_end, protocol, engine_version, model_fingerprint, consumed_at
             FROM `{self._table}`
             WHERE holdout_start <= $holdout_end AND holdout_end >= $holdout_start
             LIMIT 1;
@@ -94,6 +97,7 @@ class YdbValidationGovernanceStore:
         holdout_start: str,
         holdout_end: str,
         protocol: str,
+        engine_version: str,
         model_fingerprint: str,
     ) -> HoldoutClaim:
         """Atomically claim a non-overlapping holdout range.
@@ -107,6 +111,7 @@ class YdbValidationGovernanceStore:
             holdout_start=holdout_start[:10],
             holdout_end=holdout_end[:10],
             protocol=protocol,
+            engine_version=engine_version,
             model_fingerprint=model_fingerprint,
             consumed_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -114,6 +119,7 @@ class YdbValidationGovernanceStore:
             "$holdout_start": _utf8(claim.holdout_start),
             "$holdout_end": _utf8(claim.holdout_end),
             "$protocol": _utf8(claim.protocol),
+            "$engine_version": _utf8(claim.engine_version),
             "$model_fingerprint": _utf8(claim.model_fingerprint),
             "$consumed_at": _utf8(claim.consumed_at),
         }
@@ -123,21 +129,23 @@ class YdbValidationGovernanceStore:
                 DECLARE $holdout_start AS Utf8;
                 DECLARE $holdout_end AS Utf8;
                 DECLARE $protocol AS Utf8;
+                DECLARE $engine_version AS Utf8;
                 DECLARE $model_fingerprint AS Utf8;
                 DECLARE $consumed_at AS Utf8;
 
                 $existing = SELECT
-                    holdout_start, holdout_end, protocol, model_fingerprint, consumed_at
+                    holdout_start, holdout_end, protocol, engine_version, model_fingerprint, consumed_at
                 FROM `{self._table}`
                 WHERE holdout_start <= $holdout_end AND holdout_end >= $holdout_start
                 LIMIT 1;
 
                 INSERT INTO `{self._table}`
-                    (holdout_start, holdout_end, protocol, model_fingerprint, consumed_at)
+                    (holdout_start, holdout_end, protocol, engine_version, model_fingerprint, consumed_at)
                 SELECT
                     $holdout_start AS holdout_start,
                     $holdout_end AS holdout_end,
                     $protocol AS protocol,
+                    $engine_version AS engine_version,
                     $model_fingerprint AS model_fingerprint,
                     $consumed_at AS consumed_at
                 WHERE NOT EXISTS (SELECT * FROM $existing);
@@ -172,6 +180,7 @@ def _claim_from_row(row: object | None) -> HoldoutClaim | None:
         holdout_start=str(_row_value(row, "holdout_start")),
         holdout_end=str(_row_value(row, "holdout_end")),
         protocol=str(_row_value(row, "protocol")),
+        engine_version=str(_row_value(row, "engine_version")),
         model_fingerprint=str(_row_value(row, "model_fingerprint")),
         consumed_at=str(_row_value(row, "consumed_at")),
     )
