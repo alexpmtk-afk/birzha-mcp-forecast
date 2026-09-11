@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from birzha.application.forecast import ForecastParameters, ForecastService
-from birzha.application.model_lab import ModelAcceptanceService
+from birzha.application.model_lab import ModelAcceptanceService, holdout_start_date
 from birzha.application.validation import WalkForwardValidator
 from birzha.domain.validation import ModelAcceptanceReport
 
@@ -73,6 +73,9 @@ class ModelCalibrationService:
     ) -> ModelCalibrationReport:
         if not development_start < split_date < holdout_end:
             raise ValueError("expected development_start < split_date < holdout_end")
+        holdout_start = holdout_start_date(split_date)
+        if holdout_start >= holdout_end:
+            raise ValueError("holdout period must contain dates after split_date")
         if not candidates:
             raise ValueError("at least one calibration candidate is required")
         results = []
@@ -89,7 +92,7 @@ class ModelCalibrationService:
         selected = ranked[0].parameters
         holdout = self._acceptance_for(selected).assess(
             symbol,
-            start_date=split_date,
+            start_date=holdout_start,
             end_date=holdout_end,
             step_sessions=step_sessions,
             max_points=max_points,
@@ -166,6 +169,7 @@ class MultiSymbolCalibrationReport:
     candidates: tuple[MultiSymbolCandidateResult, ...]
     holdout: tuple[ModelAcceptanceReport, ...]
     status: str
+
     def to_dict(self) -> dict[str, object]:
         return {
             "symbols": list(self.symbols),
@@ -194,6 +198,9 @@ def calibrate_across_symbols(
         raise ValueError("at least one symbol is required")
     if not development_start < split_date < holdout_end:
         raise ValueError("expected development_start < split_date < holdout_end")
+    holdout_start = holdout_start_date(split_date)
+    if holdout_start >= holdout_end:
+        raise ValueError("holdout period must contain dates after split_date")
     if not candidates:
         raise ValueError("at least one calibration candidate is required")
 
@@ -219,7 +226,7 @@ def calibrate_across_symbols(
     holdout = tuple(
         holdout_assessor.assess(
             symbol,
-            start_date=split_date,
+            start_date=holdout_start,
             end_date=holdout_end,
             step_sessions=step_sessions,
             max_points=max_points,
