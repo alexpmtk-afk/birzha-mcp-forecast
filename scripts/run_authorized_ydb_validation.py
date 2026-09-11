@@ -19,6 +19,10 @@ from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.application.validation import WalkForwardValidator
 from birzha.application.validation_capacity import stored_contract_capacity
+from birzha.application.validation_dataset_fingerprint import (
+    ValidationDatasetFingerprint,
+    build_validation_dataset_fingerprint,
+)
 from birzha.application.validation_readiness import (
     CORE_VALIDATION_SYMBOLS,
     ValidationDataReadinessService,
@@ -44,6 +48,10 @@ DEVELOPMENT_READY_STATUS = "DEVELOPMENT_ACCEPTED_HOLDOUT_SEALED"
 
 
 class SelectedModelFingerprintMismatchError(RuntimeError):
+    pass
+
+
+class DatasetFingerprintMismatchError(RuntimeError):
     pass
 
 
@@ -130,6 +138,11 @@ def main() -> int:
         help="Fingerprint emitted by a prior sealed development run; required with --open-holdout.",
     )
     parser.add_argument(
+        "--expected-data-fingerprint",
+        default=None,
+        help="Frozen YDB dataset fingerprint emitted by the sealed development run; required with --open-holdout.",
+    )
+    parser.add_argument(
         "--artifact", default="artifacts/ydb_model_validation.json"
     )
     args = parser.parse_args()
@@ -140,13 +153,17 @@ def main() -> int:
         raise ValueError("step_sessions must be between 1 and 50")
     if args.max_points <= 0 or args.max_points > 240:
         raise ValueError("max_points must be between 1 and 240")
-    if args.open_holdout and not args.expected_model_fingerprint:
+    if args.open_holdout and (
+        not args.expected_model_fingerprint or not args.expected_data_fingerprint
+    ):
         raise ValueError(
-            "--expected-model-fingerprint is required when --open-holdout is used"
+            "--expected-model-fingerprint and --expected-data-fingerprint are required when --open-holdout is used"
         )
-    if not args.open_holdout and args.expected_model_fingerprint:
+    if not args.open_holdout and (
+        args.expected_model_fingerprint or args.expected_data_fingerprint
+    ):
         raise ValueError(
-            "--expected-model-fingerprint is only valid together with --open-holdout"
+            "expected fingerprints are only valid together with --open-holdout"
         )
 
     holdout_start = (
@@ -241,6 +258,34 @@ def main() -> int:
             print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
             return 0
 
+        dataset_fingerprint: ValidationDatasetFingerprint = (
+            build_validation_dataset_fingerprint(
+                pool,
+                history,
+                CORE_VALIDATION_SYMBOLS,
+                validation_start=args.development_start,
+                validation_end=args.holdout_end,
+            )
+        )
+        artifact["dataset_fingerprint"] = dataset_fingerprint.to_dict()
+        artifact["selected_data_fingerprint"] = dataset_fingerprint.sha256
+
+        if (
+            args.open_holdout
+            and dataset_fingerprint.sha256 != args.expected_data_fingerprint
+        ):
+            artifact["run_status"] = "DATA_FINGERPRINT_MISMATCH"
+            artifact["model_status"] = "NOT_EVALUATED"
+            artifact["expected_data_fingerprint"] = args.expected_data_fingerprint
+            artifact["actual_data_fingerprint"] = dataset_fingerprint.sha256
+            artifact["holdout_evaluated"] = False
+            artifact["holdout_sealed"] = True
+            artifact["holdout_claim"] = None
+            artifact["calibration"] = None
+            _write_artifact(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 0
+
         governance: YdbValidationGovernanceStore | None = None
         if args.open_holdout:
             governance = YdbValidationGovernanceStore(pool)
@@ -249,6 +294,7 @@ def main() -> int:
                 artifact["run_status"] = "HOLDOUT_ALREADY_CONSUMED"
                 artifact["model_status"] = "NOT_EVALUATED"
                 artifact["holdout_evaluated"] = False
+                artifact["holdout_sealed"] = False
                 artifact["holdout_claim"] = previous_claim.to_dict()
                 artifact["calibration"] = None
                 _write_artifact(args.artifact, artifact)
@@ -297,6 +343,10 @@ def main() -> int:
                 raise SelectedModelFingerprintMismatchError(
                     "selected development model does not match the sealed fingerprint"
                 )
+            if dataset_fingerprint.sha256 != args.expected_data_fingerprint:
+                raise DatasetFingerprintMismatchError(
+                    "prepared validation dataset does not match the sealed fingerprint"
+                )
             assert governance is not None
             claim = governance.claim_once(
                 holdout_start=holdout_start,
@@ -304,6 +354,7 @@ def main() -> int:
                 protocol=VALIDATION_PROTOCOL,
                 engine_version=ENGINE_VERSION,
                 model_fingerprint=actual_fingerprint,
+                data_fingerprint=dataset_fingerprint.sha256,
             )
             claimed.update(claim.to_dict())
 
@@ -325,6 +376,19 @@ def main() -> int:
             artifact["expected_model_fingerprint"] = args.expected_model_fingerprint
             artifact["actual_model_fingerprint"] = actual_fingerprint
             artifact["holdout_evaluated"] = False
+            artifact["holdout_sealed"] = True
+            artifact["holdout_claim"] = None
+            artifact["calibration"] = None
+            _write_artifact(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 0
+        except DatasetFingerprintMismatchError:
+            artifact["run_status"] = "DATA_FINGERPRINT_MISMATCH"
+            artifact["model_status"] = "NOT_EVALUATED"
+            artifact["expected_data_fingerprint"] = args.expected_data_fingerprint
+            artifact["actual_data_fingerprint"] = dataset_fingerprint.sha256
+            artifact["holdout_evaluated"] = False
+            artifact["holdout_sealed"] = True
             artifact["holdout_claim"] = None
             artifact["calibration"] = None
             _write_artifact(args.artifact, artifact)
@@ -338,6 +402,7 @@ def main() -> int:
             artifact["run_status"] = "HOLDOUT_ALREADY_CONSUMED"
             artifact["model_status"] = "NOT_EVALUATED"
             artifact["holdout_evaluated"] = False
+            artifact["holdout_sealed"] = False
             artifact["holdout_claim"] = (
                 previous_claim.to_dict() if previous_claim is not None else None
             )
