@@ -102,6 +102,11 @@ class HistoricalDataService:
             if resolver_known
             else symbol
         )
+        session_symbol = (
+            verification_symbol
+            if resolver_known and timeframe == "D1"
+            else symbol
+        )
 
         # Store-first: a verification marker created by the current semantics
         # is sufficient to reuse history without any resolver/network call.
@@ -113,7 +118,7 @@ class HistoricalDataService:
         sessions_verified = (
             timeframe != "D1"
             or self.store.is_session_range_verified(
-                symbol, from_date[:10], till_date[:10]
+                session_symbol, from_date[:10], till_date[:10]
             )
         )
         if price_verified and sessions_verified:
@@ -148,6 +153,7 @@ class HistoricalDataService:
                 verification_symbol=(
                     verification_symbol if force_full_sessions else None
                 ),
+                session_symbol=(session_symbol if timeframe == "D1" else None),
             )
             for instrument, left, right in segments
         )
@@ -157,7 +163,9 @@ class HistoricalDataService:
                 verification_symbol, timeframe, from_date[:10], till_date[:10]
             )
         if timeframe == "D1":
-            self.store.mark_session_range_verified(symbol, from_date[:10], till_date[:10])
+            self.store.mark_session_range_verified(
+                session_symbol, from_date[:10], till_date[:10]
+            )
         return HistoricalSyncResult(
             symbol=symbol,
             timeframe=timeframe,
@@ -183,12 +191,17 @@ class HistoricalDataService:
             if resolver_known
             else symbol
         )
+        session_symbol = (
+            verification_symbol
+            if resolver_known and timeframe == "D1"
+            else symbol
+        )
         if not self.store.is_verified(
             verification_symbol, timeframe, from_date[:10], till_date[:10]
         ):
             return False
         if timeframe == "D1" and not self.store.is_session_range_verified(
-            symbol, from_date[:10], till_date[:10]
+            session_symbol, from_date[:10], till_date[:10]
         ):
             return False
         return True
@@ -238,11 +251,22 @@ class HistoricalDataService:
     def session_dates(
         self, symbol: str, *, from_date: str, till_date: str
     ) -> tuple[date, ...]:
-        if not self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10]):
+        resolver_known = hasattr(self.market_data, "direct_resolver")
+        is_root = is_futures_root_symbol(symbol)
+        session_symbol = (
+            _verification_symbol(symbol, "D1", is_root=is_root)
+            if resolver_known
+            else symbol
+        )
+        if not self.store.is_session_range_verified(
+            session_symbol, from_date[:10], till_date[:10]
+        ):
             raise RuntimeError("stored session calendar is not verified for requested range")
         return tuple(
             date.fromisoformat(item[:10])
-            for item in self.store.stored_sessions(symbol, from_date, till_date)
+            for item in self.store.stored_sessions(
+                session_symbol, from_date, till_date
+            )
         )
 
     def _segments(
@@ -292,6 +316,7 @@ class HistoricalDataService:
         *,
         force_full_sessions: bool = False,
         verification_symbol: str | None = None,
+        session_symbol: str | None = None,
     ) -> ContractSyncResult:
         calendar = MoexTradingCalendar(self.market_data.provider)
         expected = calendar.dates(
@@ -304,7 +329,9 @@ class HistoricalDataService:
         )
         if timeframe.upper() == "D1":
             self.store.record_sessions(
-                symbol, instrument.secid, tuple(day.isoformat() for day in expected)
+                session_symbol or symbol,
+                instrument.secid,
+                tuple(day.isoformat() for day in expected),
             )
         stored_dates = self.store.stored_trade_dates(
             instrument.secid,
@@ -404,15 +431,18 @@ class HistoricalDataService:
 
 def _verification_symbol(symbol: str, timeframe: str, *, is_root: bool) -> str:
     tf = timeframe.upper()
-    if tf == "D1":
-        return f"{symbol}#{D1_SESSION_VERIFICATION_VERSION}"
-    if tf == "H1":
-        return f"{symbol}#{H1_FULL_VERIFICATION_VERSION}"
-    if tf == "M15":
-        return f"{symbol}#{M15_FULL_VERIFICATION_VERSION}"
+    versions: list[str] = []
     if is_root:
-        return f"{symbol}#{ROLLING_HISTORY_VERIFICATION_VERSION}"
-    return symbol
+        versions.append(ROLLING_HISTORY_VERIFICATION_VERSION)
+    if tf == "D1":
+        versions.append(D1_SESSION_VERIFICATION_VERSION)
+    elif tf == "H1":
+        versions.append(H1_FULL_VERIFICATION_VERSION)
+    elif tf == "M15":
+        versions.append(M15_FULL_VERIFICATION_VERSION)
+    if not versions:
+        return symbol
+    return f"{symbol}#" + "#".join(versions)
 
 
 def _missing_session_ranges(
