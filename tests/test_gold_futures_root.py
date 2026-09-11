@@ -10,7 +10,9 @@ from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
 
-GOLD_DIRECT = Instrument("GOLD", "GOLD", "RFUD", "futures", "forts", "future")
+# MOEX also exposes an exact stock-market SECID GOLD (a gold fund).  The BIRZHA
+# research symbol GOLD deliberately means the rolling GD* futures family instead.
+GOLD_DIRECT = Instrument("GOLD", "GOLD", "TQTF", "stock", "shares", "equity")
 GDH5 = Instrument("GOLD", "GDH5", "RFUD", "futures", "forts", "future", root_symbol="GOLD")
 GDM5 = Instrument("GOLD", "GDM5", "RFUD", "futures", "forts", "future", root_symbol="GOLD")
 SIH5 = Instrument("Si", "SiH5", "RFUD", "futures", "forts", "future", root_symbol="Si")
