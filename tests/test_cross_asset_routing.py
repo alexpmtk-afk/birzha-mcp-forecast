@@ -26,6 +26,23 @@ SI = Instrument(
     asset_class="future",
     root_symbol="Si",
 )
+GOLD_DIRECT = Instrument(
+    symbol="GOLD",
+    secid="GOLD",
+    board="RFUD",
+    engine="futures",
+    market="forts",
+    asset_class="future",
+)
+GOLD_FUTURE = Instrument(
+    symbol="GOLD",
+    secid="GDU6",
+    board="RFUD",
+    engine="futures",
+    market="forts",
+    asset_class="future",
+    root_symbol="GOLD",
+)
 
 
 @dataclass
@@ -54,6 +71,36 @@ def test_exact_equity_uses_direct_moex_route_and_futures_root_falls_back() -> No
     assert service.resolve("SBER") == SBER
     assert provider.futures_calls == 0
     assert service.resolve("Si") == SI
+    assert provider.futures_calls == 1
+
+
+class _AmbiguousGoldDirectResolver:
+    def resolve(self, symbol: str) -> Instrument | None:
+        return GOLD_DIRECT if symbol.upper() == "GOLD" else None
+
+
+@dataclass
+class _GoldProvider:
+    futures_calls: int = 0
+
+    def resolve_active_future(self, symbol: str) -> Instrument:
+        self.futures_calls += 1
+        assert symbol == "GOLD"
+        return GOLD_FUTURE
+
+
+def test_gold_root_bypasses_colliding_exact_secid() -> None:
+    provider = _GoldProvider()
+    service = MarketDataService(
+        provider=provider,  # type: ignore[arg-type]
+        direct_resolver=_AmbiguousGoldDirectResolver(),  # type: ignore[arg-type]
+    )
+
+    resolved = service.resolve("GOLD")
+
+    assert resolved == GOLD_FUTURE
+    assert resolved.secid == "GDU6"
+    assert resolved.root_symbol == "GOLD"
     assert provider.futures_calls == 1
 
 
