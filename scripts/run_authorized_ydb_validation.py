@@ -15,7 +15,10 @@ from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.market_data import MarketDataService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.application.validation import WalkForwardValidator
+from birzha.application.validation import (
+    WalkForwardValidator,
+    independent_sample_capacity,
+)
 from birzha.application.validation_readiness import (
     CORE_VALIDATION_SYMBOLS,
     ValidationDataReadinessService,
@@ -30,6 +33,8 @@ from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 DEFAULT_DEVELOPMENT_START = "2025-01-01"
 DEFAULT_SPLIT_DATE = "2025-10-01"
 DEFAULT_HOLDOUT_END = "2026-05-31"
+DEFAULT_MAX_POINTS = 80
+MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
 
 
 def _token() -> str:
@@ -57,7 +62,7 @@ def main() -> int:
     parser.add_argument("--split-date", default=DEFAULT_SPLIT_DATE)
     parser.add_argument("--holdout-end", default=DEFAULT_HOLDOUT_END)
     parser.add_argument("--step-sessions", type=int, default=5)
-    parser.add_argument("--max-points", type=int, default=24)
+    parser.add_argument("--max-points", type=int, default=DEFAULT_MAX_POINTS)
     parser.add_argument(
         "--artifact", default="artifacts/ydb_model_validation.json"
     )
@@ -98,6 +103,7 @@ def main() -> int:
             "symbols": list(CORE_VALIDATION_SYMBOLS),
             "readiness": readiness.to_dict(),
             "data_mode": "FROZEN_PREPARED_YDB",
+            "minimum_acceptance_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
         }
         if readiness.status != "READY":
             artifact["run_status"] = "DATA_NOT_READY"
@@ -106,6 +112,49 @@ def main() -> int:
             _write_artifact(args.artifact, artifact)
             print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
             return 2
+
+        development_capacity: dict[str, object] = {}
+        insufficient_capacity: dict[str, object] = {}
+        for symbol in CORE_VALIDATION_SYMBOLS:
+            sessions = history.session_dates(
+                symbol,
+                from_date=args.development_start,
+                till_date=args.split_date,
+            )
+            capacity = independent_sample_capacity(
+                len(sessions),
+                step_sessions=args.step_sessions,
+                max_points=args.max_points,
+            )
+            development_capacity[symbol] = {
+                "sessions": len(sessions),
+                "non_overlapping_observations": {
+                    str(horizon): count for horizon, count in capacity.items()
+                },
+            }
+            missing = {
+                str(horizon): count
+                for horizon, count in capacity.items()
+                if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
+            }
+            if missing:
+                insufficient_capacity[symbol] = missing
+
+        artifact["development_capacity"] = development_capacity
+        if insufficient_capacity:
+            artifact["run_status"] = "COMPUTED"
+            artifact["model_status"] = "INSUFFICIENT_DATA"
+            artifact["capacity_shortfall"] = insufficient_capacity
+            artifact["development_statuses"] = {
+                symbol: "INSUFFICIENT_SAMPLE"
+                for symbol in CORE_VALIDATION_SYMBOLS
+            }
+            artifact["holdout_evaluated"] = False
+            artifact["holdout_statuses"] = {}
+            artifact["calibration"] = None
+            _write_artifact(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 0
 
         analytics = MoexAnalyticsClient(control_plane=control)
         historical_flow = HistoricalFlowDataService(
@@ -130,6 +179,10 @@ def main() -> int:
             prepare_history_before_run=False,
         )
         calibration = ModelCalibrationService(validator=validator)
+        if calibration.minimum_observations != MINIMUM_ACCEPTANCE_OBSERVATIONS:
+            raise RuntimeError(
+                "capacity precheck minimum does not match model acceptance minimum"
+            )
         report = calibrate_across_symbols(
             calibration,
             CORE_VALIDATION_SYMBOLS,
