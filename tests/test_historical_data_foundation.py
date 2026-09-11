@@ -6,6 +6,7 @@ from birzha.application.historical_data import (
     D1_SESSION_VERIFICATION_VERSION,
     HistoricalDataIncompleteError,
     HistoricalDataService,
+    ROLLING_HISTORY_VERIFICATION_VERSION,
     _bounded_missing_ranges,
     _missing_session_ranges,
 )
@@ -258,5 +259,10 @@ def test_root_future_does_not_trust_stale_verified_range_and_fails_closed() -> N
             "Si", timeframe="D1", from_date="2025-01-01", till_date="2026-09-08"
         )
 
-    current_key = f"Si#{D1_SESSION_VERIFICATION_VERSION}"
-    assert store.is_verified(current_key, "D1", "2025-01-01", "2026-09-08") is False
+    current_key = (
+        f"Si#{ROLLING_HISTORY_VERIFICATION_VERSION}#"
+        f"{D1_SESSION_VERIFICATION_VERSION}"
+    )
+    assert store.is_verified(
+        current_key, "D1", "2025-01-01", "2026-09-08"
+    ) is False
