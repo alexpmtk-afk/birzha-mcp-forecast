@@ -23,7 +23,7 @@ def test_required_price_ranges_include_causal_lookback() -> None:
 
 
 def test_readiness_is_not_ready_if_one_market_timeframe_is_unverified() -> None:
-    history = _History(missing={"GOLD", "M15"})
+    history = _History(missing={("GOLD", "M15")})
     report = ValidationDataReadinessService(history=history).check(  # type: ignore[arg-type]
         ("SBER", "GOLD"),
         validation_start="2025-01-01",
