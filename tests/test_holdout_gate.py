@@ -50,6 +50,38 @@ def _rejected(symbol: str) -> ModelAcceptanceReport:
     )
 
 
+def test_development_only_keeps_holdout_sealed(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Assessor:
+        def assess(self, symbol: str, *, start_date: str, **kwargs):
+            assert start_date == "2024-01-01"
+            events.append(f"development:{symbol}")
+            return _accepted(symbol)
+
+    monkeypatch.setattr(
+        ModelCalibrationService,
+        "_acceptance_for",
+        lambda self, parameters: Assessor(),
+    )
+    service = ModelCalibrationService(validator=object())  # type: ignore[arg-type]
+
+    result = calibrate_across_symbols(
+        service,
+        ("SBER", "Si"),
+        development_start="2024-01-01",
+        split_date="2025-01-01",
+        holdout_end="2026-01-01",
+        candidates=(ForecastParameters(name="accepted"),),
+        open_holdout=False,
+        holdout_gate=lambda parameters: events.append("gate"),
+    )
+
+    assert result.status == "DEVELOPMENT_ACCEPTED_HOLDOUT_SEALED"
+    assert result.holdout == ()
+    assert events == ["development:SBER", "development:Si"]
+
+
 def test_holdout_gate_runs_before_first_holdout_read(monkeypatch) -> None:
     events: list[str] = []
 
@@ -76,6 +108,7 @@ def test_holdout_gate_runs_before_first_holdout_read(monkeypatch) -> None:
         split_date="2025-01-01",
         holdout_end="2026-01-01",
         candidates=(ForecastParameters(name="accepted"),),
+        open_holdout=True,
         holdout_gate=lambda parameters: events.append("gate"),
     )
 
@@ -111,6 +144,7 @@ def test_holdout_gate_is_not_called_when_development_fails(monkeypatch) -> None:
         split_date="2025-01-01",
         holdout_end="2026-01-01",
         candidates=(ForecastParameters(name="rejected"),),
+        open_holdout=True,
         holdout_gate=lambda parameters: gate_calls.append(parameters.name),
     )
 
