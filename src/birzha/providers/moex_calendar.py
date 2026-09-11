@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import date
 
-from birzha.providers.moex_iss import MoexIssClient
+from birzha.providers.moex_iss import MoexIssClient, MoexIssError
+
+
+MAX_CALENDAR_PAGES = 100
 
 
 class MoexTradingCalendar:
@@ -45,12 +48,22 @@ class MoexTradingCalendar:
             "till": till_date.isoformat(),
         }
         result: set[date] = set()
+        seen_pages: set[tuple[int, str, str]] = set()
         start = 0
-        while True:
+        for _ in range(MAX_CALENDAR_PAGES):
             payload = self._client._request(  # noqa: SLF001 - provider-internal collaboration
                 path, {**base_params, "start": start}
             ).json()
             page = self._client._table(payload, "history")  # noqa: SLF001
+            if page:
+                signature = _page_signature(page)
+                if signature in seen_pages:
+                    raise MoexIssError(
+                        f"MOEX history calendar pagination stalled for "
+                        f"{security}: repeated page at start={start}"
+                    )
+                seen_pages.add(signature)
+
             for row in page:
                 raw = row.get("TRADEDATE") or row.get("tradedate")
                 if not raw:
@@ -69,19 +82,41 @@ class MoexTradingCalendar:
             )
             if cursor_rows:
                 cursor = cursor_rows[0]
-                total = _integer(cursor, "TOTAL") or _integer(cursor, "total") or (start + len(page))
-                page_size = _integer(cursor, "PAGESIZE") or _integer(cursor, "pagesize") or len(page)
+                total = (
+                    _integer(cursor, "TOTAL")
+                    or _integer(cursor, "total")
+                    or (start + len(page))
+                )
+                page_size = (
+                    _integer(cursor, "PAGESIZE")
+                    or _integer(cursor, "pagesize")
+                    or len(page)
+                )
                 if start + len(page) >= total or page_size <= 0 or not page:
-                    break
-                start += page_size
+                    return tuple(sorted(result))
+                next_start = start + page_size
+                if next_start <= start:
+                    raise MoexIssError(
+                        f"MOEX history calendar cursor did not advance for {security}"
+                    )
+                start = next_start
                 continue
-            if not page:
-                break
+            if not page or len(page) < 100:
+                return tuple(sorted(result))
             start += len(page)
-            if len(page) < 100:
-                break
 
-        return tuple(sorted(result))
+        raise MoexIssError(
+            f"MOEX history calendar pagination exceeded safe "
+            f"max_pages={MAX_CALENDAR_PAGES} for {security}"
+        )
+
+
+def _page_signature(page: list[dict[str, object]]) -> tuple[int, str, str]:
+    if not page:
+        return (0, "", "")
+    first = str(page[0].get("TRADEDATE") or page[0].get("tradedate") or "")
+    last = str(page[-1].get("TRADEDATE") or page[-1].get("tradedate") or "")
+    return (len(page), first, last)
 
 
 def _integer(row: dict[str, object], key: str) -> int | None:
