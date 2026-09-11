@@ -10,6 +10,16 @@ class FakePool:
 
     def execute_with_retries(self, query, parameters=None, **kwargs):
         self.queries.append(query)
+        if "SELECT trade_date, secid" in query and "historical_candles_sessions" in query:
+            return [
+                SimpleNamespace(
+                    rows=[
+                        {"trade_date": "2025-04-01", "secid": "GDM5"},
+                        {"trade_date": "2025-04-02", "secid": "GDM5"},
+                        {"trade_date": "2025-06-20", "secid": "GDU5"},
+                    ]
+                )
+            ]
         if "SELECT secid FROM `historical_candles_sessions`" in query:
             return [
                 SimpleNamespace(
@@ -56,6 +66,29 @@ def test_ydb_session_contract_lookup_is_deduplicated_and_exact():
 
     assert secids == ("GDM5",)
     assert any("trade_date=$trade_date" in query for query in pool.queries)
+
+
+def test_ydb_bulk_session_contract_lookup_uses_one_range_query():
+    pool = FakePool()
+    store = YdbHistoricalCandleStore(pool)
+    before = len(pool.queries)
+
+    rows = store.stored_session_contracts(
+        "GOLD#ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V1",
+        "2025-04-01",
+        "2025-06-30",
+    )
+
+    assert rows == (
+        ("2025-04-01", "GDM5"),
+        ("2025-04-02", "GDM5"),
+        ("2025-06-20", "GDU5"),
+    )
+    new_queries = pool.queries[before:]
+    assert len(new_queries) == 1
+    assert "SELECT trade_date, secid" in new_queries[0]
+    assert "trade_date>=$from_date" in new_queries[0]
+    assert "trade_date<=$till_date" in new_queries[0]
 
 
 def test_ydb_stored_instrument_recovers_futures_identity_from_candle_payload():
