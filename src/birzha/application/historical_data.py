@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from birzha.application.market_data import MarketDataService
+from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.domain.market import CandleSeries, Instrument
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCoverage
@@ -92,14 +92,19 @@ class HistoricalDataService:
 
         resolver_known = hasattr(self.market_data, "direct_resolver")
         direct_resolver = getattr(self.market_data, "direct_resolver", None)
-        direct = direct_resolver.resolve(symbol) if direct_resolver is not None else None
+        is_root = is_futures_root_symbol(symbol)
+        direct = (
+            direct_resolver.resolve(symbol)
+            if direct_resolver is not None and not is_root
+            else None
+        )
         is_direct = direct is not None and direct.asset_class != "unknown"
         # Root futures must re-resolve their historical contract timeline. Older
         # root-level verified markers cannot prove that every rollover contract
         # was actually stored, so they are intentionally not trusted here.
         # Minimal test/custom market-data stubs without resolver capability keep
         # the legacy verified-range shortcut because they cannot classify roots.
-        trust_verified = is_direct or not resolver_known
+        trust_verified = (is_direct and not is_root) or not resolver_known
         if trust_verified:
             price_verified = self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10])
             sessions_verified = timeframe != "D1" or self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10])
@@ -153,7 +158,9 @@ class HistoricalDataService:
         start: date,
         finish: date,
     ) -> tuple[tuple[Instrument, date, date], ...]:
-        direct = self.market_data.direct_resolver.resolve(symbol) if self.market_data.direct_resolver else None
+        direct = None
+        if not is_futures_root_symbol(symbol) and self.market_data.direct_resolver:
+            direct = self.market_data.direct_resolver.resolve(symbol)
         if direct is not None and direct.asset_class != "unknown":
             return ((direct, start, finish),)
 
