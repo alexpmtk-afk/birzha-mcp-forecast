@@ -33,6 +33,7 @@ DEFAULT_SPLIT_DATE = "2022-12-31"
 DEFAULT_VALIDATION_END = "2024-12-31"
 DEFAULT_MAX_POINTS = 80
 MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
+VALIDATION_PROTOCOL = "M23_HISTORICAL_GOVERNED_V1"
 
 
 def _token() -> str:
@@ -217,7 +218,7 @@ def main() -> int:
                 price_failures.append(payload)
 
         base_artifact: dict[str, object] = {
-            "validation_protocol": "M23_HISTORICAL_GOVERNED_V1",
+            "validation_protocol": VALIDATION_PROTOCOL,
             "validation_start": args.validation_start,
             "split_date": args.split_date,
             "validation_end": args.validation_end,
@@ -274,6 +275,26 @@ def main() -> int:
                 if not ok:
                     price_failures.append(payload)
 
+        # Mandatory price data decides whether validation is possible. If it is
+        # still incomplete, do not spend provider budget on optional flow.
+        readiness = ValidationDataReadinessService(history=history).check(
+            CORE_VALIDATION_SYMBOLS,
+            validation_start=args.validation_start,
+            validation_end=args.validation_end,
+        )
+        if readiness.status != "READY":
+            artifact = {
+                **base_artifact,
+                "status": "DATA_NOT_READY",
+                "readiness": readiness.to_dict(),
+                "price_operation_failures": price_failures,
+                "operations": operations,
+                "optional_flow_status": "NOT_RUN",
+            }
+            _write(args.artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 2
+
         analytics = MoexAnalyticsClient(control_plane=control)
         flow_history = HistoricalFlowDataService(
             market_data=market,
@@ -296,22 +317,16 @@ def main() -> int:
             else:
                 flow_warnings.extend(_flow_warnings(symbol, payload))
 
-        readiness = ValidationDataReadinessService(history=history).check(
-            CORE_VALIDATION_SYMBOLS,
-            validation_start=args.validation_start,
-            validation_end=args.validation_end,
-        )
         artifact = {
             **base_artifact,
             "readiness": readiness.to_dict(),
             "price_operation_failures": price_failures,
             "optional_flow_failures": flow_failures,
             "optional_flow_warnings": flow_warnings,
+            "optional_flow_status": "COMPUTED",
             "operations": operations,
         }
-        if readiness.status != "READY":
-            artifact["status"] = "DATA_NOT_READY"
-        elif price_failures:
+        if price_failures:
             artifact["status"] = "READY_WITH_PRICE_OPERATION_ERRORS"
         elif flow_failures:
             artifact["status"] = "READY_WITH_OPTIONAL_FLOW_ERRORS"
@@ -321,7 +336,7 @@ def main() -> int:
             artifact["status"] = "READY"
         _write(args.artifact, artifact)
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
-        return 0 if readiness.status == "READY" else 2
+        return 0
     finally:
         stop = getattr(pool, "stop", None) or getattr(pool, "close", None)
         if callable(stop):
