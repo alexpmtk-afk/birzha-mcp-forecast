@@ -269,10 +269,10 @@ def main() -> int:
                 holdout_start=holdout_start,
                 holdout_end=args.holdout_end,
                 protocol=VALIDATION_PROTOCOL,
+                engine_version=ENGINE_VERSION,
                 model_fingerprint=fingerprint,
             )
             claimed.update(claim.to_dict())
-            claimed["engine_version"] = ENGINE_VERSION
 
         try:
             report = calibrate_across_symbols(
