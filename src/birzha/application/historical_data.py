@@ -388,13 +388,24 @@ class HistoricalDataService:
             self.store.upsert_series(series)
             expected_chunk = tuple(day for day in expected if left <= day <= right)
             response_dates = _series_trade_dates(series)
-            if not _missing_session_ranges(expected_chunk, response_dates):
-                self.store.mark_verified(
-                    verification_symbol,
-                    timeframe,
-                    left.isoformat(),
-                    right.isoformat(),
+            remaining_chunk = _missing_session_ranges(expected_chunk, response_dates)
+            if remaining_chunk:
+                compact = ",".join(
+                    left_day.isoformat()
+                    if left_day == right_day
+                    else f"{left_day.isoformat()}..{right_day.isoformat()}"
+                    for left_day, right_day in remaining_chunk[:10]
                 )
+                raise HistoricalDataIncompleteError(
+                    f"contract warmup provider response incomplete for "
+                    f"{instrument.secid} {timeframe}: {compact}"
+                )
+            self.store.mark_verified(
+                verification_symbol,
+                timeframe,
+                left.isoformat(),
+                right.isoformat(),
+            )
         return fetched
 
     def _sync_contract(
