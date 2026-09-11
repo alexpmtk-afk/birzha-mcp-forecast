@@ -40,15 +40,17 @@ The pipeline is fail-closed:
 1. `run_authorized_ydb_prepare_validation.py` repairs/validates required price history and prepares optional historical flow.
 2. Data readiness must report all 18 mandatory price requirements as `READY`.
 3. Only then `run_authorized_ydb_validation.py` runs six-market development calibration and untouched holdout evaluation.
-4. Walk-forward counts only snapshots whose mandatory D1/H1/M15 price timeframes pass their minimum-history quality checks. Optional flow may be degraded without invalidating an otherwise complete price snapshot.
-5. A statistical `REJECTED` result is a valid computed model result, not a software failure and must not be relabelled as PASS.
+4. The validation phase uses `FROZEN_PREPARED_YDB`: price history is read from the prepared YDB store without another preparation pass; optional TradeStats/FUTOI is read only when the current `FLOW_V1` cache range is verified and is otherwise treated as missing/`DEGRADED` rather than fetched during candidate comparison.
+5. Walk-forward counts only snapshots whose mandatory D1/H1/M15 price timeframes pass their minimum-history quality checks. Optional flow may be degraded without invalidating an otherwise complete price snapshot.
+6. Calibration never prefers a development-rejected candidate over a development-accepted candidate merely because its average numeric score is higher. For the shared six-market model, passing all development markets outranks average score; if none pass all markets, the ranking falls back through accepted-market count, worst development status, and then objective score.
+7. A statistical `REJECTED` result is a valid computed model result, not a software failure and must not be relabelled as PASS.
 
 ## Evidence artifacts
 
 The pipeline writes three JSON artifacts:
 
 - `artifacts/ydb_validation_data_preparation.json` — preparation operations, 18-item readiness evidence, optional-flow failures and zero-row warnings;
-- `artifacts/ydb_model_validation.json` — selected parameters, development/holdout reports and `model_status`;
+- `artifacts/ydb_model_validation.json` — selected parameters, development/holdout reports, explicit `data_mode=FROZEN_PREPARED_YDB`, and `model_status`;
 - `artifacts/ydb_model_pipeline.json` — compact top-level execution summary.
 
 Important preparation statuses include:
@@ -67,19 +69,21 @@ M23 does not trust price readiness markers created by older semantics in the pro
 - D1 uses `D1_SESSION_V1`: the current resolver/contract chain is audited against official exchange sessions; one completed daily candle per expected active session is required.
 - H1 uses `H1_FULL_V1`: every unverified exchange session is fetched from the provider as a complete bounded response before the session/range is certified.
 - M15 uses `M15_FULL_V1`: every unverified exchange session is re-created from bounded M1 retrieval before certification.
-- H1/M15 certification is incremental. Successful chunks are durable, so retries and future range extensions fetch only sessions already proven by the current version.
+- H1/M15 certification is incremental. Successful chunks are durable, so retries and future range extensions fetch only sessions not already proven by the current version.
 - Full intraday verification is based on the current provider response, not merely on the fact that an older row for that date remains in storage.
 - Rolling futures use `ROLLING_HISTORY_V2_PREWARM` composed with the timeframe generation. Examples: `GOLD#ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V1` and `GOLD#ROLLING_HISTORY_V2_PREWARM#M15_FULL_V1`.
 - The D1 logical-root session calendar uses the same composed version key. Legacy raw `GOLD` calendar rows remain archival data but are not visible to current validation.
 - When a later quarterly futures contract becomes the active contract, its own exact-contract history is preloaded before the rollover point (D1 300 days, H1 90 days, M15 30 days, limited by actual exchange availability). Those preroll rows support causal feature lookback but are not added to the logical-root active-session calendar.
 - Exact-contract warmup has its own `CONTRACT_WARMUP_V1` verification generation so stale partial intraday days are not trusted.
+- If the exchange calendar expects an exact-contract preroll session and the current provider response does not contain it, warmup fails closed and the logical-root range is not certified `READY`.
 
 Historical analytical flow is also versioned with `FLOW_V1`. Legacy TradeStats/FUTOI verification markers are not sufficient after M23, which is particularly important for the corrected `GOLD -> GD` FUTOI transport mapping.
 
 ## Safety rules
 
-- All MOEX/ALGOPACK requests remain behind `ProcessUpstreamControlPlane`.
-- Remote execution uses the distributed `YdbSlotPacingGate`; limits are never bypassed for backfill speed.
+- All MOEX/ALGOPACK requests during preparation remain behind `ProcessUpstreamControlPlane`.
+- Remote preparation uses the distributed `YdbSlotPacingGate`; limits are never bypassed for backfill speed.
+- Model validation does not repair or extend prepared price/flow datasets while candidates are being compared.
 - Intraday full-session repair is bounded to small exchange-session chunks and is resumable.
 - A resolver returning no historical segments fails closed and cannot create a verified marker.
 - A rolling-futures contract segment that contains zero stored candles fails closed.
