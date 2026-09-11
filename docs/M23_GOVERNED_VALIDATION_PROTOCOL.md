@@ -47,8 +47,13 @@ Raw counts and thinning stride remain visible in evidence.
 2. Full price history is prepared and verified before candidate comparison.
 3. Development selects the shared configuration.
 4. If development does not pass, holdout is not evaluated.
-5. If development passes, the frozen configuration is applied to holdout once.
-6. A poor holdout result means rejection; the same holdout must not be reused for tuning and re-tested as if independent.
+5. Immediately before the first holdout read, YDB stores a durable claim containing the holdout range, protocol ID, selected-model fingerprint and UTC timestamp.
+6. The claim is written before performance is read. If the process crashes after the claim, the holdout remains consumed rather than becoming eligible for another look.
+7. The same or any overlapping holdout period is blocked on later runs as `HOLDOUT_ALREADY_CONSUMED`.
+8. Changing model parameters, protocol text, computer, chat or execution channel does not make a consumed holdout fresh again.
+9. A poor holdout result means rejection; the same holdout must not be reused for tuning and re-tested as if independent.
+
+Checking session capacity before the claim is allowed because that step does not inspect returns or model performance.
 
 ## Data governance
 
@@ -56,6 +61,14 @@ Validation uses `FROZEN_PREPARED_YDB`. Candidate comparison must not download mi
 
 All preparation requests stay behind the global request controller and distributed YDB pacing gate.
 
+## Result semantics
+
+- `ACCEPTED` — frozen model passed the governed evaluation.
+- `REJECTED` — evaluation completed and statistical criteria failed.
+- `INSUFFICIENT_DATA` / `INSUFFICIENT_SAMPLE` — not enough independent evidence.
+- `HOLDOUT_ALREADY_CONSUMED` — the requested final period has already been spent and cannot be evaluated again.
+- `DATA_NOT_READY` — mandatory historical data is not proven complete.
+
 ## Promotion rule
 
-`ACCEPTED` is permitted only after real tests/compile checks, M22 GOLD/GD* evidence, full mandatory data readiness, successful development, and one governed holdout evaluation. `REJECTED` and `INSUFFICIENT_DATA` remain valid outcomes and must not be converted to PASS by changing criteria after the result is known.
+`ACCEPTED` is permitted only after real tests/compile checks, M22 GOLD/GD* evidence, full mandatory data readiness, successful development, durable one-shot holdout claiming, and one governed holdout evaluation. `REJECTED` and `INSUFFICIENT_DATA` remain valid outcomes and must not be converted to PASS by changing criteria after the result is known.
