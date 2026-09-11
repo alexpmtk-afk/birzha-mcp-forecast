@@ -1,6 +1,11 @@
 from datetime import date, timedelta
 
-from birzha.application.historical_data import HistoricalDataService
+import pytest
+
+from birzha.application.historical_data import (
+    HistoricalDataIncompleteError,
+    HistoricalDataService,
+)
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
@@ -75,6 +80,37 @@ class _Market:
         )
 
 
+class _IncompleteWarmupMarket(_Market):
+    def candles_for_instrument(
+        self,
+        instrument,
+        *,
+        timeframe,
+        from_date,
+        till_date,
+        completed_only=True,
+    ):
+        series = super().candles_for_instrument(
+            instrument,
+            timeframe=timeframe,
+            from_date=from_date,
+            till_date=till_date,
+            completed_only=completed_only,
+        )
+        if from_date <= "2025-01-09" <= till_date and till_date < "2025-01-10":
+            return CandleSeries(
+                instrument=instrument,
+                timeframe=timeframe,
+                candles=tuple(
+                    candle
+                    for candle in series.candles
+                    if candle.begin[:10] != "2025-01-09"
+                ),
+                source="TEST",
+            )
+        return series
+
+
 class _RollingHistory(HistoricalDataService):
     def _segments(self, symbol, start, finish):
         assert symbol == "GOLD"
@@ -124,4 +160,34 @@ def test_rolling_contract_warmup_is_stored_but_not_added_to_root_sessions(monkey
             "GOLD", from_date="2025-01-01", till_date="2025-01-12"
         )
     ) == ("2025-01-10", "2025-01-11", "2025-01-12")
+    store.close()
+
+
+def test_incomplete_preroll_response_blocks_root_readiness(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    service = _RollingHistory(  # type: ignore[arg-type]
+        market_data=_IncompleteWarmupMarket(),
+        store=store,
+    )
+
+    with pytest.raises(
+        HistoricalDataIncompleteError,
+        match="contract warmup provider response incomplete.*GDM5 D1.*2025-01-09",
+    ):
+        service.sync(
+            "GOLD",
+            timeframe="D1",
+            from_date="2025-01-01",
+            till_date="2025-01-11",
+        )
+
+    assert service.is_range_verified(
+        "GOLD",
+        timeframe="D1",
+        from_date="2025-01-01",
+        till_date="2025-01-11",
+    ) is False
     store.close()
