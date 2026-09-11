@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from birzha.application.historical_flow import (
     HistoricalFlowDataService,
     _bounded_date_ranges,
@@ -85,6 +87,62 @@ def test_repeated_futoi_range_uses_store_without_second_upstream_call():
     second = service.futoi(FUT, from_date="2026-09-01", till_date="2026-09-02")
     assert first == second
     assert analytics.futoi_calls == 1
+    store.close()
+
+
+def test_read_only_flow_never_fetches_unverified_optional_data():
+    analytics = FakeAnalytics()
+    store = DuckDBHistoricalFlowStore(":memory:")
+    service = HistoricalFlowDataService(
+        market_data=FakeMarketData(),
+        analytics=analytics,
+        store=store,
+        read_only=True,
+    )
+
+    assert service.tradestats(
+        FUT, from_date="2026-09-01", till_date="2026-09-02"
+    ) == []
+    assert service.futoi(
+        FUT, from_date="2026-09-01", till_date="2026-09-02"
+    ) == []
+    assert analytics.trade_calls == 0
+    assert analytics.futoi_calls == 0
+    with pytest.raises(RuntimeError, match="read-only historical flow service cannot sync"):
+        service.sync("Si", from_date="2026-09-01", till_date="2026-09-02")
+    store.close()
+
+
+def test_read_only_flow_reads_only_current_verified_cache():
+    analytics = FakeAnalytics()
+    store = DuckDBHistoricalFlowStore(":memory:")
+    rows = [
+        {
+            "tradedate": "2026-09-01",
+            "tradetime": "10:00:00",
+            "seqnum": 1,
+            "vol_b": 10,
+            "vol_s": 5,
+        }
+    ]
+    store.upsert_rows("TRADESTATS", "SiU6", rows, "TEST")
+    store.mark_verified(
+        _verification_dataset("TRADESTATS"),
+        "SiU6",
+        "2026-09-01",
+        "2026-09-02",
+    )
+    service = HistoricalFlowDataService(
+        market_data=FakeMarketData(),
+        analytics=analytics,
+        store=store,
+        read_only=True,
+    )
+
+    assert service.tradestats(
+        FUT, from_date="2026-09-01", till_date="2026-09-02"
+    ) == rows
+    assert analytics.trade_calls == 0
     store.close()
 
 
