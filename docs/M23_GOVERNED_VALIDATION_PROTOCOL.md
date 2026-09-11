@@ -48,10 +48,11 @@ Raw counts and thinning stride remain visible in evidence.
 3. Development selects the shared configuration.
 4. If development does not pass, holdout is not evaluated.
 5. Immediately before the first holdout read, YDB stores a durable claim containing the holdout range, protocol ID, selected-model fingerprint and UTC timestamp.
-6. The claim is written before performance is read. If the process crashes after the claim, the holdout remains consumed rather than becoming eligible for another look.
-7. The same or any overlapping holdout period is blocked on later runs as `HOLDOUT_ALREADY_CONSUMED`.
-8. Changing model parameters, protocol text, computer, chat or execution channel does not make a consumed holdout fresh again.
-9. A poor holdout result means rejection; the same holdout must not be reused for tuning and re-tested as if independent.
+6. The selected-model fingerprint must identify the frozen Forecast Engine version together with its selected parameters and governed development identity.
+7. The claim is written before performance is read. If the process crashes after the claim, the holdout remains consumed rather than becoming eligible for another look.
+8. The same or any overlapping holdout period is blocked on later runs as `HOLDOUT_ALREADY_CONSUMED`.
+9. Changing model parameters, protocol text, computer, chat or execution channel does not make a consumed holdout fresh again.
+10. A poor holdout result means rejection; the same holdout must not be reused for tuning and re-tested as if independent.
 
 Checking session capacity before the claim is allowed because that step does not inspect returns or model performance.
 
