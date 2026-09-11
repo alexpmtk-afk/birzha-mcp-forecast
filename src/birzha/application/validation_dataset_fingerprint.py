@@ -16,7 +16,10 @@ from typing import Protocol
 import ydb
 
 from birzha.application.historical_data import HistoricalDataService, _verification_symbol
-from birzha.application.historical_flow import TRADESTATS_ASSET_CLASSES
+from birzha.application.historical_flow import (
+    TRADESTATS_ASSET_CLASSES,
+    _verification_dataset,
+)
 from birzha.application.market_data import is_futures_root_symbol
 
 
@@ -58,8 +61,9 @@ def build_validation_dataset_fingerprint(
     validation_end: str,
     candle_table: str = "historical_candles",
     flow_table: str = "historical_flow_rows",
+    flow_verified_table: str = "historical_flow_rows_verified",
 ) -> ValidationDatasetFingerprint:
-    """Hash exact prepared inputs used by governed historical validation."""
+    """Hash exact prepared inputs and optional-flow verification state."""
     if not symbols:
         raise ValueError("at least one symbol is required")
     start = date.fromisoformat(validation_start[:10])
@@ -68,6 +72,7 @@ def build_validation_dataset_fingerprint(
         raise ValueError("validation_start must not be after validation_end")
     candle_table = _safe_table_name(candle_table)
     flow_table = _safe_table_name(flow_table)
+    flow_verified_table = _safe_table_name(flow_verified_table)
 
     hasher = hashlib.sha256()
     contract_sessions = 0
@@ -75,7 +80,7 @@ def build_validation_dataset_fingerprint(
     flow_rows = 0
     unique_instruments: dict[str, object] = {}
 
-    _feed(hasher, ["FINGERPRINT_VERSION", "M23_DATASET_SHA256_V1"])
+    _feed(hasher, ["FINGERPRINT_VERSION", "M23_DATASET_SHA256_V2_FLOW_VERIFY"])
     _feed(hasher, ["VALIDATION_RANGE", start.isoformat(), end.isoformat()])
 
     for symbol in symbols:
@@ -105,19 +110,20 @@ def build_validation_dataset_fingerprint(
 
     for secid in sorted(unique_instruments):
         instrument = unique_instruments[secid]
-        _feed(
-            hasher,
-            [
-                "INSTRUMENT",
-                secid,
-                getattr(instrument, "symbol", ""),
-                getattr(instrument, "root_symbol", None),
-                getattr(instrument, "board", ""),
-                getattr(instrument, "engine", ""),
-                getattr(instrument, "market", ""),
-                getattr(instrument, "asset_class", "unknown"),
-            ],
+        instrument_payload = (
+            instrument.to_dict()  # type: ignore[attr-defined]
+            if hasattr(instrument, "to_dict")
+            else {
+                "symbol": getattr(instrument, "symbol", ""),
+                "secid": secid,
+                "root_symbol": getattr(instrument, "root_symbol", None),
+                "board": getattr(instrument, "board", ""),
+                "engine": getattr(instrument, "engine", ""),
+                "market": getattr(instrument, "market", ""),
+                "asset_class": getattr(instrument, "asset_class", "unknown"),
+            }
         )
+        _feed(hasher, ["INSTRUMENT", secid, instrument_payload])
         for timeframe in ("D1", "H1", "M15"):
             left = start - timedelta(days=PRICE_LOOKBACK_DAYS[timeframe])
             rows = _price_rows(
@@ -159,6 +165,36 @@ def build_validation_dataset_fingerprint(
                 flow_keys.add(("FUTOI", root))
 
     for dataset, key in sorted(flow_keys):
+        verification_dataset = _verification_dataset(dataset)
+        verification_rows = _flow_verification_rows(
+            pool,
+            verified_table=flow_verified_table,
+            dataset=verification_dataset,
+            key=key,
+            from_date=flow_left,
+            till_date=end.isoformat(),
+        )
+        _feed(
+            hasher,
+            [
+                "FLOW_VERIFICATION_SERIES",
+                verification_dataset,
+                key,
+                len(verification_rows),
+            ],
+        )
+        for row in verification_rows:
+            _feed(
+                hasher,
+                [
+                    "FLOW_VERIFICATION",
+                    verification_dataset,
+                    key,
+                    _row_value(row, "from_date"),
+                    _row_value(row, "till_date"),
+                ],
+            )
+
         rows = _flow_rows(
             pool,
             flow_table=flow_table,
@@ -243,6 +279,38 @@ def _flow_rows(
         WHERE dataset=$dataset AND key_symbol=$key
           AND trade_date >= $from_date AND trade_date <= $till_date
         ORDER BY trade_date, row_key;
+        """,
+        {
+            "$dataset": _utf8(dataset),
+            "$key": _utf8(key),
+            "$from_date": _utf8(from_date),
+            "$till_date": _utf8(till_date),
+        },
+        retry_settings=ydb.RetrySettings(idempotent=True),
+    )
+    return _rows(result)
+
+
+def _flow_verification_rows(
+    pool: QueryPool,
+    *,
+    verified_table: str,
+    dataset: str,
+    key: str,
+    from_date: str,
+    till_date: str,
+) -> list[object]:
+    result = pool.execute_with_retries(
+        f"""
+        DECLARE $dataset AS Utf8;
+        DECLARE $key AS Utf8;
+        DECLARE $from_date AS Utf8;
+        DECLARE $till_date AS Utf8;
+        SELECT from_date, till_date
+        FROM `{verified_table}`
+        WHERE dataset=$dataset AND key_symbol=$key
+          AND from_date <= $till_date AND till_date >= $from_date
+        ORDER BY from_date, till_date;
         """,
         {
             "$dataset": _utf8(dataset),
