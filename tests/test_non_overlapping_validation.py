@@ -1,5 +1,8 @@
 from birzha.application.model_lab import assess_walk_forward
-from birzha.application.validation import summarize_walk_forward
+from birzha.application.validation import (
+    independent_sample_capacity,
+    summarize_walk_forward,
+)
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.domain.outcome import HorizonOutcome
 from birzha.domain.validation import WalkForwardReport
@@ -121,6 +124,22 @@ def test_many_overlapping_raw_forecasts_do_not_fake_minimum_sample() -> None:
     assert assessed.status == "INSUFFICIENT_SAMPLE"
     assert assessed.horizons[0].observations == 10
     assert assessed.horizons[0].status == "INSUFFICIENT_SAMPLE"
+
+
+def test_capacity_exposes_old_24_point_limit_as_insufficient_for_long_horizon() -> None:
+    capacity = independent_sample_capacity(
+        220, step_sessions=5, max_points=24
+    )
+
+    assert capacity == {5: 24, 10: 12, 20: 6}
+
+
+def test_capacity_can_reach_twenty_long_horizon_samples_with_enough_history() -> None:
+    capacity = independent_sample_capacity(
+        500, step_sessions=5, max_points=80
+    )
+
+    assert capacity == {5: 80, 10: 40, 20: 20}
 
 
 def test_non_overlapping_summary_rejects_invalid_step() -> None:
