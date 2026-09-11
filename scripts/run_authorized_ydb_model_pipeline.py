@@ -15,6 +15,7 @@ DEFAULT_SPLIT_DATE = "2022-12-31"
 DEFAULT_VALIDATION_END = "2024-12-31"
 DEFAULT_MAX_POINTS = 80
 MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
+VALIDATION_PROTOCOL = "M23_HISTORICAL_GOVERNED_V1"
 
 
 def _run(command: list[str], *, label: str) -> dict[str, object]:
@@ -136,7 +137,7 @@ def main() -> int:
     impossible = {period: values for period, values in impossible.items() if values}
 
     artifact: dict[str, object] = {
-        "validation_protocol": "M23_HISTORICAL_GOVERNED_V1",
+        "validation_protocol": VALIDATION_PROTOCOL,
         "validation_start": args.validation_start,
         "split_date": args.split_date,
         "validation_end": args.validation_end,
@@ -183,17 +184,13 @@ def main() -> int:
         label="prepare",
     )
     artifact["prepare"] = prepare
-    if prepare["status"] != "PASS":
-        artifact["status"] = "PREPARE_FAILED"
-        artifact["validation"] = {"status": "NOT_RUN"}
-        _write(args.pipeline_artifact, artifact)
-        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
-        return 2
 
     try:
         prepare_evidence = _read(args.prepare_artifact)
     except Exception as exc:
-        artifact["status"] = "PREPARE_EVIDENCE_INVALID"
+        artifact["status"] = (
+            "PREPARE_FAILED" if prepare["status"] != "PASS" else "PREPARE_EVIDENCE_INVALID"
+        )
         artifact["prepare_evidence_error"] = f"{type(exc).__name__}:{exc}"
         artifact["validation"] = {"status": "NOT_RUN"}
         _write(args.pipeline_artifact, artifact)
@@ -204,6 +201,9 @@ def main() -> int:
     artifact["prepare_evidence_status"] = prepare_evidence_status
     artifact["session_capacity"] = prepare_evidence.get("session_capacity")
     artifact["capacity_shortfall"] = prepare_evidence.get("capacity_shortfall")
+    artifact["price_operation_failures"] = prepare_evidence.get("price_operation_failures")
+    artifact["optional_flow_status"] = prepare_evidence.get("optional_flow_status")
+
     if prepare_evidence_status == "INSUFFICIENT_DATA":
         artifact["status"] = "INSUFFICIENT_DATA"
         artifact["model_status"] = "INSUFFICIENT_DATA"
@@ -217,7 +217,18 @@ def main() -> int:
     readiness_status = readiness.get("status") if isinstance(readiness, dict) else None
     artifact["readiness_status"] = readiness_status
     if readiness_status != "READY":
-        artifact["status"] = "PREPARE_NOT_READY"
+        artifact["status"] = (
+            str(prepare_evidence_status)
+            if isinstance(prepare_evidence_status, str)
+            else "PREPARE_NOT_READY"
+        )
+        artifact["validation"] = {"status": "NOT_RUN"}
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 2
+
+    if prepare["status"] != "PASS":
+        artifact["status"] = "PREPARE_FAILED"
         artifact["validation"] = {"status": "NOT_RUN"}
         _write(args.pipeline_artifact, artifact)
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
@@ -246,16 +257,15 @@ def main() -> int:
         label="validate",
     )
     artifact["validation"] = validation
-    if validation["status"] != "PASS":
-        artifact["status"] = "VALIDATION_FAILED"
-        _write(args.pipeline_artifact, artifact)
-        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
-        return 3
 
     try:
         validation_evidence = _read(args.validation_artifact)
     except Exception as exc:
-        artifact["status"] = "VALIDATION_EVIDENCE_INVALID"
+        artifact["status"] = (
+            "VALIDATION_FAILED"
+            if validation["status"] != "PASS"
+            else "VALIDATION_EVIDENCE_INVALID"
+        )
         artifact["validation_evidence_error"] = f"{type(exc).__name__}:{exc}"
         _write(args.pipeline_artifact, artifact)
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
@@ -272,6 +282,15 @@ def main() -> int:
     artifact["capacity_shortfall"] = validation_evidence.get("capacity_shortfall")
     artifact["holdout_evaluated"] = validation_evidence.get("holdout_evaluated")
     artifact["holdout_statuses"] = validation_evidence.get("holdout_statuses")
+
+    if validation["status"] != "PASS":
+        artifact["status"] = (
+            str(run_status) if isinstance(run_status, str) else "VALIDATION_FAILED"
+        )
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 3
+
     if run_status != "COMPUTED" or not isinstance(model_status, str):
         artifact["status"] = "VALIDATION_EVIDENCE_INVALID"
         _write(args.pipeline_artifact, artifact)
