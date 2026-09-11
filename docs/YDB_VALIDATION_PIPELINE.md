@@ -40,17 +40,19 @@ The pipeline is fail-closed and deliberately staged:
 2. Preparation fetches/verifies only D1 first for all six markets. This creates the versioned real exchange-session calendars at low cost.
 3. Real session capacity is checked for both development and holdout on every market. If either period is too short, the result is `INSUFFICIENT_DATA`; H1/M15/flow are not backfilled and holdout is not evaluated.
 4. Only when both periods are viable are H1, M15 and optional historical flow prepared.
-5. All 18 mandatory price requirements must be `READY`.
-6. Validation re-checks exact stored-session capacity for development and holdout before calibration.
-7. Candidate comparison uses `FROZEN_PREPARED_YDB`; it cannot repair data or silently fetch new price/flow data between candidates.
-8. Rolling-futures identity at T0 is recovered from the versioned stored session calendar. Missing or ambiguous identity fails closed instead of falling back to live MOEX.
-9. Only snapshots with complete mandatory D1/H1/M15 history count. Optional flow may be degraded.
-10. Statistical windows do not overlap. With T0 every 5 sessions, 5-session results use every observation, 10-session results every second, and 20-session results every fourth. Reports preserve raw count and sampling stride.
-11. Candidate selection is development-only and acceptance-first. A rejected candidate cannot beat an accepted candidate merely through a better average score.
-12. Holdout stays sealed until the selected configuration passes development. If development is rejected, failed, or insufficient, `holdout_evaluated=false`.
-13. Immediately before the first holdout read, the period is durably claimed in YDB. The claim stores the holdout dates, protocol, selected-model fingerprint and timestamp. A later run on the same or overlapping holdout is blocked as `HOLDOUT_ALREADY_CONSUMED`.
-14. The holdout claim is intentionally written before performance is read. A crash after claiming still burns the holdout rather than allowing a second look.
-15. `REJECTED`, `INSUFFICIENT_DATA` and `HOLDOUT_ALREADY_CONSUMED` are governed scientific/operational outcomes, not reasons to weaken the model criteria.
+5. Long MOEX work remains behind the global request governor. Large provider request sets are split into bounded scheduling windows; each window gets a fresh operation budget while the shared pacing gate remains active.
+6. H1/M15 verification is durable per bounded session chunk, so an interrupted preparation run resumes from already-proven sessions instead of restarting the four-year history.
+7. All 18 mandatory price requirements must be `READY`.
+8. Validation re-checks exact stored-session capacity for development and holdout before calibration.
+9. Candidate comparison uses `FROZEN_PREPARED_YDB`; it cannot repair data or silently fetch new price/flow data between candidates.
+10. Rolling-futures identity at T0 is recovered from the versioned stored session calendar. Missing or ambiguous identity fails closed instead of falling back to live MOEX.
+11. Only snapshots with complete mandatory D1/H1/M15 history count. Optional flow may be degraded.
+12. Statistical windows do not overlap. With T0 every 5 sessions, 5-session results use every observation, 10-session results every second, and 20-session results every fourth. Reports preserve raw count and sampling stride.
+13. Candidate selection is development-only and acceptance-first. A rejected candidate cannot beat an accepted candidate merely through a better average score.
+14. Holdout stays sealed until the selected configuration passes development. If development is rejected, failed, or insufficient, `holdout_evaluated=false`.
+15. Immediately before the first holdout read, the period is durably claimed in YDB. The claim stores the holdout dates, protocol, selected-model fingerprint and timestamp. A later run on the same or overlapping holdout is blocked as `HOLDOUT_ALREADY_CONSUMED`.
+16. The holdout claim is intentionally written before performance is read. A crash after claiming still burns the holdout rather than allowing a second look.
+17. `REJECTED`, `INSUFFICIENT_DATA` and `HOLDOUT_ALREADY_CONSUMED` are governed scientific/operational outcomes, not reasons to weaken the model criteria.
 
 ## Statistical gates
 
