@@ -25,6 +25,8 @@ from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 
 
 RETRY_DELAYS = (0, 5, 15)
+TRADESTATS_EXPECTED_SYMBOLS = frozenset({"SBER", "Si", "BR", "GOLD"})
+FUTOI_EXPECTED_SYMBOLS = frozenset({"Si", "BR", "GOLD"})
 
 
 def _token() -> str:
@@ -75,6 +77,32 @@ def _retry(label: str, operation) -> tuple[bool, dict[str, object]]:
     }
 
 
+def _flow_warnings(symbol: str, payload: dict[str, object]) -> list[dict[str, object]]:
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return []
+    warnings: list[dict[str, object]] = []
+    trade_count = int(result.get("tradestats_rows") or 0)
+    futoi_count = int(result.get("futoi_rows") or 0)
+    if symbol in TRADESTATS_EXPECTED_SYMBOLS and trade_count == 0:
+        warnings.append(
+            {
+                "symbol": symbol,
+                "dataset": "TRADESTATS",
+                "warning": "supported optional feed returned zero rows",
+            }
+        )
+    if symbol in FUTOI_EXPECTED_SYMBOLS and futoi_count == 0:
+        warnings.append(
+            {
+                "symbol": symbol,
+                "dataset": "FUTOI",
+                "warning": "supported optional feed returned zero rows",
+            }
+        )
+    return warnings
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Prepare exactly the YDB history required by six-market validation"
@@ -113,7 +141,9 @@ def main() -> int:
         )
 
         operations: list[dict[str, object]] = []
-        failures: list[dict[str, object]] = []
+        price_failures: list[dict[str, object]] = []
+        flow_failures: list[dict[str, object]] = []
+        flow_warnings: list[dict[str, object]] = []
         for symbol in CORE_VALIDATION_SYMBOLS:
             for timeframe, left, right in required_price_ranges(
                 args.validation_start, args.validation_end
@@ -126,7 +156,7 @@ def main() -> int:
                 )
                 operations.append(payload)
                 if not ok:
-                    failures.append(payload)
+                    price_failures.append(payload)
 
         flow_from = (
             date.fromisoformat(args.validation_start) - timedelta(days=10)
@@ -140,7 +170,9 @@ def main() -> int:
             )
             operations.append(payload)
             if not ok:
-                failures.append(payload)
+                flow_failures.append(payload)
+            else:
+                flow_warnings.extend(_flow_warnings(symbol, payload))
 
         readiness = ValidationDataReadinessService(history=history).check(
             CORE_VALIDATION_SYMBOLS,
@@ -152,13 +184,21 @@ def main() -> int:
             "validation_end": args.validation_end,
             "symbols": list(CORE_VALIDATION_SYMBOLS),
             "readiness": readiness.to_dict(),
-            "operation_failures": failures,
+            "price_operation_failures": price_failures,
+            "optional_flow_failures": flow_failures,
+            "optional_flow_warnings": flow_warnings,
             "operations": operations,
         }
-        if readiness.status == "READY":
-            artifact["status"] = "READY" if not failures else "READY_WITH_OPTIONAL_FLOW_ERRORS"
-        else:
+        if readiness.status != "READY":
             artifact["status"] = "DATA_NOT_READY"
+        elif price_failures:
+            artifact["status"] = "READY_WITH_PRICE_OPERATION_ERRORS"
+        elif flow_failures:
+            artifact["status"] = "READY_WITH_OPTIONAL_FLOW_ERRORS"
+        elif flow_warnings:
+            artifact["status"] = "READY_WITH_OPTIONAL_FLOW_WARNINGS"
+        else:
+            artifact["status"] = "READY"
         _write(args.artifact, artifact)
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
         return 0 if readiness.status == "READY" else 2
