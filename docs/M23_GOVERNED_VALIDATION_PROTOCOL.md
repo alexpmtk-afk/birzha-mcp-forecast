@@ -48,14 +48,14 @@ Raw counts and thinning stride remain visible in evidence.
 3. The normal validation run evaluates development only. The holdout remains sealed even if development passes.
 4. A successful development-only run emits two independent SHA-256 identities:
    - `selected_model_fingerprint` — Forecast Engine version, selected parameters, protocol and development identity;
-   - `selected_data_fingerprint` — exact prepared contract calendar, D1/H1/M15 rows and prepared TradeStats/FUTOI rows used by governed validation.
+   - `selected_data_fingerprint` — exact prepared contract calendar, D1/H1/M15 rows, prepared TradeStats/FUTOI rows and the verification ranges that determine whether optional-flow rows are usable.
 5. The final holdout run is a separate explicit command using `--open-holdout` and must supply both prior fingerprints.
-6. The final run does not prepare or repair history. It rechecks readiness and recomputes the dataset fingerprint from the frozen YDB rows.
+6. The final run does not prepare or repair history. It rechecks readiness and recomputes the dataset fingerprint from the frozen YDB state.
 7. `MODEL_FINGERPRINT_MISMATCH` or `DATA_FINGERPRINT_MISMATCH` stops before the holdout claim and before holdout performance is read.
 8. Immediately before the first holdout performance read, YDB atomically stores a durable claim containing the holdout range, protocol, Forecast Engine version, model fingerprint, data fingerprint and UTC timestamp.
 9. The claim is written before performance is read. A crash after claiming still consumes the holdout rather than permitting another look.
 10. The same or any overlapping holdout period is blocked on later runs as `HOLDOUT_ALREADY_CONSUMED`.
-11. Changing model parameters, engine code, historical rows, protocol text, computer, chat or execution channel does not make a consumed holdout fresh again.
+11. Changing model parameters, engine code, historical rows, flow verification state, protocol text, computer, chat or execution channel does not make a consumed holdout fresh again.
 12. A poor holdout result means rejection; the same holdout must not be reused for tuning and re-tested as if independent.
 
 Checking session capacity and computing a cryptographic dataset identity before the claim are allowed because neither step computes or exposes holdout model performance.
@@ -64,7 +64,7 @@ Checking session capacity and computing a cryptographic dataset identity before 
 
 Validation uses `FROZEN_PREPARED_YDB`. Candidate comparison and final holdout evaluation must not download missing prices or optional flow, change rolling-contract identity, or repair the dataset while models are being compared.
 
-The dataset fingerprint is content-sensitive. A changed candle payload, contract-session mapping, TradeStats row or FUTOI row changes the fingerprint and prevents the final holdout run from proceeding under the old seal.
+The dataset fingerprint is content- and state-sensitive. A changed candle payload, contract-session mapping, TradeStats row, FUTOI row, or the verification range controlling whether optional-flow data are visible to the read-only validator changes the fingerprint and prevents the final holdout run from proceeding under the old seal.
 
 All preparation requests stay behind the global request controller and distributed YDB pacing gate.
 
