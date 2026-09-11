@@ -52,7 +52,7 @@ class YdbValidationGovernanceStore:
         self,
         pool: QueryPool,
         *,
-        table: str = "model_validation_holdout_claims",
+        table: str = "model_validation_holdout_claims_v1",
     ) -> None:
         self._pool = pool
         self._table = _safe_table_name(table)
@@ -86,16 +86,7 @@ class YdbValidationGovernanceStore:
             },
             retry_settings=ydb.RetrySettings(idempotent=True),
         )
-        row = _first_row(result)
-        if row is None:
-            return None
-        return HoldoutClaim(
-            holdout_start=str(_row_value(row, "holdout_start")),
-            holdout_end=str(_row_value(row, "holdout_end")),
-            protocol=str(_row_value(row, "protocol")),
-            model_fingerprint=str(_row_value(row, "model_fingerprint")),
-            consumed_at=str(_row_value(row, "consumed_at")),
-        )
+        return _claim_from_row(_first_row(result))
 
     def claim_once(
         self,
@@ -105,52 +96,85 @@ class YdbValidationGovernanceStore:
         protocol: str,
         model_fingerprint: str,
     ) -> HoldoutClaim:
-        left = holdout_start[:10]
-        right = holdout_end[:10]
-        existing = self.overlapping_claim(left, right)
-        if existing is not None:
-            raise HoldoutAlreadyConsumedError(
-                "holdout overlaps a previously consumed range: "
-                f"{existing.holdout_start}..{existing.holdout_end}"
-            )
+        """Atomically claim a non-overlapping holdout range.
 
+        The overlap read and conditional INSERT are one implicit serializable YDB
+        transaction. Concurrent claims touching the same key range therefore
+        cannot both commit successfully. The write is non-idempotent so an
+        ambiguous write outcome is never silently retried as a fresh claim.
+        """
         claim = HoldoutClaim(
-            holdout_start=left,
-            holdout_end=right,
+            holdout_start=holdout_start[:10],
+            holdout_end=holdout_end[:10],
             protocol=protocol,
             model_fingerprint=model_fingerprint,
             consumed_at=datetime.now(timezone.utc).isoformat(),
         )
+        parameters = {
+            "$holdout_start": _utf8(claim.holdout_start),
+            "$holdout_end": _utf8(claim.holdout_end),
+            "$protocol": _utf8(claim.protocol),
+            "$model_fingerprint": _utf8(claim.model_fingerprint),
+            "$consumed_at": _utf8(claim.consumed_at),
+        }
         try:
-            self._pool.execute_with_retries(
+            result = self._pool.execute_with_retries(
                 f"""
                 DECLARE $holdout_start AS Utf8;
                 DECLARE $holdout_end AS Utf8;
                 DECLARE $protocol AS Utf8;
                 DECLARE $model_fingerprint AS Utf8;
                 DECLARE $consumed_at AS Utf8;
+
+                $existing = SELECT
+                    holdout_start, holdout_end, protocol, model_fingerprint, consumed_at
+                FROM `{self._table}`
+                WHERE holdout_start <= $holdout_end AND holdout_end >= $holdout_start
+                LIMIT 1;
+
                 INSERT INTO `{self._table}`
-                (holdout_start, holdout_end, protocol, model_fingerprint, consumed_at)
-                VALUES ($holdout_start, $holdout_end, $protocol, $model_fingerprint, $consumed_at);
+                    (holdout_start, holdout_end, protocol, model_fingerprint, consumed_at)
+                SELECT
+                    $holdout_start AS holdout_start,
+                    $holdout_end AS holdout_end,
+                    $protocol AS protocol,
+                    $model_fingerprint AS model_fingerprint,
+                    $consumed_at AS consumed_at
+                WHERE NOT EXISTS (SELECT * FROM $existing);
+
+                SELECT * FROM $existing;
                 """,
-                {
-                    "$holdout_start": _utf8(claim.holdout_start),
-                    "$holdout_end": _utf8(claim.holdout_end),
-                    "$protocol": _utf8(claim.protocol),
-                    "$model_fingerprint": _utf8(claim.model_fingerprint),
-                    "$consumed_at": _utf8(claim.consumed_at),
-                },
+                parameters,
                 retry_settings=ydb.RetrySettings(idempotent=False),
             )
         except Exception:
-            existing = self.overlapping_claim(left, right)
+            existing = self.overlapping_claim(claim.holdout_start, claim.holdout_end)
             if existing is not None:
                 raise HoldoutAlreadyConsumedError(
                     "holdout was claimed concurrently or previously: "
                     f"{existing.holdout_start}..{existing.holdout_end}"
                 ) from None
             raise
+
+        existing = _claim_from_row(_first_row(result))
+        if existing is not None:
+            raise HoldoutAlreadyConsumedError(
+                "holdout overlaps a previously consumed range: "
+                f"{existing.holdout_start}..{existing.holdout_end}"
+            )
         return claim
+
+
+def _claim_from_row(row: object | None) -> HoldoutClaim | None:
+    if row is None:
+        return None
+    return HoldoutClaim(
+        holdout_start=str(_row_value(row, "holdout_start")),
+        holdout_end=str(_row_value(row, "holdout_end")),
+        protocol=str(_row_value(row, "protocol")),
+        model_fingerprint=str(_row_value(row, "model_fingerprint")),
+        consumed_at=str(_row_value(row, "consumed_at")),
+    )
 
 
 def _utf8(value: str):
