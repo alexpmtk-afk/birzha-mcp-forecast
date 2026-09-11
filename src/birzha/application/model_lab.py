@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 from birzha.application.validation import WalkForwardValidator
 from birzha.domain.validation import (
@@ -45,18 +46,33 @@ class ModelAcceptanceService:
         )
 
     def assess_development_holdout(
-        self, symbol: str, *, development_start: str, split_date: str, holdout_end: str,
-        step_sessions: int = 5, max_points: int = 60,
+        self,
+        symbol: str,
+        *,
+        development_start: str,
+        split_date: str,
+        holdout_end: str,
+        step_sessions: int = 5,
+        max_points: int = 60,
     ) -> DevelopmentHoldoutReport:
         if not development_start < split_date < holdout_end:
             raise ValueError("expected development_start < split_date < holdout_end")
+        holdout_start = holdout_start_date(split_date)
+        if holdout_start >= holdout_end:
+            raise ValueError("holdout period must contain dates after split_date")
         development = self.assess(
-            symbol, start_date=development_start, end_date=split_date,
-            step_sessions=step_sessions, max_points=max_points,
+            symbol,
+            start_date=development_start,
+            end_date=split_date,
+            step_sessions=step_sessions,
+            max_points=max_points,
         )
         holdout = self.assess(
-            symbol, start_date=split_date, end_date=holdout_end,
-            step_sessions=step_sessions, max_points=max_points,
+            symbol,
+            start_date=holdout_start,
+            end_date=holdout_end,
+            step_sessions=step_sessions,
+            max_points=max_points,
         )
         if holdout.status == "ACCEPTED" and development.status == "ACCEPTED":
             status = "ACCEPTED"
@@ -65,10 +81,20 @@ class ModelAcceptanceService:
         else:
             status = "REJECTED"
         return DevelopmentHoldoutReport(
-            symbol=symbol, development_start=development_start, development_end=split_date,
-            holdout_start=split_date, holdout_end=holdout_end, development=development,
-            holdout=holdout, status=status,
+            symbol=symbol,
+            development_start=development_start,
+            development_end=split_date,
+            holdout_start=holdout_start,
+            holdout_end=holdout_end,
+            development=development,
+            holdout=holdout,
+            status=status,
         )
+
+
+def holdout_start_date(split_date: str) -> str:
+    """First calendar date eligible for untouched holdout after development."""
+    return (date.fromisoformat(split_date[:10]) + timedelta(days=1)).isoformat()
 
 
 def assess_walk_forward(
@@ -159,7 +185,12 @@ def assess_walk_forward(
     )
 
 
-def _wilson_lower_bound(successes: int, observations: int, *, z: float = 1.959963984540054) -> float | None:
+def _wilson_lower_bound(
+    successes: int,
+    observations: int,
+    *,
+    z: float = 1.959963984540054,
+) -> float | None:
     if observations <= 0:
         return None
     if successes < 0 or successes > observations:
@@ -168,5 +199,7 @@ def _wilson_lower_bound(successes: int, observations: int, *, z: float = 1.95996
     z2 = z * z
     denominator = 1.0 + z2 / observations
     centre = p + z2 / (2.0 * observations)
-    margin = z * math.sqrt((p * (1.0 - p) + z2 / (4.0 * observations)) / observations)
+    margin = z * math.sqrt(
+        (p * (1.0 - p) + z2 / (4.0 * observations)) / observations
+    )
     return (centre - margin) / denominator
