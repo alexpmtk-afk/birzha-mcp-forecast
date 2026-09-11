@@ -1,4 +1,9 @@
-from birzha.application.historical_flow import HistoricalFlowDataService
+from datetime import date
+
+from birzha.application.historical_flow import (
+    HistoricalFlowDataService,
+    _bounded_date_ranges,
+)
 from birzha.domain.market import Instrument
 from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
 
@@ -95,4 +100,28 @@ def test_unsupported_index_tradestats_degrades_without_upstream_call():
 
     assert rows == []
     assert analytics.trade_calls == 0
+    store.close()
+
+
+def test_long_flow_ranges_are_split_into_safe_calendar_windows():
+    ranges = _bounded_date_ranges(date(2026, 1, 1), date(2026, 5, 1))
+    assert ranges == (
+        (date(2026, 1, 1), date(2026, 3, 1)),
+        (date(2026, 3, 2), date(2026, 4, 30)),
+        (date(2026, 5, 1), date(2026, 5, 1)),
+    )
+
+
+def test_bounded_futoi_marks_whole_range_after_all_chunks():
+    analytics = FakeAnalytics()
+    store = DuckDBHistoricalFlowStore(":memory:")
+    service = HistoricalFlowDataService(
+        market_data=FakeMarketData(), analytics=analytics, store=store
+    )
+
+    rows = service._futoi_bounded(FUT, date(2026, 1, 1), date(2026, 5, 1))
+
+    assert analytics.futoi_calls == 3
+    assert len(rows) == 3
+    assert store.is_verified("FUTOI", "Si", "2026-01-01", "2026-05-01") is True
     store.close()
