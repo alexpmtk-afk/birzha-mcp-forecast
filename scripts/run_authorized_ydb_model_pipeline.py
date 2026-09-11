@@ -101,10 +101,10 @@ def main() -> int:
 
     if not args.validation_start < args.split_date < args.validation_end:
         raise ValueError("expected validation_start < split_date < validation_end")
-    if args.step_sessions <= 0:
-        raise ValueError("step_sessions must be > 0")
-    if args.max_points <= 0:
-        raise ValueError("max_points must be > 0")
+    if args.step_sessions <= 0 or args.step_sessions > 50:
+        raise ValueError("step_sessions must be between 1 and 50")
+    if args.max_points <= 0 or args.max_points > 240:
+        raise ValueError("max_points must be between 1 and 240")
 
     holdout_start = (
         date.fromisoformat(args.split_date[:10]) + timedelta(days=1)
@@ -168,8 +168,14 @@ def main() -> int:
             args.connection_string,
             "--validation-start",
             args.validation_start,
+            "--split-date",
+            args.split_date,
             "--validation-end",
             args.validation_end,
+            "--step-sessions",
+            str(args.step_sessions),
+            "--max-points",
+            str(args.max_points),
             "--artifact",
             args.prepare_artifact,
         ],
@@ -192,7 +198,20 @@ def main() -> int:
         _write(args.pipeline_artifact, artifact)
         print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
         return 2
-    artifact["prepare_evidence_status"] = prepare_evidence.get("status")
+
+    prepare_evidence_status = prepare_evidence.get("status")
+    artifact["prepare_evidence_status"] = prepare_evidence_status
+    artifact["session_capacity"] = prepare_evidence.get("session_capacity")
+    artifact["capacity_shortfall"] = prepare_evidence.get("capacity_shortfall")
+    if prepare_evidence_status == "INSUFFICIENT_DATA":
+        artifact["status"] = "INSUFFICIENT_DATA"
+        artifact["model_status"] = "INSUFFICIENT_DATA"
+        artifact["validation"] = {"status": "NOT_RUN"}
+        artifact["holdout_evaluated"] = False
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 0
+
     readiness = prepare_evidence.get("readiness")
     readiness_status = readiness.get("status") if isinstance(readiness, dict) else None
     artifact["readiness_status"] = readiness_status
@@ -248,6 +267,7 @@ def main() -> int:
     artifact["selected_parameters"] = validation_evidence.get("selected_parameters")
     artifact["development_statuses"] = validation_evidence.get("development_statuses")
     artifact["development_capacity"] = validation_evidence.get("development_capacity")
+    artifact["holdout_capacity"] = validation_evidence.get("holdout_capacity")
     artifact["capacity_shortfall"] = validation_evidence.get("capacity_shortfall")
     artifact["holdout_evaluated"] = validation_evidence.get("holdout_evaluated")
     artifact["holdout_statuses"] = validation_evidence.get("holdout_statuses")
