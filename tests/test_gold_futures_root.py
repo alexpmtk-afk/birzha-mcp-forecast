@@ -5,6 +5,7 @@ from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.validation import WalkForwardValidator
 from birzha.domain.market import Instrument
+from birzha.providers.moex_analytics import _futoi_security_code
 from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
@@ -12,6 +13,8 @@ from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 GOLD_DIRECT = Instrument("GOLD", "GOLD", "RFUD", "futures", "forts", "future")
 GDH5 = Instrument("GOLD", "GDH5", "RFUD", "futures", "forts", "future", root_symbol="GOLD")
 GDM5 = Instrument("GOLD", "GDM5", "RFUD", "futures", "forts", "future", root_symbol="GOLD")
+SIH5 = Instrument("Si", "SiH5", "RFUD", "futures", "forts", "future", root_symbol="Si")
+BRH5 = Instrument("BR", "BRH5", "RFUD", "futures", "forts", "future", root_symbol="BR")
 
 
 class _DirectResolver:
@@ -70,6 +73,12 @@ def test_gold_is_explicit_rolling_futures_root() -> None:
     assert is_futures_root_symbol("GOLD") is True
     assert is_futures_root_symbol("gold") is True
     assert is_futures_root_symbol("SBER") is False
+
+
+def test_gold_futoi_uses_official_short_code_without_changing_other_roots() -> None:
+    assert _futoi_security_code(GDH5) == "GD"
+    assert _futoi_security_code(SIH5) == "Si"
+    assert _futoi_security_code(BRH5) == "BR"
 
 
 def test_gold_historical_segments_ignore_colliding_direct_secid() -> None:
