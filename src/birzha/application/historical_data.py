@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.domain.market import CandleSeries, Instrument
@@ -15,7 +15,8 @@ INTRADAY_MAX_SESSIONS_PER_FETCH = 3
 D1_SESSION_VERIFICATION_VERSION = "D1_SESSION_V1"
 H1_FULL_VERIFICATION_VERSION = "H1_FULL_V1"
 M15_FULL_VERIFICATION_VERSION = "M15_FULL_V1"
-ROLLING_HISTORY_VERIFICATION_VERSION = "ROLLING_HISTORY_V1"
+ROLLING_HISTORY_VERIFICATION_VERSION = "ROLLING_HISTORY_V2_PREWARM"
+ROLLING_CONTRACT_WARMUP_DAYS = {"D1": 300, "H1": 90, "M15": 30}
 FULL_SESSION_TIMEFRAMES = frozenset({"H1", "M15"})
 
 
@@ -139,24 +140,34 @@ class HistoricalDataService:
             )
 
         # H1/M15 are certified from complete provider responses for each
-        # expected session. Per-chunk markers make a failed long pass resumable
-        # and future range extensions fetch only newly unverified sessions.
+        # expected active session. For rolling futures, every later contract is
+        # also preloaded before its first active segment so a snapshot just
+        # after rollover can still build D1/H1/M15 features from that exact
+        # contract's own causal history.
         force_full_sessions = timeframe in FULL_SESSION_TIMEFRAMES and resolver_known
-        results = tuple(
-            self._sync_contract(
-                symbol,
-                instrument,
-                timeframe,
-                left,
-                right,
-                force_full_sessions=force_full_sessions,
-                verification_symbol=(
-                    verification_symbol if force_full_sessions else None
-                ),
-                session_symbol=(session_symbol if timeframe == "D1" else None),
+        result_items: list[ContractSyncResult] = []
+        for instrument, left, right in segments:
+            if is_root and left > start:
+                self._sync_contract_warmup(
+                    instrument,
+                    timeframe=timeframe,
+                    active_start=left,
+                )
+            result_items.append(
+                self._sync_contract(
+                    symbol,
+                    instrument,
+                    timeframe,
+                    left,
+                    right,
+                    force_full_sessions=force_full_sessions,
+                    verification_symbol=(
+                        verification_symbol if force_full_sessions else None
+                    ),
+                    session_symbol=(session_symbol if timeframe == "D1" else None),
+                )
             )
-            for instrument, left, right in segments
-        )
+        results = tuple(result_items)
         if is_root:
             empty_contracts = tuple(
                 item.secid for item in results if item.stored_candles == 0
@@ -315,6 +326,57 @@ class HistoricalDataService:
             segment_end = day
         segments.append((current_instrument, segment_start, segment_end))
         return tuple(segments)
+
+    def _sync_contract_warmup(
+        self,
+        instrument: Instrument,
+        *,
+        timeframe: str,
+        active_start: date,
+    ) -> int:
+        """Store the exact contract's own history before it becomes active.
+
+        Warmup rows are context for causal snapshot features only; they are not
+        logical-root active sessions and therefore never populate the root
+        session calendar or root verification markers.
+        """
+        days = ROLLING_CONTRACT_WARMUP_DAYS.get(timeframe.upper())
+        if days is None:
+            return 0
+        finish = active_start - timedelta(days=1)
+        start = active_start - timedelta(days=days)
+        if finish < start:
+            return 0
+        calendar = MoexTradingCalendar(self.market_data.provider)
+        expected = calendar.dates(
+            engine=instrument.engine,
+            market=instrument.market,
+            board=instrument.board,
+            security=instrument.secid,
+            from_date=start,
+            till_date=finish,
+        )
+        if not expected:
+            return 0
+        stored_dates = self.store.stored_trade_dates(
+            instrument.secid,
+            timeframe,
+            start.isoformat(),
+            finish.isoformat(),
+        )
+        missing_ranges = _bounded_missing_ranges(expected, stored_dates, timeframe)
+        fetched = 0
+        for left, right in missing_ranges:
+            series = self.market_data.candles_for_instrument(
+                instrument,
+                timeframe=timeframe,
+                from_date=left.isoformat(),
+                till_date=right.isoformat(),
+                completed_only=True,
+            )
+            fetched += series.count
+            self.store.upsert_series(series)
+        return fetched
 
     def _sync_contract(
         self,
