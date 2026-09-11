@@ -14,6 +14,7 @@ from birzha.domain.market import CandleSeries, Instrument
 class StoredMarketDataView:
     base: MarketDataService
     history: HistoricalDataService
+    require_stored_resolution: bool = False
 
     @property
     def provider(self):
@@ -65,6 +66,10 @@ class StoredMarketDataView:
         stored = self.stored_instrument(symbol)
         if stored is not None:
             return stored
+        if self.require_stored_resolution:
+            raise RuntimeError(
+                f"stored instrument metadata missing for frozen validation: {symbol}"
+            )
         return self.base.resolve(symbol, as_of=as_of)
 
     def candles_for_instrument(
@@ -77,12 +82,15 @@ class StoredMarketDataView:
         completed_only: bool = True,
         now: datetime | None = None,
     ) -> CandleSeries:
-        series=self.history.load_exact(
-            instrument,timeframe=timeframe,from_date=from_date,till_date=till_date
+        series = self.history.load_exact(
+            instrument,
+            timeframe=timeframe,
+            from_date=from_date,
+            till_date=till_date,
         )
-        candles=series.candles
+        candles = series.candles
         if completed_only:
-            candles=tuple(item for item in candles if item.completed)
+            candles = tuple(item for item in candles if item.completed)
         return CandleSeries(
             instrument=instrument,
             timeframe=timeframe.upper(),
@@ -99,9 +107,14 @@ class StoredMarketDataView:
         till_date: str,
         completed_only: bool = True,
     ) -> CandleSeries:
-        instrument=self.resolve(symbol,as_of=date.fromisoformat(till_date[:10]))
+        instrument = self.resolve(
+            symbol, as_of=date.fromisoformat(till_date[:10])
+        )
         return self.candles_for_instrument(
-            instrument,timeframe=timeframe,from_date=from_date,till_date=till_date,
+            instrument,
+            timeframe=timeframe,
+            from_date=from_date,
+            till_date=till_date,
             completed_only=completed_only,
         )
 
@@ -113,9 +126,12 @@ class StoredMarketDataView:
         lookback_days: int,
         completed_only: bool = True,
     ) -> CandleSeries:
-        till=datetime.now().date()
-        start=till-timedelta(days=lookback_days)
+        till = datetime.now().date()
+        start = till - timedelta(days=lookback_days)
         return self.candles(
-            symbol,timeframe=timeframe,from_date=start.isoformat(),till_date=till.isoformat(),
+            symbol,
+            timeframe=timeframe,
+            from_date=start.isoformat(),
+            till_date=till.isoformat(),
             completed_only=completed_only,
         )
