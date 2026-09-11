@@ -12,5 +12,5 @@ runs:
         $root = (Resolve-Path (Join-Path $env:GITHUB_ACTION_PATH '..\..\..')).Path
         if (-not (Test-Path -LiteralPath (Join-Path $root 'src\birzha') -PathType Container)) { throw 'private action source root is incomplete' }
         if (-not (Test-Path -LiteralPath (Join-Path $root 'tests') -PathType Container)) { throw 'private action tests root is incomplete' }
+        Add-Content -LiteralPath $env:GITHUB_ENV -Value "BIRZHA_M23_SOURCE_ROOT=$root"
         Write-Host 'PRIVATE_M23_SOURCE_PAYLOAD=PASS'
-        Write-Host "PRIVATE_M23_SOURCE_ROOT=$root"
