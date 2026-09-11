@@ -5,6 +5,9 @@ import sys
 import scripts.run_authorized_ydb_model_pipeline as pipeline
 
 
+ENGINE = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
+
+
 def test_pipeline_preserves_holdout_already_consumed(monkeypatch) -> None:
     calls: list[str] = []
     removed: list[str] = []
@@ -27,6 +30,7 @@ def test_pipeline_preserves_holdout_already_consumed(monkeypatch) -> None:
                     "holdout_start": "2023-01-01",
                     "holdout_end": "2024-12-31",
                     "protocol": "M23_HISTORICAL_GOVERNED_V1",
+                    "engine_version": ENGINE,
                     "model_fingerprint": "abc",
                     "consumed_at": "2026-09-11T00:00:00+00:00",
                 },
@@ -61,3 +65,4 @@ def test_pipeline_preserves_holdout_already_consumed(monkeypatch) -> None:
     assert result["model_status"] == "NOT_EVALUATED"
     assert result["holdout_evaluated"] is False
     assert result["holdout_claim"]["holdout_start"] == "2023-01-01"
+    assert result["holdout_claim"]["engine_version"] == ENGINE
