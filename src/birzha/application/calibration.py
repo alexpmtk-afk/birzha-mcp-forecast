@@ -123,6 +123,7 @@ class ModelCalibrationService:
             calendar=self.validator.calendar,
             history=self.validator.history,
             historical_flow=self.validator.historical_flow,
+            prepare_history_before_run=self.validator.prepare_history_before_run,
         )
         return ModelAcceptanceService(
             validator=validator,
