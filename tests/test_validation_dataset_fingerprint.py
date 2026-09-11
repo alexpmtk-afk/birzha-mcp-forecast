@@ -38,9 +38,16 @@ class FakeHistory:
 
 
 class FakePool:
-    def __init__(self, *, price_payload="price-v1", flow_payload="flow-v1") -> None:
+    def __init__(
+        self,
+        *,
+        price_payload="price-v1",
+        flow_payload="flow-v1",
+        flow_verified=True,
+    ) -> None:
         self.price_payload = price_payload
         self.flow_payload = flow_payload
+        self.flow_verified = flow_verified
 
     def execute_with_retries(self, query, parameters=None, **kwargs):
         compact = " ".join(str(query).split())
@@ -57,6 +64,18 @@ class FakePool:
                     ]
                 )
             ]
+        if "FROM `historical_flow_rows_verified`" in compact:
+            rows = (
+                [
+                    {
+                        "from_date": "2022-12-22",
+                        "till_date": "2023-12-31",
+                    }
+                ]
+                if self.flow_verified
+                else []
+            )
+            return [SimpleNamespace(rows=rows)]
         if "FROM `historical_flow_rows`" in compact:
             return [
                 SimpleNamespace(
@@ -105,6 +124,13 @@ def test_optional_flow_change_also_changes_dataset_fingerprint() -> None:
     changed = _fingerprint(FakePool(flow_payload="flow-v2"))
 
     assert baseline.sha256 != changed.sha256
+
+
+def test_flow_verification_state_changes_dataset_fingerprint() -> None:
+    verified = _fingerprint(FakePool(flow_verified=True))
+    unverified = _fingerprint(FakePool(flow_verified=False))
+
+    assert verified.sha256 != unverified.sha256
 
 
 def test_missing_session_contract_map_fails_closed() -> None:
