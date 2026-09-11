@@ -88,7 +88,7 @@ class ModelCalibrationService:
                 max_points=max_points,
             )
             results.append(CalibrationCandidateResult(parameters, _objective(report), report))
-        ranked = tuple(sorted(results, key=lambda item: (item.objective, item.parameters.name), reverse=True))
+        ranked = tuple(sorted(results, key=_single_candidate_rank, reverse=True))
         selected = ranked[0].parameters
         holdout = self._acceptance_for(selected).assess(
             symbol,
@@ -145,6 +145,20 @@ def _objective(report: ModelAcceptanceReport) -> float:
     return round(sum(scores) / len(scores), 8)
 
 
+def _status_rank(status: str) -> int:
+    return {
+        "ACCEPTED": 3,
+        "REJECTED": 2,
+        "INSUFFICIENT_SAMPLE": 1,
+        "FAILED": 0,
+    }.get(status, 0)
+
+
+def _single_candidate_rank(item: CalibrationCandidateResult) -> tuple[int, float, str]:
+    """Never choose a rejected development candidate over an accepted one."""
+    return (_status_rank(item.development.status), item.objective, item.parameters.name)
+
+
 @dataclass(frozen=True, slots=True)
 class MultiSymbolCandidateResult:
     parameters: ForecastParameters
@@ -181,6 +195,22 @@ class MultiSymbolCalibrationReport:
             "holdout": [item.to_dict() for item in self.holdout],
             "status": self.status,
         }
+
+
+def _multi_candidate_rank(
+    item: MultiSymbolCandidateResult,
+) -> tuple[int, int, int, float, str]:
+    statuses = tuple(report.status for report in item.development)
+    accepted_count = sum(status == "ACCEPTED" for status in statuses)
+    all_accepted = int(accepted_count == len(statuses))
+    worst_status = min((_status_rank(status) for status in statuses), default=0)
+    return (
+        all_accepted,
+        accepted_count,
+        worst_status,
+        item.objective,
+        item.parameters.name,
+    )
 
 
 def calibrate_across_symbols(
@@ -220,7 +250,7 @@ def calibrate_across_symbols(
         objective = round(sum(_objective(item) for item in development) / len(development), 8)
         ranked_items.append(MultiSymbolCandidateResult(parameters, objective, development))
 
-    ranked = tuple(sorted(ranked_items, key=lambda item: (item.objective, item.parameters.name), reverse=True))
+    ranked = tuple(sorted(ranked_items, key=_multi_candidate_rank, reverse=True))
     selected = ranked[0].parameters
     holdout_assessor = service._acceptance_for(selected)
     holdout = tuple(
