@@ -25,6 +25,7 @@ class HistoricalFlowDataService:
     market_data: MarketDataService
     analytics: MoexAnalyticsClient
     store: HistoricalFlowStore
+    read_only: bool = False
 
     def tradestats(
         self, instrument: Instrument, *, from_date: str, till_date: str
@@ -37,9 +38,16 @@ class HistoricalFlowDataService:
         dataset = "TRADESTATS"
         verification_dataset = _verification_dataset(dataset)
         key = instrument.secid
-        if not self.store.is_verified(
+        verified = self.store.is_verified(
             verification_dataset, key, from_date, till_date
-        ):
+        )
+        if self.read_only:
+            return (
+                self.store.read_rows(dataset, key, from_date, till_date)
+                if verified
+                else []
+            )
+        if not verified:
             rows = self.analytics.fetch_tradestats(
                 instrument, from_date=from_date, till_date=till_date
             )
@@ -57,9 +65,16 @@ class HistoricalFlowDataService:
         key = (instrument.root_symbol or instrument.symbol).strip()
         if instrument.asset_class != "future":
             return []
-        if not self.store.is_verified(
+        verified = self.store.is_verified(
             verification_dataset, key, from_date, till_date
-        ):
+        )
+        if self.read_only:
+            return (
+                self.store.read_rows(dataset, key, from_date, till_date)
+                if verified
+                else []
+            )
+        if not verified:
             rows = self.analytics.fetch_futoi(
                 instrument, from_date=from_date, till_date=till_date
             )
@@ -70,6 +85,8 @@ class HistoricalFlowDataService:
         return self.store.read_rows(dataset, key, from_date, till_date)
 
     def sync(self, symbol: str, *, from_date: str, till_date: str) -> dict[str, object]:
+        if self.read_only:
+            raise RuntimeError("read-only historical flow service cannot sync")
         start = date.fromisoformat(from_date[:10])
         finish = date.fromisoformat(till_date[:10])
         if start > finish:
