@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from birzha.application.forecast import ForecastParameters, ForecastService
@@ -71,6 +72,7 @@ class ModelCalibrationService:
         step_sessions: int = 5,
         max_points: int = 60,
         candidates: tuple[ForecastParameters, ...] = DEFAULT_CANDIDATES,
+        holdout_gate: Callable[[ForecastParameters], None] | None = None,
     ) -> ModelCalibrationReport:
         if not development_start < split_date < holdout_end:
             raise ValueError("expected development_start < split_date < holdout_end")
@@ -104,6 +106,8 @@ class ModelCalibrationService:
                 status=development.status,
             )
 
+        if holdout_gate is not None:
+            holdout_gate(selected)
         holdout = self._acceptance_for(selected).assess(
             symbol,
             start_date=holdout_start,
@@ -236,6 +240,7 @@ def calibrate_across_symbols(
     step_sessions: int = 5,
     max_points: int = 60,
     candidates: tuple[ForecastParameters, ...] = DEFAULT_CANDIDATES,
+    holdout_gate: Callable[[ForecastParameters], None] | None = None,
 ) -> MultiSymbolCalibrationReport:
     if not symbols:
         raise ValueError("at least one symbol is required")
@@ -293,6 +298,8 @@ def calibrate_across_symbols(
             status="REJECTED",
         )
 
+    if holdout_gate is not None:
+        holdout_gate(selected)
     holdout_assessor = service._acceptance_for(selected)
     holdout = tuple(
         holdout_assessor.assess(
