@@ -6,21 +6,26 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from statistics import fmean
 
-from birzha.application.forecast import ForecastService
+from birzha.application.forecast import ForecastService, build_forecast_from_snapshot
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.historical_flow import HistoricalFlowDataService
-from birzha.application.snapshot import MarketSnapshotService
-from birzha.application.stored_market_data import StoredMarketDataView
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.outcome import OutcomeService
+from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.stored_market_data import StoredMarketDataView
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.forecast import ForecastRecord
 from birzha.domain.outcome import HorizonOutcome
+from birzha.domain.snapshot import MarketSnapshot
 from birzha.domain.validation import HorizonValidationMetrics, WalkForwardReport
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.providers.moex_iss import MoexIssError
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
+
+
+MANDATORY_PRICE_TIMEFRAMES = ("D1", "H1", "M15")
+MINIMUM_PRICE_CANDLES = 50
 
 
 @dataclass(slots=True)
@@ -59,13 +64,19 @@ class WalkForwardValidator:
         if max_points <= 0 or max_points > 60:
             raise ValueError("max_points must be between 1 and 60")
 
-        forecast_service=self.forecasts
-        outcome_market=self.market_data
+        forecast_service = self.forecasts
+        outcome_market = self.market_data
         if self.history is not None:
-            self._prepare_history(symbol,start=start,end=end)
-            stored=StoredMarketDataView(self.market_data,self.history)
-            forecast_service=ForecastService(MarketSnapshotService(market_data=stored,flow=self.forecasts.snapshots.flow), parameters=self.forecasts.parameters)
-            outcome_market=stored
+            self._prepare_history(symbol, start=start, end=end)
+            stored = StoredMarketDataView(self.market_data, self.history)
+            forecast_service = ForecastService(
+                MarketSnapshotService(
+                    market_data=stored,
+                    flow=self.forecasts.snapshots.flow,
+                ),
+                parameters=self.forecasts.parameters,
+            )
+            outcome_market = stored
 
         sessions = self._validation_sessions(symbol, start=start, end=end)
         eligible = sessions[:-20] if len(sessions) > 20 else ()
@@ -89,13 +100,27 @@ class WalkForwardValidator:
                     break
                 attempted += 1
                 try:
-                    record = forecast_service.build(symbol, as_of_date=forecast_day.isoformat())
+                    snapshot = forecast_service.snapshots.build(
+                        symbol,
+                        as_of_date=forecast_day.isoformat(),
+                    )
+                    if not _mandatory_price_quality_pass(snapshot):
+                        failures.append(
+                            f"{forecast_day.isoformat()}:mandatory_price_quality_incomplete"
+                        )
+                        continue
+                    record = build_forecast_from_snapshot(
+                        snapshot,
+                        parameters=forecast_service.parameters,
+                    )
                     forecast_store.append(record)
                     versions.add(record.engine_version)
                     evaluation = outcome_service.evaluate(
                         record.forecast_id, evaluation_date=end.isoformat()
                     )
-                    by_horizon = {item.horizon_sessions: item for item in evaluation.outcomes}
+                    by_horizon = {
+                        item.horizon_sessions: item for item in evaluation.outcomes
+                    }
                     if any(h.sessions not in by_horizon for h in record.horizons):
                         # Exact-contract outcomes intentionally do not jump across
                         # an expiry into a different futures contract. A T0 too
@@ -103,13 +128,17 @@ class WalkForwardValidator:
                         # observation. Keep the diagnostic and continue to later
                         # independent T0s until the requested completed sample is
                         # filled or the candidate calendar is exhausted.
-                        failures.append(f"{forecast_day.isoformat()}:incomplete_outcome")
+                        failures.append(
+                            f"{forecast_day.isoformat()}:incomplete_outcome"
+                        )
                         continue
                     completed += 1
                     for horizon in record.horizons:
                         pairs.append((record, by_horizon[horizon.sessions]))
                 except Exception as exc:
-                    failures.append(f"{forecast_day.isoformat()}:{type(exc).__name__}:{exc}")
+                    failures.append(
+                        f"{forecast_day.isoformat()}:{type(exc).__name__}:{exc}"
+                    )
         finally:
             forecast_store.close()
             outcome_store.close()
@@ -138,22 +167,39 @@ class WalkForwardValidator:
 
     def _prepare_history(self, symbol: str, *, start: date, end: date) -> None:
         assert self.history is not None
-        requests=(
+        requests = (
             ("D1", start - timedelta(days=300)),
             ("H1", start - timedelta(days=90)),
             ("M15", start - timedelta(days=30)),
         )
-        for timeframe,left in requests:
-            self.history.sync(symbol,timeframe=timeframe,from_date=left.isoformat(),till_date=end.isoformat())
+        for timeframe, left in requests:
+            self.history.sync(
+                symbol,
+                timeframe=timeframe,
+                from_date=left.isoformat(),
+                till_date=end.isoformat(),
+            )
         if self.historical_flow is not None:
-            self.historical_flow.sync(symbol,from_date=(start-timedelta(days=10)).isoformat(),till_date=end.isoformat())
+            self.historical_flow.sync(
+                symbol,
+                from_date=(start - timedelta(days=10)).isoformat(),
+                till_date=end.isoformat(),
+            )
 
-    def _validation_sessions(self, symbol: str, *, start: date, end: date) -> tuple[date, ...]:
+    def _validation_sessions(
+        self, symbol: str, *, start: date, end: date
+    ) -> tuple[date, ...]:
         if self.history is not None:
-            return self.history.session_dates(symbol, from_date=start.isoformat(), till_date=end.isoformat())
+            return self.history.session_dates(
+                symbol,
+                from_date=start.isoformat(),
+                till_date=end.isoformat(),
+            )
         return self._session_dates(symbol, start=start, end=end)
 
-    def _session_dates(self, symbol: str, *, start: date, end: date) -> tuple[date, ...]:
+    def _session_dates(
+        self, symbol: str, *, start: date, end: date
+    ) -> tuple[date, ...]:
         """Build a real-session calendar from exact securities, including rolls."""
 
         resolver = self.market_data.direct_resolver
@@ -171,14 +217,18 @@ class WalkForwardValidator:
 
         historical = self.market_data.historical_future_resolver
         if historical is None:
-            raise RuntimeError("historical futures resolver is required for walk-forward validation")
+            raise RuntimeError(
+                "historical futures resolver is required for walk-forward validation"
+            )
 
         sessions: set[date] = set()
         cursor = start
         seen_contracts: set[str] = set()
         while cursor <= end:
             try:
-                instrument, resolved_day = self._resolve_future_on_or_after(symbol, cursor, end)
+                instrument, resolved_day = self._resolve_future_on_or_after(
+                    symbol, cursor, end
+                )
             except MoexIssError:
                 if sessions:
                     break
@@ -223,8 +273,27 @@ class WalkForwardValidator:
                     pass
             probe += timedelta(days=1)
         raise MoexIssError(
-            f"No historical MOEX futures session found for {symbol!r} on or after {start.isoformat()}"
+            f"No historical MOEX futures session found for {symbol!r} "
+            f"on or after {start.isoformat()}"
         )
+
+
+def _mandatory_price_quality_pass(snapshot: MarketSnapshot) -> bool:
+    """Require complete D1/H1/M15 price inputs while allowing optional flow gaps."""
+    contract = snapshot.quality_contract
+    if contract is not None:
+        by_timeframe = {item.timeframe: item for item in contract.timeframes}
+        return all(
+            timeframe in by_timeframe
+            and by_timeframe[timeframe].status == "PASS"
+            and by_timeframe[timeframe].candles
+            >= by_timeframe[timeframe].minimum_required
+            for timeframe in MANDATORY_PRICE_TIMEFRAMES
+        )
+    return all(
+        state.candles >= MINIMUM_PRICE_CANDLES
+        for state in (snapshot.d1, snapshot.h1, snapshot.m15)
+    )
 
 
 def summarize_walk_forward(
@@ -233,14 +302,24 @@ def summarize_walk_forward(
     result: list[HorizonValidationMetrics] = []
     horizons = sorted({outcome.horizon_sessions for _, outcome in pairs})
     for sessions in horizons:
-        subset = [(forecast, outcome) for forecast, outcome in pairs if outcome.horizon_sessions == sessions]
-        directional = [outcome for _, outcome in subset if outcome.direction_hit is not None]
+        subset = [
+            (forecast, outcome)
+            for forecast, outcome in pairs
+            if outcome.horizon_sessions == sessions
+        ]
+        directional = [
+            outcome for _, outcome in subset if outcome.direction_hit is not None
+        ]
         hits = sum(1 for outcome in directional if outcome.direction_hit)
         actuals = [outcome.actual_return_pct for _, outcome in subset]
         errors: list[float] = []
         for forecast, outcome in subset:
             expected = next(
-                (item.expected_move_pct for item in forecast.horizons if item.sessions == sessions),
+                (
+                    item.expected_move_pct
+                    for item in forecast.horizons
+                    if item.sessions == sessions
+                ),
                 None,
             )
             if expected is not None:
@@ -251,10 +330,20 @@ def summarize_walk_forward(
                 observations=len(subset),
                 directional_observations=len(directional),
                 direction_hits=hits,
-                direction_hit_rate=round(hits / len(directional), 6) if directional else None,
-                mean_actual_return_pct=round(fmean(actuals), 6) if actuals else None,
-                mean_absolute_error_pct=round(fmean(abs(item) for item in errors), 6) if errors else None,
-                mean_signed_error_pct=round(fmean(errors), 6) if errors else None,
+                direction_hit_rate=(
+                    round(hits / len(directional), 6) if directional else None
+                ),
+                mean_actual_return_pct=(
+                    round(fmean(actuals), 6) if actuals else None
+                ),
+                mean_absolute_error_pct=(
+                    round(fmean(abs(item) for item in errors), 6)
+                    if errors
+                    else None
+                ),
+                mean_signed_error_pct=(
+                    round(fmean(errors), 6) if errors else None
+                ),
             )
         )
     return tuple(result)
