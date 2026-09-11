@@ -16,6 +16,7 @@ D1_SESSION_VERIFICATION_VERSION = "D1_SESSION_V1"
 H1_FULL_VERIFICATION_VERSION = "H1_FULL_V1"
 M15_FULL_VERIFICATION_VERSION = "M15_FULL_V1"
 ROLLING_HISTORY_VERIFICATION_VERSION = "ROLLING_HISTORY_V2_PREWARM"
+CONTRACT_WARMUP_VERIFICATION_VERSION = "CONTRACT_WARMUP_V1"
 ROLLING_CONTRACT_WARMUP_DAYS = {"D1": 300, "H1": 90, "M15": 30}
 FULL_SESSION_TIMEFRAMES = frozenset({"H1", "M15"})
 
@@ -338,9 +339,11 @@ class HistoricalDataService:
 
         Warmup rows are context for causal snapshot features only; they are not
         logical-root active sessions and therefore never populate the root
-        session calendar or root verification markers.
+        session calendar or root verification markers. A separate exact-contract
+        generation prevents stale partial intraday days from being trusted.
         """
-        days = ROLLING_CONTRACT_WARMUP_DAYS.get(timeframe.upper())
+        timeframe = timeframe.upper()
+        days = ROLLING_CONTRACT_WARMUP_DAYS.get(timeframe)
         if days is None:
             return 0
         finish = active_start - timedelta(days=1)
@@ -358,13 +361,20 @@ class HistoricalDataService:
         )
         if not expected:
             return 0
-        stored_dates = self.store.stored_trade_dates(
-            instrument.secid,
-            timeframe,
-            start.isoformat(),
-            finish.isoformat(),
+        verification_symbol = (
+            f"{instrument.secid}#{CONTRACT_WARMUP_VERIFICATION_VERSION}"
         )
-        missing_ranges = _bounded_missing_ranges(expected, stored_dates, timeframe)
+        source_dates = tuple(
+            day.isoformat()
+            for day in expected
+            if self.store.is_verified(
+                verification_symbol,
+                timeframe,
+                day.isoformat(),
+                day.isoformat(),
+            )
+        )
+        missing_ranges = _bounded_missing_ranges(expected, source_dates, timeframe)
         fetched = 0
         for left, right in missing_ranges:
             series = self.market_data.candles_for_instrument(
@@ -376,6 +386,20 @@ class HistoricalDataService:
             )
             fetched += series.count
             self.store.upsert_series(series)
+            expected_chunk = tuple(day for day in expected if left <= day <= right)
+            stored_chunk = self.store.stored_trade_dates(
+                instrument.secid,
+                timeframe,
+                left.isoformat(),
+                right.isoformat(),
+            )
+            if not _missing_session_ranges(expected_chunk, stored_chunk):
+                self.store.mark_verified(
+                    verification_symbol,
+                    timeframe,
+                    left.isoformat(),
+                    right.isoformat(),
+                )
         return fetched
 
     def _sync_contract(
