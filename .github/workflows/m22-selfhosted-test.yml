@@ -1,4 +1,4 @@
-name: M22 self-hosted regression
+name: M22 self-hosted regression and backfill
 
 on:
   push:
@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  validate-and-backfill:
     runs-on: [self-hosted, Windows, X64, codex-bridge-admin]
-    timeout-minutes: 20
+    timeout-minutes: 180
     steps:
       - name: Checkout exact branch commit
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
@@ -22,3 +22,12 @@ jobs:
           & $python -m pip install --disable-pip-version-check -e '.[dev]'
           & $python -m pytest -q
           & $python -m compileall -q src tests scripts
+      - name: Resume validation-range YDB history backfill
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:Path = 'C:\Users\Win10_Game_OS\yandex-cloud\bin;' + $env:Path
+          where.exe yc
+          $python = 'C:\Users\Win10_Game_OS\AppData\Local\Programs\Python\Python313\python.exe'
+          $connection = 'grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5'
+          & $python scripts/run_authorized_ydb_backfill.py --connection-string $connection --from-date 2025-01-01 --till-date 2026-05-31 --symbols SBER,GOLD,IMOEX,RTSI,Si,BR --timeframes D1,H1,M15
