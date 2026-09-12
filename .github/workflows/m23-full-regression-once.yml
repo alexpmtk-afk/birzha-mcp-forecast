@@ -96,3 +96,5 @@ jobs:
       - name: Stop Docker container
         if: always()
         run: docker stop birzha-m23-regression || true
+
+# Preflight rerun marker: 2026-09-12
