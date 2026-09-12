@@ -5,6 +5,10 @@ on:
     branches: [m23-ydb-model-validation]
     paths:
       - '.github/workflows/m23-full-regression-once.yml'
+      - 'pyproject.toml'
+      - 'src/**'
+      - 'tests/**'
+      - 'scripts/**'
   workflow_dispatch:
 
 permissions:
