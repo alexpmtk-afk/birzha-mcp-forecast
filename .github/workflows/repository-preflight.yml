@@ -1,0 +1,52 @@
+name: Repository Preflight
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    name: Repository integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Verify repository structure and runtime contract
+        run: python scripts/repository_preflight.py
+
+  security:
+    name: Repository security state
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require private repository and canonical default branch
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          echo "REPOSITORY_PRIVATE=${REPOSITORY_PRIVATE}"
+          echo "REPOSITORY_VISIBILITY=${REPOSITORY_VISIBILITY}"
+          echo "DEFAULT_BRANCH=${DEFAULT_BRANCH}"
+          if [ "${REPOSITORY_PRIVATE}" != "true" ] || [ "${REPOSITORY_VISIBILITY}" != "private" ]; then
+            echo "::error::SECURITY_DRIFT: birzha-mcp-forecast must be PRIVATE"
+            exit 21
+          fi
+          if [ "${DEFAULT_BRANCH}" != "main" ]; then
+            echo "::error::REPOSITORY_DRIFT: default branch must be main"
+            exit 22
+          fi
+          echo "REPOSITORY_SECURITY_PREFLIGHT=PASS"
