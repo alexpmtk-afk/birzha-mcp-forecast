@@ -9,6 +9,7 @@ from birzha.application.validation import WalkForwardValidator
 CASES = (
     {"symbol": "SBER", "start_date": "2026-04-01", "end_date": "2026-05-20", "step_sessions": 20, "max_points": 1},
     {"symbol": "Si", "start_date": "2026-04-01", "end_date": "2026-05-20", "step_sessions": 20, "max_points": 1},
+    {"symbol": "GOLD", "start_date": "2026-04-01", "end_date": "2026-05-20", "step_sessions": 20, "max_points": 1},
 )
 
 
@@ -31,9 +32,10 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
-    # This gate proves only that the real historical path completes for both a
-    # share and a futures root. It must never be interpreted as evidence of
-    # statistical model quality; that requires a larger dedicated study.
+    # This gate proves only that the real historical path completes for a share
+    # and configured futures roots, including GOLD -> GD*. It must never be
+    # interpreted as evidence of statistical model quality; that requires the
+    # governed six-market study.
     failed = [
         r
         for r in reports
