@@ -48,10 +48,10 @@ def test_frozen_validation_does_not_prepare_or_mutate_history(monkeypatch):
         prepare_history_before_run=False,
     )
 
-    def forbidden(*args, **kwargs):
+    def forbidden(self, *args, **kwargs):
         raise AssertionError("frozen validation must not prepare history")
 
-    monkeypatch.setattr(validator, "_prepare_history", forbidden)
+    monkeypatch.setattr(WalkForwardValidator, "_prepare_history", forbidden)
     report=validator.run(
         "SBER",
         start_date="2026-07-01",
