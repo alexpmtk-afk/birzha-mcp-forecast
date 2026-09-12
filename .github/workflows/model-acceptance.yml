@@ -1,22 +1,17 @@
-name: Model Acceptance
+name: Legacy SBER-Si Smoke - NOT Model Acceptance
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "src/**"
-      - "scripts/run_model_acceptance.py"
-      - ".github/workflows/model-acceptance.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: model-acceptance-${{ github.event.pull_request.number || github.ref }}
+  group: legacy-model-smoke-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  assess:
+  legacy-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -31,14 +26,14 @@ jobs:
       - name: Install package
         run: python -m pip install --disable-pip-version-check -e .
 
-      - name: Run real statistical model assessment
+      - name: Run legacy SBER-Si statistical smoke
         run: python scripts/run_model_acceptance.py
 
-      - name: Upload model evidence
+      - name: Upload legacy smoke evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: model-acceptance-evidence
+          name: legacy-sber-si-smoke-not-model-acceptance
           path: artifacts/model_acceptance.json
           if-no-files-found: error
           retention-days: 30
