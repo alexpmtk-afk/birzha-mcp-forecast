@@ -28,11 +28,11 @@ jobs:
         run: python scripts/repository_preflight.py
 
   security:
-    name: Repository security state
+    name: Public repository policy
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require private repository and canonical default branch
+      - name: Require public repository and canonical default branch
         env:
           REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
           REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
@@ -41,12 +41,12 @@ jobs:
           echo "REPOSITORY_PRIVATE=${REPOSITORY_PRIVATE}"
           echo "REPOSITORY_VISIBILITY=${REPOSITORY_VISIBILITY}"
           echo "DEFAULT_BRANCH=${DEFAULT_BRANCH}"
-          if [ "${REPOSITORY_PRIVATE}" != "true" ] || [ "${REPOSITORY_VISIBILITY}" != "private" ]; then
-            echo "::error::SECURITY_DRIFT: birzha-mcp-forecast must be PRIVATE"
+          if [ "${REPOSITORY_PRIVATE}" != "false" ] || [ "${REPOSITORY_VISIBILITY}" != "public" ]; then
+            echo "::error::REPOSITORY_POLICY_DRIFT: birzha-mcp-forecast must remain PUBLIC"
             exit 21
           fi
           if [ "${DEFAULT_BRANCH}" != "main" ]; then
             echo "::error::REPOSITORY_DRIFT: default branch must be main"
             exit 22
           fi
-          echo "REPOSITORY_SECURITY_PREFLIGHT=PASS"
+          echo "PUBLIC_REPOSITORY_POLICY=PASS"
