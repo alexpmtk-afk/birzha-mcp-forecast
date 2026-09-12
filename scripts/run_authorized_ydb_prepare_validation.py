@@ -36,7 +36,12 @@ MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
 VALIDATION_PROTOCOL = "M23_HISTORICAL_GOVERNED_V1"
 
 
-def _token() -> str:
+def _token(token_file: str | None = None) -> str:
+    if token_file:
+        value = Path(token_file).read_text(encoding="utf-8").strip()
+        if not value:
+            raise RuntimeError("token file is empty")
+        return value
     value = subprocess.check_output(["yc", "iam", "create-token"], text=True).strip()
     if not value:
         raise RuntimeError("yc returned an empty IAM token")
@@ -157,6 +162,11 @@ def main() -> int:
         description="Prepare exactly the YDB history required by six-market validation"
     )
     parser.add_argument("--connection-string", required=True)
+    parser.add_argument(
+        "--token-file",
+        default=None,
+        help="Read an externally minted Yandex IAM token from this file; otherwise use yc iam create-token",
+    )
     parser.add_argument("--validation-start", default=DEFAULT_VALIDATION_START)
     parser.add_argument("--split-date", default=DEFAULT_SPLIT_DATE)
     parser.add_argument("--validation-end", default=DEFAULT_VALIDATION_END)
@@ -176,7 +186,7 @@ def main() -> int:
 
     driver = ydb.Driver(
         connection_string=args.connection_string,
-        credentials=ydb.AccessTokenCredentials(_token()),
+        credentials=ydb.AccessTokenCredentials(_token(args.token_file)),
     )
     driver.wait(timeout=15, fail_fast=True)
     pool = ydb.QuerySessionPool(driver)
