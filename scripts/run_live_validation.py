@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import json
 from pathlib import Path
 
@@ -12,9 +13,35 @@ CASES = (
     {"symbol": "GOLD", "start_date": "2026-04-01", "end_date": "2026-05-20", "step_sessions": 20, "max_points": 1},
 )
 
+GOLD_PROBE_DATE = date(2026, 5, 20)
+
+
+def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, object]:
+    instrument = validator.market_data.resolve("GOLD", as_of=GOLD_PROBE_DATE)
+    payload = instrument.to_dict()
+    print("GOLD_RESOLUTION=" + json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+    secid = str(payload.get("secid", "")).upper()
+    valid = (
+        payload.get("asset_class") == "future"
+        and payload.get("engine") == "futures"
+        and payload.get("market") == "forts"
+        and secid != "GOLD"
+        and secid.startswith("GD")
+    )
+    if not valid:
+        raise RuntimeError(
+            "GOLD_FUTURES_RESOLUTION_FAIL: expected historical GOLD to resolve "
+            "to a MOEX GD* futures contract"
+        )
+    print(f"GOLD_FUTURES_RESOLUTION=PASS secid={secid}")
+    return payload
+
 
 def main() -> int:
     validator = WalkForwardValidator.default()
+    gold_resolution = _gold_resolution_evidence(validator)
+
     reports: list[dict[str, object]] = []
     for case in CASES:
         report = validator.run(**case)
@@ -26,6 +53,7 @@ def main() -> int:
         "schema": "BIRZHA_MCP_REAL_MOEX_VALIDATION_V1",
         "purpose": "minimal real-network causal walk-forward end-to-end evidence",
         "quality_acceptance": False,
+        "gold_resolution": gold_resolution,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")
@@ -33,9 +61,9 @@ def main() -> int:
     output.write_text(json.dumps(evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
     # This gate proves only that the real historical path completes for a share
-    # and configured futures roots, including GOLD -> GD*. It must never be
-    # interpreted as evidence of statistical model quality; that requires the
-    # governed six-market study.
+    # and configured futures roots, including explicit GOLD -> GD* resolution.
+    # It must never be interpreted as evidence of statistical model quality;
+    # that requires the governed six-market study.
     failed = [
         r
         for r in reports
