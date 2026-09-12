@@ -28,9 +28,9 @@ jobs:
         run: python scripts/repository_preflight.py
 
   security:
-    name: Public repository policy
+    name: Public repository policy and credential hygiene
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Require public repository and canonical default branch
         env:
@@ -50,3 +50,18 @@ jobs:
             exit 22
           fi
           echo "PUBLIC_REPOSITORY_POLICY=PASS"
+
+      - name: Checkout complete repository history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch all public branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Scan current tree and reachable history
+        run: python scripts/public_repo_security.py --history
