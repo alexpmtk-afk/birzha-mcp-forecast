@@ -53,6 +53,11 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
 
     artifact = {
+        "schema": "BIRZHA_LEGACY_SBER_SI_SMOKE_V1",
+        "purpose": "legacy transport/statistical smoke only",
+        "quality_acceptance": False,
+        "legacy": True,
+        "warning": "must not be used as six-market model acceptance evidence",
         "start_date": START_DATE,
         "end_date": END_DATE,
         "max_points": MAX_POINTS,
@@ -62,7 +67,7 @@ def main() -> None:
     path = Path("artifacts/model_acceptance.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    print("MODEL_ACCEPTANCE_RUN=COMPUTED")
+    print("LEGACY_SBER_SI_SMOKE=COMPUTED")
 
 
 if __name__ == "__main__":
