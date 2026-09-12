@@ -1,0 +1,22 @@
+name: Runtime HOME runner probe once
+
+on:
+  push:
+    branches:
+      - runtime/m23-regression-9e487b
+    paths:
+      - '.github/workflows/runtime-home-runner-probe-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Windows, X64, gpt-powershell-home]
+    timeout-minutes: 3
+    steps:
+      - name: HOME runner identity
+        shell: powershell
+        run: |
+          Write-Host 'M23_HOME_SOURCE_REPO_RUNNER=PASS'
+          whoami
