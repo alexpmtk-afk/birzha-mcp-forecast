@@ -5,9 +5,24 @@ from datetime import date, timedelta
 import scripts.run_authorized_ydb_prepare_validation as prepare
 
 
+class FakeMarketData:
+    direct_resolver = object()
+
+
+class FakeStore:
+    def stored_session_contracts(self, symbol: str, from_date: str, till_date: str):
+        start = date.fromisoformat(from_date[:10])
+        return tuple(
+            ((start + timedelta(days=index)).isoformat(), f"{symbol}_CONTRACT")
+            for index in range(1000)
+        )
+
+
 class FakeHistory:
     def __init__(self, counts: dict[tuple[str, str], int]) -> None:
         self.counts = counts
+        self.market_data = FakeMarketData()
+        self.store = FakeStore()
 
     def session_dates(self, symbol: str, *, from_date: str, till_date: str):
         period = "development" if till_date == "2024-06-30" else "holdout"
