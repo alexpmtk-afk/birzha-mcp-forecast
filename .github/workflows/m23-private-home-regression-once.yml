@@ -1,0 +1,107 @@
+name: M23 exact private HOME regression once
+
+on:
+  push:
+    branches: [audit/m23-private-home-20260912]
+    paths:
+      - '.github/workflows/m23-private-home-regression-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m23-exact-private-home-regression-20260912
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    runs-on: [self-hosted, Windows, X64, gpt-powershell-home]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact M23 source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 9e487b470b1e2b4e3fdaef16784b6de93537f00b
+          persist-credentials: false
+          clean: true
+          fetch-depth: 1
+
+      - name: Prove exact source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $head = (git rev-parse HEAD).Trim()
+          Write-Host "M23_HEAD=$head"
+          if ($head -ne '9e487b470b1e2b4e3fdaef16784b6de93537f00b') { throw "Unexpected HEAD: $head" }
+          Write-Host "M23_EXACT_SOURCE=PASS"
+
+      - name: Locate Python 3.12
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+            'C:\Python312\python.exe',
+            'C:\gpt-python312\python.exe',
+            'C:\Tools\Python312\python.exe'
+          )
+          $found = $null
+          foreach ($p in $candidates) {
+            if (Test-Path -LiteralPath $p) {
+              $v = (& $p --version 2>&1 | Out-String).Trim()
+              Write-Host "PY_CANDIDATE=$p VERSION=$v"
+              if ($v -match '^Python 3\.12\.') { $found = $p; break }
+            }
+          }
+          if (-not $found) {
+            $cmd = Get-Command python -ErrorAction SilentlyContinue
+            if ($cmd) {
+              $v = (& $cmd.Source --version 2>&1 | Out-String).Trim()
+              Write-Host "PATH_PYTHON=$($cmd.Source) VERSION=$v"
+              if ($v -match '^Python 3\.12\.') { $found = $cmd.Source }
+            }
+          }
+          if (-not $found) { throw 'Python 3.12 not found on HOME runner' }
+          "BIRZHA_PY=$found" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "PYTHON312_FOUND=PASS"
+
+      - name: Verify Python and pip
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:BIRZHA_PY --version
+          & $env:BIRZHA_PY -m pip --version
+          if ($LASTEXITCODE -ne 0) { throw 'pip is unavailable' }
+
+      - name: Install exact project test dependencies
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:BIRZHA_PY -m pip install --disable-pip-version-check -e '.[dev]'
+          if ($LASTEXITCODE -ne 0) { throw "pip install failed: $LASTEXITCODE" }
+
+      - name: Compile all project Python
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:BIRZHA_PY -m compileall -q src scripts tests
+          if ($LASTEXITCODE -ne 0) { throw "compileall failed: $LASTEXITCODE" }
+          Write-Host 'COMPILEALL=PASS'
+
+      - name: Run full regression suite
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & $env:BIRZHA_PY -m pytest -q
+          $code = $LASTEXITCODE
+          Write-Host "PYTEST_EXIT=$code"
+          if ($code -ne 0) { exit $code }
+          Write-Host 'PYTEST_FULL=PASS'
+
+      - name: Run critical M22-M23 regressions explicitly
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & $env:BIRZHA_PY -m pytest -q tests/test_gold_futures_root.py tests/test_m15_full_verification.py tests/test_validation_readiness.py tests/test_validation_dataset_fingerprint.py tests/test_ydb_pipeline_holdout_guard.py
+          if ($LASTEXITCODE -ne 0) { throw "critical regression subset failed: $LASTEXITCODE" }
+          Write-Host 'M22_M23_CRITICAL=PASS'
