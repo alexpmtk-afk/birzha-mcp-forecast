@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from uuid import uuid4
 
+import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -81,3 +82,12 @@ app = Starlette(
         Route("/tick", tick, methods=["POST"]),
     ],
 )
+
+
+def main() -> None:
+    """Run the private worker ASGI application for the serverless container."""
+    uvicorn.run(app, host=settings.host, port=settings.port)
+
+
+if __name__ == "__main__":
+    main()
