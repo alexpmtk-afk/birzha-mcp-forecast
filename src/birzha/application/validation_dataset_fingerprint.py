@@ -1,8 +1,9 @@
-"""Cryptographic identity of the frozen YDB validation dataset.
+"""Cryptographic identity of the frozen durable validation dataset.
 
-The fingerprint reads prepared rows but never computes or exposes holdout model
-performance. It is used to prove that development selection and the later
-one-shot holdout evaluation see the exact same stored price/flow inputs.
+The durable dataset contains completed D1 price history plus optional historical
+flow rows. H1/M15 are intentionally excluded because they are contextual,
+on-demand inputs fetched for each T0 and are never stored in shared candle
+history.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from birzha.application.historical_flow import (
 from birzha.application.market_data import is_futures_root_symbol
 
 
-PRICE_LOOKBACK_DAYS = {"D1": 300, "H1": 90, "M15": 30}
+PRICE_LOOKBACK_DAYS = {"D1": 300}
 FLOW_LOOKBACK_DAYS = 10
 
 
@@ -49,6 +50,8 @@ class ValidationDatasetFingerprint:
             "contract_sessions": self.contract_sessions,
             "price_rows": self.price_rows,
             "flow_rows": self.flow_rows,
+            "persistent_price_timeframes": ["D1"],
+            "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
         }
 
 
@@ -63,7 +66,7 @@ def build_validation_dataset_fingerprint(
     flow_table: str = "historical_flow_rows",
     flow_verified_table: str = "historical_flow_rows_verified",
 ) -> ValidationDatasetFingerprint:
-    """Hash exact prepared inputs and optional-flow verification state."""
+    """Hash exact durable D1 inputs and optional-flow verification state."""
     if not symbols:
         raise ValueError("at least one symbol is required")
     start = date.fromisoformat(validation_start[:10])
@@ -80,8 +83,9 @@ def build_validation_dataset_fingerprint(
     flow_rows = 0
     unique_instruments: dict[str, object] = {}
 
-    _feed(hasher, ["FINGERPRINT_VERSION", "M23_DATASET_SHA256_V2_FLOW_VERIFY"])
+    _feed(hasher, ["FINGERPRINT_VERSION", "M23_DATASET_SHA256_V3_D1_ONLY"])
     _feed(hasher, ["VALIDATION_RANGE", start.isoformat(), end.isoformat()])
+    _feed(hasher, ["INTRADAY_MODE", "ON_DEMAND_NOT_PERSISTED"])
 
     for symbol in symbols:
         session_symbol = _verification_symbol(
@@ -124,31 +128,31 @@ def build_validation_dataset_fingerprint(
             }
         )
         _feed(hasher, ["INSTRUMENT", secid, instrument_payload])
-        for timeframe in ("D1", "H1", "M15"):
-            left = start - timedelta(days=PRICE_LOOKBACK_DAYS[timeframe])
-            rows = _price_rows(
-                pool,
-                candle_table=candle_table,
-                secid=secid,
-                timeframe=timeframe,
-                from_date=left.isoformat(),
-                till_date=end.isoformat(),
+        timeframe = "D1"
+        left = start - timedelta(days=PRICE_LOOKBACK_DAYS[timeframe])
+        rows = _price_rows(
+            pool,
+            candle_table=candle_table,
+            secid=secid,
+            timeframe=timeframe,
+            from_date=left.isoformat(),
+            till_date=end.isoformat(),
+        )
+        _feed(hasher, ["PRICE_SERIES", secid, timeframe, len(rows)])
+        for row in rows:
+            price_rows += 1
+            _feed(
+                hasher,
+                [
+                    "PRICE",
+                    secid,
+                    timeframe,
+                    _row_value(row, "begin"),
+                    _row_value(row, "end_time"),
+                    _row_value(row, "payload_json"),
+                    _row_value(row, "source"),
+                ],
             )
-            _feed(hasher, ["PRICE_SERIES", secid, timeframe, len(rows)])
-            for row in rows:
-                price_rows += 1
-                _feed(
-                    hasher,
-                    [
-                        "PRICE",
-                        secid,
-                        timeframe,
-                        _row_value(row, "begin"),
-                        _row_value(row, "end_time"),
-                        _row_value(row, "payload_json"),
-                        _row_value(row, "source"),
-                    ],
-                )
 
     flow_left = (start - timedelta(days=FLOW_LOOKBACK_DAYS)).isoformat()
     flow_keys: set[tuple[str, str]] = set()
