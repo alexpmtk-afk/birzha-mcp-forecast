@@ -20,6 +20,7 @@ env:
   HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
   YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
+  PREVIOUS_PREFIX: m24runtime_34761251579
 
 jobs:
   real-ydb-smoke:
@@ -77,9 +78,21 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -e ./app
 
-      - name: Allow previous defective invocations to drain
+      - name: Allow schema operations to settle
         shell: bash
         run: sleep 90
+
+      - name: Remove leftovers from first verification run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd app
+          python scripts/run_ydb_orchestration_smoke.py \
+            --connection-string "$YDB_CONNECTION_STRING" \
+            --token-file "$RUNNER_TEMP/yandex-iam-token" \
+            --prefix "$PREVIOUS_PREFIX" \
+            --phase cleanup
+          echo 'M24_PREVIOUS_SMOKE_CLEANUP=PASS'
 
       - name: Bootstrap temporary orchestration schema and checkpoint
         shell: bash
@@ -105,6 +118,11 @@ jobs:
             --token-file "$RUNNER_TEMP/yandex-iam-token" \
             --prefix "$PREFIX" \
             --phase resume
+
+      - name: Allow schema operations to settle before cleanup
+        if: always()
+        shell: bash
+        run: sleep 90
 
       - name: Cleanup temporary YDB schema
         if: always()
