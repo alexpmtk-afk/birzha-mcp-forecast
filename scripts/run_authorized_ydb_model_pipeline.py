@@ -77,8 +77,8 @@ def _calendar_capacity_upper_bound(
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Prepare authorized YDB history and run governed six-market validation. "
-            "By default holdout remains sealed."
+            "Prepare authorized durable D1 YDB history and run governed six-market validation. "
+            "H1/M15 are fetched on demand per T0; by default holdout remains sealed."
         )
     )
     parser.add_argument("--connection-string", required=True)
@@ -100,7 +100,7 @@ def main() -> int:
     parser.add_argument(
         "--expected-data-fingerprint",
         default=None,
-        help="Dataset fingerprint from the prior sealed development result; required with --open-holdout.",
+        help="Durable D1 dataset fingerprint from the prior sealed development result; required with --open-holdout.",
     )
     parser.add_argument(
         "--prepare-artifact",
@@ -173,6 +173,9 @@ def main() -> int:
         "max_points": args.max_points,
         "minimum_acceptance_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
         "calendar_capacity_upper_bound": capacity_upper_bound,
+        "persistent_price_timeframes": ["D1"],
+        "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
+        "m15_source": "M1_ON_DEMAND_AGGREGATION",
         "prepare_artifact": args.prepare_artifact,
         "validation_artifact": args.validation_artifact,
         "holdout_open_requested": bool(args.open_holdout),
@@ -203,7 +206,7 @@ def main() -> int:
         prepare = _run(
             [
                 python,
-                str(scripts_dir / "run_authorized_ydb_prepare_validation.py"),
+                str(scripts_dir / "run_authorized_ydb_prepare_validation_runtime.py"),
                 "--connection-string",
                 args.connection_string,
                 "--validation-start",
@@ -239,23 +242,18 @@ def main() -> int:
 
         prepare_evidence_status = prepare_evidence.get("status")
         artifact["prepare_evidence_status"] = prepare_evidence_status
-        artifact["session_capacity"] = prepare_evidence.get("session_capacity")
-        artifact["capacity_shortfall"] = prepare_evidence.get("capacity_shortfall")
         artifact["price_operation_failures"] = prepare_evidence.get(
             "price_operation_failures"
         )
         artifact["optional_flow_status"] = prepare_evidence.get(
             "optional_flow_status"
         )
-
-        if prepare_evidence_status == "INSUFFICIENT_DATA":
-            artifact["status"] = "INSUFFICIENT_DATA"
-            artifact["model_status"] = "INSUFFICIENT_DATA"
-            artifact["validation"] = {"status": "NOT_RUN"}
-            artifact["holdout_evaluated"] = False
-            _write(args.pipeline_artifact, artifact)
-            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
-            return 0
+        artifact["persistent_price_timeframes"] = prepare_evidence.get(
+            "persistent_price_timeframes", ["D1"]
+        )
+        artifact["intraday_mode"] = prepare_evidence.get(
+            "intraday_mode", "ON_DEMAND_NOT_PERSISTED"
+        )
 
         readiness = prepare_evidence.get("readiness")
         readiness_status = (
@@ -283,7 +281,7 @@ def main() -> int:
     _remove_existing(args.validation_artifact)
     validation_command = [
         python,
-        str(scripts_dir / "run_authorized_ydb_validation.py"),
+        str(scripts_dir / "run_authorized_ydb_validation_runtime.py"),
         "--connection-string",
         args.connection_string,
         "--development-start",
