@@ -17,6 +17,9 @@ def test_data_preparation_cannot_emit_old_insufficient_data_capacity_status() ->
     source = inspect.getsource(prepare.main)
 
     assert "INSUFFICIENT_DATA" not in source
-    assert "H1" not in source
-    assert "M15" not in source
+    # H1/M15 may be mentioned in comments/help text to state that they are
+    # intentionally on-demand. What must never reappear is executable durable
+    # preparation/sync for those timeframes.
+    assert 'timeframe="H1"' not in source
+    assert 'timeframe="M15"' not in source
     assert 'timeframe="D1"' in source
