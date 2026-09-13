@@ -48,10 +48,13 @@ class FakePool:
         self.price_payload = price_payload
         self.flow_payload = flow_payload
         self.flow_verified = flow_verified
+        self.price_timeframes: list[str] = []
 
     def execute_with_retries(self, query, parameters=None, **kwargs):
         compact = " ".join(str(query).split())
         if "FROM `historical_candles`" in compact:
+            timeframe = parameters["$timeframe"][0]
+            self.price_timeframes.append(timeframe)
             return [
                 SimpleNamespace(
                     rows=[
@@ -102,14 +105,20 @@ def _fingerprint(pool: FakePool, *, sessions=True):
     )
 
 
-def test_same_frozen_dataset_has_stable_fingerprint() -> None:
-    first = _fingerprint(FakePool())
-    second = _fingerprint(FakePool())
+def test_same_frozen_d1_dataset_has_stable_fingerprint() -> None:
+    first_pool = FakePool()
+    second_pool = FakePool()
+    first = _fingerprint(first_pool)
+    second = _fingerprint(second_pool)
 
     assert first.sha256 == second.sha256
     assert first.contract_sessions == 1
-    assert first.price_rows == 3
+    assert first.price_rows == 1
     assert first.flow_rows == 1
+    assert first_pool.price_timeframes == ["D1"]
+    assert second_pool.price_timeframes == ["D1"]
+    assert first.to_dict()["persistent_price_timeframes"] == ["D1"]
+    assert first.to_dict()["intraday_mode"] == "ON_DEMAND_NOT_PERSISTED"
 
 
 def test_price_change_changes_dataset_fingerprint() -> None:
