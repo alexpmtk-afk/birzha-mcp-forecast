@@ -10,14 +10,18 @@ from birzha.application.market_data import MarketDataService, is_futures_root_sy
 from birzha.domain.market import CandleSeries, Instrument
 
 
+class DailyHistoryInitializationRequiredError(RuntimeError):
+    """Durable D1 has not been initialized with an explicit user/project period."""
+
+
 @dataclass(slots=True)
 class StoredMarketDataView:
     """Use shared history only for D1; route intraday directly to MOEX.
 
     ``require_stored_resolution`` is used by frozen validation: contract identity
     must come from the already verified D1 session map and no live resolver may
-    silently change it. ``ensure_daily_history`` is used by operational MCP
-    analysis: missing D1 coverage may be repaired before the snapshot is built.
+    silently change it. ``ensure_daily_history`` may extend an already existing
+    D1 archive forward, but it must never invent/extend its historical start.
 
     H1/M15 are never read from or written to durable candle history by this
     view. They are fetched from ``base`` for the requested analysis window.
@@ -85,6 +89,27 @@ class StoredMarketDataView:
 
         return self.base.resolve(symbol, as_of=as_of)
 
+    def _existing_daily_start(self, instrument: Instrument, *, till_date: str) -> str:
+        """Return pre-existing durable D1 start without inventing a new one."""
+        root = instrument.root_symbol or instrument.symbol
+        if instrument.root_symbol and is_futures_root_symbol(root):
+            session_symbol = _verification_symbol(root, "D1", is_root=True)
+            contracts = self.history.store.stored_session_contracts(
+                session_symbol,
+                "1900-01-01",
+                till_date[:10],
+            )
+            if contracts:
+                return contracts[0][0][:10]
+
+        coverage = self.history.store.coverage(instrument.secid, "D1")
+        if coverage.count > 0 and coverage.first_begin:
+            return coverage.first_begin[:10]
+        raise DailyHistoryInitializationRequiredError(
+            f"durable D1 history is not initialized for {root}; "
+            "run explicit D1 history sync with the approved from_date first"
+        )
+
     def candles_for_instrument(
         self,
         instrument: Instrument,
@@ -108,10 +133,16 @@ class StoredMarketDataView:
 
         if self.ensure_daily_history:
             persistent_symbol = instrument.root_symbol or instrument.symbol
+            existing_start = date.fromisoformat(
+                self._existing_daily_start(instrument, till_date=till_date)
+            )
+            requested_start = date.fromisoformat(from_date[:10])
+            # Never backfill earlier than the explicitly initialized archive.
+            sync_start = max(existing_start, requested_start)
             self.history.sync(
                 persistent_symbol,
                 timeframe="D1",
-                from_date=from_date,
+                from_date=sync_start.isoformat(),
                 till_date=till_date,
             )
 
