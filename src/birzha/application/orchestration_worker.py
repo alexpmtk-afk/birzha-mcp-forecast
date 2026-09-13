@@ -22,12 +22,14 @@ from birzha.domain.orchestration import WorkflowAction, WorkflowStatus
 SAFE_UNATTENDED_KINDS = frozenset(
     {"HISTORY_SYNC_CHUNK", "HISTORY_FINALIZE_RANGE", "READINESS_AUDIT"}
 )
+DEFAULT_WORKER_LEASE_SECONDS = 180
 
 
 @dataclass(slots=True)
 class OrchestrationWorker:
     orchestrator: WorkflowOrchestrator
     history: HistoricalDataService
+    lease_seconds: int = DEFAULT_WORKER_LEASE_SECONDS
 
     def run_next_active(self, *, worker_id: str) -> dict[str, object]:
         active = self.orchestrator.store.list_workflows(active_only=True, limit=100)
@@ -65,7 +67,7 @@ class OrchestrationWorker:
         action = self.orchestrator.claim_next(
             workflow_id,
             worker_id=worker_id,
-            lease_seconds=1800,
+            lease_seconds=self.lease_seconds,
         )
         if action is None:
             return {

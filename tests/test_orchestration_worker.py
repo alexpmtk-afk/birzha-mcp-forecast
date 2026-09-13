@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from birzha.application.orchestration_worker import OrchestrationWorker
+from birzha.application.orchestration_worker import (
+    DEFAULT_WORKER_LEASE_SECONDS,
+    OrchestrationWorker,
+)
 from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.domain.orchestration import WorkflowAction, WorkflowStage
 from birzha.storage.orchestration_store import MemoryOrchestrationStore
@@ -51,6 +54,12 @@ def _worker() -> tuple[OrchestrationWorker, FakeHistory]:
     history = FakeHistory()
     orchestrator = WorkflowOrchestrator(MemoryOrchestrationStore())
     return OrchestrationWorker(orchestrator=orchestrator, history=history), history  # type: ignore[arg-type]
+
+
+def test_default_worker_lease_is_bounded_for_serverless_recovery() -> None:
+    worker, _ = _worker()
+    assert DEFAULT_WORKER_LEASE_SECONDS == 180
+    assert worker.lease_seconds == DEFAULT_WORKER_LEASE_SECONDS
 
 
 def test_history_chunk_handler_is_bounded_and_idempotent_at_service_boundary() -> None:
