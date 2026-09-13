@@ -1,25 +1,15 @@
-"""Run governed M23 data preparation against an already-provisioned YDB schema.
+"""Compatibility entrypoint for governed M23 D1-only data preparation.
 
-The legacy preparation module keeps the schema-provisioning store classes for
-bootstrap compatibility. This runtime entry point swaps only those constructor
-bindings for no-DDL variants before executing the unchanged governed logic.
+The implementation itself now uses no-DDL runtime YDB adapters and cannot
+persist H1/M15 price history.
 """
 
 from __future__ import annotations
 
 import run_authorized_ydb_prepare_validation as implementation
 
-from birzha.storage.ydb_runtime_storage import (
-    YdbRuntimeHistoricalCandleStore,
-    YdbRuntimeHistoricalFlowStore,
-    YdbRuntimeSlotPacingGate,
-)
-
 
 def main() -> int:
-    implementation.YdbSlotPacingGate = YdbRuntimeSlotPacingGate
-    implementation.YdbHistoricalCandleStore = YdbRuntimeHistoricalCandleStore
-    implementation.YdbHistoricalFlowStore = YdbRuntimeHistoricalFlowStore
     return implementation.main()
 
 
