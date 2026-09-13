@@ -14,6 +14,7 @@ from birzha.domain.orchestration import (
     WorkflowStatus,
 )
 from birzha.storage.ydb_orchestration_store import YdbOrchestrationStore
+from birzha.storage.ydb_runtime_orchestration_store import YdbRuntimeOrchestrationStore
 
 
 def _token(path: str) -> str:
@@ -153,6 +154,7 @@ def _resume(store: YdbOrchestrationStore, prefix: str) -> None:
         raise RuntimeError("expired final attempt was not failed closed")
 
     print("YDB_ORCHESTRATION_PROCESS_RESTART=PASS", flush=True)
+    print("YDB_ORCHESTRATION_RUNTIME_WITHOUT_SCHEMA_DDL=PASS", flush=True)
     print("YDB_ORCHESTRATION_LEASE_RECLAIM=PASS", flush=True)
     print("YDB_ORCHESTRATION_STALE_WORKER_FENCE=PASS", flush=True)
     print("YDB_ORCHESTRATION_MAX_ATTEMPTS=PASS", flush=True)
@@ -187,15 +189,22 @@ def main() -> int:
         if args.phase == "cleanup":
             _cleanup(pool, runs_table, actions_table)
             return 0
-        store = YdbOrchestrationStore(
-            pool,
-            runs_table=runs_table,
-            actions_table=actions_table,
-        )
         if args.phase == "create":
+            store: YdbOrchestrationStore = YdbOrchestrationStore(
+                pool,
+                runs_table=runs_table,
+                actions_table=actions_table,
+            )
             _create(store, args.prefix)
         else:
-            _resume(store, args.prefix)
+            # Restart/runtime path must use an already-provisioned schema and
+            # therefore must never consume YDB schema-operation quota.
+            runtime_store = YdbRuntimeOrchestrationStore(
+                pool,
+                runs_table=runs_table,
+                actions_table=actions_table,
+            )
+            _resume(runtime_store, args.prefix)
         return 0
     finally:
         stop = getattr(pool, "stop", None) or getattr(pool, "close", None)
