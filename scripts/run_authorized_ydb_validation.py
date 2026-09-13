@@ -29,9 +29,11 @@ from birzha.application.validation_readiness import (
 )
 from birzha.providers.moex_analytics import MoexAnalyticsClient
 from birzha.providers.moex_calendar import MoexTradingCalendar
-from birzha.storage.ydb_historical_flow_store import YdbHistoricalFlowStore
-from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_runtime_storage import (
+    YdbRuntimeHistoricalCandleStore,
+    YdbRuntimeHistoricalFlowStore,
+    YdbRuntimeSlotPacingGate,
+)
 from birzha.storage.ydb_validation_governance import (
     HoldoutAlreadyConsumedError,
     YdbValidationGovernanceStore,
@@ -79,6 +81,12 @@ def _period_capacity(
     step_sessions: int,
     max_points: int,
 ) -> tuple[dict[str, object], dict[str, object]]:
+    """Model/outcome capacity check based on the durable D1 contract map.
+
+    This is deliberately separate from price-data readiness. A capacity
+    shortfall must never cause H1/M15 to be persisted or reclassified as
+    durable history.
+    """
     capacity_by_symbol: dict[str, object] = {}
     shortfall_by_symbol: dict[str, object] = {}
     for symbol in CORE_VALIDATION_SYMBOLS:
@@ -119,7 +127,10 @@ def _model_fingerprint(parameters: object, *, development_start: str, split_date
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Fail-closed six-market model validation against authorized YDB history"
+        description=(
+            "Fail-closed six-market validation with frozen durable D1 YDB history "
+            "and H1/M15 fetched on demand per historical T0"
+        )
     )
     parser.add_argument("--connection-string", required=True)
     parser.add_argument("--development-start", default=DEFAULT_DEVELOPMENT_START)
@@ -140,7 +151,7 @@ def main() -> int:
     parser.add_argument(
         "--expected-data-fingerprint",
         default=None,
-        help="Frozen YDB dataset fingerprint emitted by the sealed development run; required with --open-holdout.",
+        help="Frozen durable D1 dataset fingerprint emitted by the sealed development run; required with --open-holdout.",
     )
     parser.add_argument(
         "--artifact", default="artifacts/ydb_model_validation.json"
@@ -178,7 +189,7 @@ def main() -> int:
     pool = ydb.QuerySessionPool(driver)
     try:
         control = ProcessUpstreamControlPlane(
-            gate_factory=lambda provider_key: YdbSlotPacingGate(
+            gate_factory=lambda provider_key: YdbRuntimeSlotPacingGate(
                 pool, provider_key=provider_key
             ),
             require_distributed_gate=True,
@@ -186,7 +197,7 @@ def main() -> int:
         market = MarketDataService.default(control_plane=control)
         history = HistoricalDataService(
             market_data=market,
-            store=YdbHistoricalCandleStore(pool),
+            store=YdbRuntimeHistoricalCandleStore(pool),
         )
         readiness = ValidationDataReadinessService(history=history).check(
             CORE_VALIDATION_SYMBOLS,
@@ -204,7 +215,10 @@ def main() -> int:
             "max_points": args.max_points,
             "symbols": list(CORE_VALIDATION_SYMBOLS),
             "readiness": readiness.to_dict(),
-            "data_mode": "FROZEN_PREPARED_YDB",
+            "data_mode": "FROZEN_D1_YDB_INTRADAY_ON_DEMAND",
+            "persistent_price_timeframes": ["D1"],
+            "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
+            "m15_source": "M1_ON_DEMAND_AGGREGATION",
             "minimum_acceptance_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
             "holdout_open_requested": bool(args.open_holdout),
         }
@@ -305,7 +319,7 @@ def main() -> int:
         historical_flow = HistoricalFlowDataService(
             market_data=market,
             analytics=analytics,
-            store=YdbHistoricalFlowStore(pool),
+            store=YdbRuntimeHistoricalFlowStore(pool),
             read_only=True,
         )
         flow = MarketFlowService(
@@ -345,7 +359,7 @@ def main() -> int:
                 )
             if dataset_fingerprint.sha256 != args.expected_data_fingerprint:
                 raise DatasetFingerprintMismatchError(
-                    "prepared validation dataset does not match the sealed fingerprint"
+                    "durable D1 validation dataset does not match the sealed fingerprint"
                 )
             assert governance is not None
             claim = governance.claim_once(
