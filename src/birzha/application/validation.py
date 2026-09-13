@@ -168,19 +168,14 @@ class WalkForwardValidator:
         )
 
     def _prepare_history(self, symbol: str, *, start: date, end: date) -> None:
+        """Prepare only durable D1 history; intraday stays strictly on demand."""
         assert self.history is not None
-        requests = (
-            ("D1", start - timedelta(days=300)),
-            ("H1", start - timedelta(days=90)),
-            ("M15", start - timedelta(days=30)),
+        self.history.sync(
+            symbol,
+            timeframe="D1",
+            from_date=(start - timedelta(days=300)).isoformat(),
+            till_date=end.isoformat(),
         )
-        for timeframe, left in requests:
-            self.history.sync(
-                symbol,
-                timeframe=timeframe,
-                from_date=left.isoformat(),
-                till_date=end.isoformat(),
-            )
         if self.historical_flow is not None:
             self.historical_flow.sync(
                 symbol,
