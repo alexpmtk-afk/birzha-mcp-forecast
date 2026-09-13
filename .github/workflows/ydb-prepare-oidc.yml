@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_SHA: 5f3ee128c5688d088cac5f24668a6c6b17f34a57
+  APP_SHA: e88a4a7f69a83212b6de265a7f58a2d4d4bc327c
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
   HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
