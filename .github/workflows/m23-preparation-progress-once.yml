@@ -1,0 +1,117 @@
+name: M23 Preparation Progress Diagnostic Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m23-preparation-progress-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OIDC_AUDIENCE: https://github.com/alexpmtk-afk
+      HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
+      EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
+      YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
+    steps:
+      - name: Mint diagnostic IAM token through GitHub OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENCODED_AUDIENCE="$(python -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["OIDC_AUDIENCE"], safe=""))')"
+          SEP='?'; [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] && SEP='&'
+          OIDC_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${SEP}audience=${ENCODED_AUDIENCE}")"
+          OIDC_JWT="$(python -c 'import json,sys; print(json.load(sys.stdin).get("value", ""))' <<< "$OIDC_RESPONSE")"
+          test -n "$OIDC_JWT"
+          echo "::add-mask::$OIDC_JWT"
+          python - "$OIDC_JWT" <<'PY'
+          import base64, json, os, sys
+          payload=sys.argv[1].split('.')[1]
+          payload += '=' * (-len(payload) % 4)
+          claims=json.loads(base64.urlsafe_b64decode(payload))
+          assert claims.get('sub') == os.environ['EXPECTED_OIDC_SUBJECT']
+          assert claims.get('aud') == os.environ['OIDC_AUDIENCE']
+          PY
+          TOKEN_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -X POST 'https://auth.yandex.cloud/oauth/token' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+            --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
+            --data-urlencode "audience=${HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID}" \
+            --data-urlencode "subject_token=${OIDC_JWT}" \
+            --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
+          IAM_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("access_token", ""))' <<< "$TOKEN_RESPONSE")"
+          test -n "$IAM_TOKEN"
+          echo "::add-mask::$IAM_TOKEN"
+          printf '%s' "$IAM_TOKEN" > "$RUNNER_TEMP/yandex-iam-token"
+          chmod 600 "$RUNNER_TEMP/yandex-iam-token"
+
+      - name: Install YDB client
+        run: python -m pip install --disable-pip-version-check 'ydb>=3.17,<4'
+
+      - name: Read preparation progress
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import ydb
+
+          token=Path(os.environ['RUNNER_TEMP'])/'yandex-iam-token'
+          driver=ydb.Driver(
+              connection_string=os.environ['YDB_CONNECTION_STRING'],
+              credentials=ydb.AccessTokenCredentials(token.read_text().strip()),
+          )
+          driver.wait(timeout=15, fail_fast=True)
+          pool=ydb.QuerySessionPool(driver)
+
+          def rows(query):
+              result=pool.execute_with_retries(query, retry_settings=ydb.RetrySettings(idempotent=True))
+              out=[]
+              for rs in result:
+                  for row in getattr(rs,'rows',[]) or []:
+                      item={}
+                      for key in row.keys():
+                          value=row[key]
+                          if isinstance(value, bytes): value=value.decode()
+                          item[str(key)]=value
+                      out.append(item)
+              return out
+
+          verified=rows('''
+              SELECT symbol, timeframe, COUNT(*) AS ranges,
+                     MIN(from_date) AS min_from, MAX(till_date) AS max_till
+              FROM `historical_candles_verified_ranges`
+              GROUP BY symbol, timeframe
+              ORDER BY timeframe, symbol;
+          ''')
+          sessions=rows('''
+              SELECT symbol, COUNT(*) AS sessions,
+                     MIN(trade_date) AS min_date, MAX(trade_date) AS max_date
+              FROM `historical_candles_sessions`
+              GROUP BY symbol
+              ORDER BY symbol;
+          ''')
+          candles=rows('''
+              SELECT timeframe, COUNT(*) AS candles
+              FROM `historical_candles`
+              GROUP BY timeframe
+              ORDER BY timeframe;
+          ''')
+          payload={'verified_ranges':verified,'session_rows':sessions,'candle_counts':candles}
+          print('M23_PROGRESS_JSON='+json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str))
+          pool.stop(); driver.stop(timeout=5)
+          PY
+
+      - name: Cleanup token
+        if: always()
+        run: rm -f "$RUNNER_TEMP/yandex-iam-token"
