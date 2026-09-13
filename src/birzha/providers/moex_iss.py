@@ -261,6 +261,125 @@ class MoexIssClient:
         candles.sort(key=lambda candle: candle.begin)
         return tuple(candles)
 
+    def _fill_legacy_future_d1_from_history(
+        self,
+        instrument: Instrument,
+        candles: tuple[Candle, ...],
+        *,
+        from_date: str,
+        till_date: str,
+    ) -> tuple[tuple[Candle, ...], bool]:
+        """Recover legacy futures D1 gaps from the official MOEX history table.
+
+        Native candles remain canonical. The fallback is considered only for
+        dates absent from the candles endpoint, only for completed historical
+        dates, and only when MOEX reports positive trading activity plus a full
+        finite OHLC payload. Incomplete rows are ignored so the caller still
+        fails closed on a genuine price gap.
+        """
+        if instrument.asset_class != "future":
+            return candles, False
+
+        native_dates = {candle.begin[:10] for candle in candles if len(candle.begin) >= 10}
+        path = (
+            f"/history/engines/{instrument.engine}/markets/{instrument.market}/boards/"
+            f"{instrument.board}/securities/{instrument.secid}.json"
+        )
+        base_params: dict[str, object] = {
+            "iss.meta": "off",
+            "iss.only": "history",
+            "from": from_date[:10],
+            "till": till_date[:10],
+            "history.columns": (
+                "TRADEDATE,SECID,NUMTRADES,VOLUME,VALUE,OPEN,CLOSE,HIGH,LOW"
+            ),
+        }
+        first = self._request(path, {**base_params, "start": 0}).json()
+        rows = self._table(first, "history")
+        cursor_rows = self._table(first, "history.cursor")
+        if cursor_rows:
+            cursor = cursor_rows[0]
+            total = int(cursor.get("TOTAL") or len(rows))
+            page_size = int(cursor.get("PAGESIZE") or max(1, len(rows)))
+            starts = list(range(page_size, total, page_size))
+            if starts:
+                responses = self._request_many(
+                    (path, {**base_params, "start": start}) for start in starts
+                )
+                for response in responses:
+                    rows.extend(self._table(response.json(), "history"))
+        elif rows:
+            seen_pages = {_history_page_signature(rows)}
+            start = len(rows)
+            page_size = len(rows)
+            for _ in range(1000):
+                page_payload = self._request(path, {**base_params, "start": start}).json()
+                page = self._table(page_payload, "history")
+                if not page:
+                    break
+                signature = _history_page_signature(page)
+                if signature in seen_pages:
+                    raise MoexIssError(
+                        f"MOEX ISS repeated history page for {instrument.secid} start={start}"
+                    )
+                seen_pages.add(signature)
+                rows.extend(page)
+                if len(page) < page_size:
+                    break
+                start += len(page)
+            else:
+                raise MoexIssError(
+                    f"MOEX ISS history pagination exceeded safety limit for {instrument.secid}"
+                )
+
+        today = datetime.now(MOEX_TIMEZONE).date()
+        recovered: dict[str, Candle] = {}
+        for row in rows:
+            trade_day = str(row.get("TRADEDATE") or "")[:10]
+            if not trade_day or trade_day in native_dates:
+                continue
+            if str(row.get("SECID") or "") != instrument.secid:
+                continue
+            try:
+                parsed_day = date.fromisoformat(trade_day)
+            except ValueError:
+                continue
+            if parsed_day >= today:
+                continue
+            activity = tuple(
+                _float_or_none(row.get(key)) for key in ("NUMTRADES", "VOLUME", "VALUE")
+            )
+            if not any(value is not None and value > 0 for value in activity):
+                continue
+            open_price = _float_or_none(row.get("OPEN"))
+            close_price = _float_or_none(row.get("CLOSE"))
+            high_price = _float_or_none(row.get("HIGH"))
+            low_price = _float_or_none(row.get("LOW"))
+            if None in (open_price, close_price, high_price, low_price):
+                continue
+            candle = Candle(
+                open=open_price,
+                close=close_price,
+                high=high_price,
+                low=low_price,
+                value=_float_or_none(row.get("VALUE")),
+                volume=_float_or_none(row.get("VOLUME")),
+                begin=f"{trade_day}T00:00:00+03:00",
+                end=f"{trade_day}T23:59:59+03:00",
+                completed=True,
+            )
+            previous = recovered.get(trade_day)
+            if previous is not None and previous != candle:
+                raise MoexIssError(
+                    f"conflicting MOEX history D1 rows for {instrument.secid} {trade_day}"
+                )
+            recovered[trade_day] = candle
+
+        if not recovered:
+            return candles, False
+        merged = tuple(sorted((*candles, *recovered.values()), key=lambda candle: candle.begin))
+        return merged, True
+
     @staticmethod
     def _aggregate_m15(
         candles: tuple[Candle, ...], *, as_of: datetime | None = None
@@ -318,6 +437,7 @@ class MoexIssClient:
         completed_only: bool = True,
     ) -> CandleSeries:
         tf = timeframe.upper()
+        source = "MOEX_ISS"
         if tf == "M15":
             candles = self._aggregate_m15(
                 self._fetch_native_candles(
@@ -334,9 +454,23 @@ class MoexIssClient:
                 from_date=from_date,
                 till_date=till_date,
             )
+        if tf == "D1" and instrument.asset_class == "future":
+            candles, used_history_fallback = self._fill_legacy_future_d1_from_history(
+                instrument,
+                candles,
+                from_date=from_date,
+                till_date=till_date,
+            )
+            if used_history_fallback:
+                source = "MOEX_ISS_CANDLES+HISTORY_D1_FALLBACK"
         if completed_only:
             candles = tuple(c for c in candles if c.completed)
-        return CandleSeries(instrument=instrument, timeframe=tf, candles=candles)
+        return CandleSeries(
+            instrument=instrument,
+            timeframe=tf,
+            candles=candles,
+            source=source,
+        )
 
 
 
@@ -346,6 +480,15 @@ def _page_signature(rows: list[dict[str, Any]]) -> tuple[int, str, str]:
     first = str(rows[0].get("begin") or rows[0])
     last = str(rows[-1].get("begin") or rows[-1])
     return (len(rows), first, last)
+
+
+def _history_page_signature(rows: list[dict[str, Any]]) -> tuple[int, str, str]:
+    if not rows:
+        return (0, "", "")
+    first = f"{rows[0].get('TRADEDATE')}:{rows[0].get('SECID')}"
+    last = f"{rows[-1].get('TRADEDATE')}:{rows[-1].get('SECID')}"
+    return (len(rows), first, last)
+
 
 def _float_or_none(value: object) -> float | None:
     if value is None:
