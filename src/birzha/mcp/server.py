@@ -2,6 +2,9 @@
 
 MCP remains a thin interface: market, historical data, flow, snapshot, forecast,
 outcome, validation and persistence logic lives in application/storage layers.
+
+Durable price history is D1-only. H1/M15 are contextual inputs fetched on
+demand during snapshot/forecast analysis; M15 is built from provider M1 data.
 """
 
 from __future__ import annotations
@@ -16,11 +19,17 @@ from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.historical_data import HistoricalDataService
+from birzha.application.history_policy import (
+    PERSISTENT_PRICE_TIMEFRAMES,
+    require_persistent_price_timeframe,
+    require_persistent_price_timeframes,
+)
 from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.outcome import OutcomeService
 from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.stored_market_data import StoredMarketDataView
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.application.validation import WalkForwardValidator
 from birzha.config import Settings
@@ -31,14 +40,16 @@ from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
-from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_historical_flow_store import YdbHistoricalFlowStore
-from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_runtime_storage import (
+    YdbRuntimeHistoricalCandleStore,
+    YdbRuntimeHistoricalFlowStore,
+    YdbRuntimeSlotPacingGate,
+)
 from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
 CORE_HISTORY_SYMBOLS = ["SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI"]
-CORE_HISTORY_TIMEFRAMES = ["D1", "H1", "M15"]
+CORE_HISTORY_TIMEFRAMES = list(PERSISTENT_PRICE_TIMEFRAMES)
 
 settings = Settings.from_env()
 mcp = MCPServer(name=SERVICE_NAME, version=VERSION)
@@ -48,7 +59,7 @@ if settings.state_backend == "ydb":
     assert settings.ydb_connection_string is not None
     _ydb_runtime = YdbRuntime.connect(settings.ydb_connection_string)
     _upstream_control = ProcessUpstreamControlPlane(
-        gate_factory=lambda provider_key: YdbSlotPacingGate(
+        gate_factory=lambda provider_key: YdbRuntimeSlotPacingGate(
             _ydb_runtime.pool,
             provider_key=provider_key,
         ),
@@ -56,8 +67,8 @@ if settings.state_backend == "ydb":
     )
     _journal_store = YdbForecastJournal(_ydb_runtime.pool)
     _outcome_store = YdbOutcomeJournal(_ydb_runtime.pool)
-    _historical_store = YdbHistoricalCandleStore(_ydb_runtime.pool)
-    _historical_flow_store = YdbHistoricalFlowStore(_ydb_runtime.pool)
+    _historical_store = YdbRuntimeHistoricalCandleStore(_ydb_runtime.pool)
+    _historical_flow_store = YdbRuntimeHistoricalFlowStore(_ydb_runtime.pool)
 else:
     _upstream_control = ProcessUpstreamControlPlane()
     _journal_store = DuckDBForecastJournal(settings.forecast_journal_path)
@@ -68,9 +79,19 @@ else:
 _market = MarketDataService.default(control_plane=_upstream_control)
 _history = HistoricalDataService(market_data=_market, store=_historical_store)
 _analytics = MoexAnalyticsClient(control_plane=_upstream_control)
-_historical_flow = HistoricalFlowDataService(market_data=_market, analytics=_analytics, store=_historical_flow_store)
-_flow = MarketFlowService(market_data=_market, analytics=_analytics, historical=_historical_flow)
-_snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
+_historical_flow = HistoricalFlowDataService(
+    market_data=_market, analytics=_analytics, store=_historical_flow_store
+)
+_flow = MarketFlowService(
+    market_data=_market, analytics=_analytics, historical=_historical_flow
+)
+_layered_market = StoredMarketDataView(
+    _market,
+    _history,
+    require_stored_resolution=False,
+    ensure_daily_history=True,
+)
+_snapshot = MarketSnapshotService(market_data=_layered_market, flow=_flow)  # type: ignore[arg-type]
 _forecast = ForecastService(snapshots=_snapshot)
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
 _outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
@@ -100,20 +121,21 @@ def market_resolve_active_future(symbol: str) -> dict[str, object]:
     return _market.provider.resolve_active_future(symbol).to_dict()
 
 
-@mcp.tool(name="market.candles", description="Load real MOEX candles for a resolved futures or equity instrument. Supported timeframes: M1, M10, M15, H1, D1, W1, MN1.")
+@mcp.tool(name="market.candles", description="Load real MOEX candles on demand. H1 is fetched directly; M15 is built from M1 only for the requested window and is not persisted.")
 def market_candles(symbol: str, timeframe: str, from_date: str, till_date: str, completed_only: bool = True) -> dict[str, object]:
     return _market.candles(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date, completed_only=completed_only).to_dict()
 
 
-@mcp.tool(name="market.recent_candles", description="Load recent real MOEX candles by lookback days for a supported instrument.")
+@mcp.tool(name="market.recent_candles", description="Load recent real MOEX candles on demand for a supported instrument; intraday data is not added to durable history.")
 def market_recent_candles(symbol: str, timeframe: str, lookback_days: int = 30, completed_only: bool = True) -> dict[str, object]:
     return _market.recent_candles(symbol, timeframe=timeframe, lookback_days=lookback_days, completed_only=completed_only).to_dict()
 
 
-@mcp.tool(name="history.sync", description="Persist and repair historical MOEX candles for an instrument and timeframe. Only missing official exchange sessions are fetched; futures roots are split by the historically liquid real contract.")
+@mcp.tool(name="history.sync", description="Persist and repair completed D1 MOEX candles only. H1/M15 persistence is forbidden; use market.snapshot/market.candles for on-demand intraday analysis.")
 def history_sync(symbol: str, timeframe: str, from_date: str, till_date: str) -> dict[str, object]:
     try:
-        payload = _history.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date).to_dict()
+        tf = require_persistent_price_timeframe(timeframe)
+        payload = _history.sync(symbol, timeframe=tf, from_date=from_date, till_date=till_date).to_dict()
         return {"status": "PASS", **payload}
     except Exception as exc:  # structured operational diagnostic; never includes credentials
         return {
@@ -127,14 +149,29 @@ def history_sync(symbol: str, timeframe: str, from_date: str, till_date: str) ->
         }
 
 
-@mcp.tool(name="history.sync_batch", description="Sequentially sync several instruments and timeframes; one failure does not stop the remaining history jobs.")
+@mcp.tool(name="history.sync_batch", description="Sequentially persist completed D1 history for several instruments. Intraday timeframes are rejected rather than archived.")
 def history_sync_batch(symbols: list[str], timeframes: list[str], from_date: str, till_date: str) -> dict[str, object]:
-    return _history.sync_many(symbols, timeframes, from_date=from_date, till_date=till_date)
+    try:
+        allowed = list(require_persistent_price_timeframes(timeframes))
+    except Exception as exc:
+        return {
+            "status": "ERROR",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:1500],
+            "symbols": symbols,
+            "timeframes": timeframes,
+        }
+    return _history.sync_many(symbols, allowed, from_date=from_date, till_date=till_date)
 
 
-@mcp.tool(name="history.sync_core", description="Sync the BIRZHA core research universe on D1/H1/M15, reusing already verified stored history.")
+@mcp.tool(name="history.sync_core", description="Persist/repair D1 history for the BIRZHA core universe only. H1/M15 are always loaded on demand during analysis.")
 def history_sync_core(from_date: str, till_date: str) -> dict[str, object]:
-    return _history.sync_many(CORE_HISTORY_SYMBOLS, CORE_HISTORY_TIMEFRAMES, from_date=from_date, till_date=till_date)
+    return _history.sync_many(
+        CORE_HISTORY_SYMBOLS,
+        CORE_HISTORY_TIMEFRAMES,
+        from_date=from_date,
+        till_date=till_date,
+    )
 
 
 @mcp.tool(name="history.flow_sync", description="Persist TradeStats Delta and applicable FUTOI history so repeated forecasts and validation can reuse stored analytical data.")
@@ -145,7 +182,7 @@ def history_flow_sync(symbol: str, from_date: str, till_date: str) -> dict[str, 
         return {"status":"ERROR","symbol":symbol,"from_date":from_date,"till_date":till_date,"error_type":type(exc).__name__,"error":str(exc)[:1500]}
 
 
-@mcp.tool(name="history.coverage", description="Return durable stored coverage for one exact MOEX SECID and timeframe.")
+@mcp.tool(name="history.coverage", description="Return stored coverage for one exact MOEX SECID/timeframe. New durable price writes are D1-only; this read tool can audit legacy rows.")
 def history_coverage(secid: str, timeframe: str) -> dict[str, object]:
     try:
         return {"status": "PASS", **_historical_store.coverage(secid, timeframe).to_dict()}
@@ -164,12 +201,12 @@ def market_flow(symbol: str, from_date: str | None = None, till_date: str | None
     return _flow.build(symbol, from_date=from_date, till_date=till_date, lookback_days=lookback_days).to_dict()
 
 
-@mcp.tool(name="market.snapshot", description="Build a causal D1/H1/M15 Market Snapshot from real MOEX price, volume, ALGOPACK Delta and applicable OI data at one forecast T0.")
+@mcp.tool(name="market.snapshot", description="Build a causal Market Snapshot: durable completed D1 first, then bounded H1 and M15-from-M1 on demand for the current D1 structural leg.")
 def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _snapshot.build(symbol, as_of_date=as_of_date).to_dict()
 
 
-@mcp.tool(name="forecast.build", description="Build an explainable ex-ante BIRZHA baseline forecast without persistence. Use forecast.create for an operational forecast that must enter the journal.")
+@mcp.tool(name="forecast.build", description="Build an explainable ex-ante BIRZHA baseline forecast without persistence. Durable history is D1-only; intraday context is fetched on demand.")
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _forecast.build(symbol, as_of_date=as_of_date).to_dict()
 
@@ -201,7 +238,7 @@ def outcome_list(forecast_id: str) -> dict[str, object]:
     return {"forecast_id": forecast_id, "count": len(records), "outcomes": [item.to_dict() for item in records]}
 
 
-@mcp.tool(name="validation.walk_forward", description="Run a causal historical walk-forward validation over official MOEX trading sessions. Historical futures roots are resolved to the contract that was liquid on each forecast date.")
+@mcp.tool(name="validation.walk_forward", description="Run causal historical walk-forward validation. D1 comes from durable history; H1/M15 are fetched on demand per T0.")
 def validation_walk_forward(symbol: str, start_date: str, end_date: str, step_sessions: int = 5, max_points: int = 24) -> dict[str, object]:
     return _validator.run(symbol, start_date=start_date, end_date=end_date, step_sessions=step_sessions, max_points=max_points).to_dict()
 
@@ -258,6 +295,8 @@ async def healthz(_: Request) -> JSONResponse:
         "version": VERSION,
         "state_backend": settings.state_backend,
         "historical_storage": _historical_store.storage_scope,
+        "persistent_price_timeframes": CORE_HISTORY_TIMEFRAMES,
+        "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
     })
 
 
