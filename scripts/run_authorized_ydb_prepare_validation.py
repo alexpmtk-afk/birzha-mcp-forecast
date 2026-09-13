@@ -13,7 +13,6 @@ from birzha.application.historical_data import HistoricalDataService
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.market_data import MarketDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.application.validation_capacity import stored_contract_capacity
 from birzha.application.validation_readiness import (
     CORE_VALIDATION_SYMBOLS,
     ValidationDataReadinessService,
@@ -115,51 +114,9 @@ def _flow_warnings(symbol: str, payload: dict[str, object]) -> list[dict[str, ob
     return warnings
 
 
-def _session_capacity(
-    history: HistoricalDataService,
-    *,
-    validation_start: str,
-    split_date: str,
-    validation_end: str,
-    step_sessions: int,
-    max_points: int,
-) -> tuple[dict[str, object], dict[str, object]]:
-    holdout_start = (date.fromisoformat(split_date[:10]) + timedelta(days=1)).isoformat()
-    periods = {
-        "development": (validation_start, split_date),
-        "holdout": (holdout_start, validation_end),
-    }
-    capacity: dict[str, object] = {}
-    shortfall: dict[str, object] = {}
-    for period, (left, right) in periods.items():
-        period_capacity: dict[str, object] = {}
-        period_shortfall: dict[str, object] = {}
-        for symbol in CORE_VALIDATION_SYMBOLS:
-            item = stored_contract_capacity(
-                history,
-                symbol,
-                from_date=left,
-                till_date=right,
-                step_sessions=step_sessions,
-                max_points=max_points,
-            )
-            period_capacity[symbol] = item.to_dict()
-            missing = {
-                str(horizon): count
-                for horizon, count in item.non_overlapping_observations.items()
-                if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
-            }
-            if missing:
-                period_shortfall[symbol] = missing
-        capacity[period] = period_capacity
-        if period_shortfall:
-            shortfall[period] = period_shortfall
-    return capacity, shortfall
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare exactly the YDB history required by six-market validation"
+        description="Prepare exactly the durable D1 YDB history required by six-market validation"
     )
     parser.add_argument("--connection-string", required=True)
     parser.add_argument(
@@ -208,11 +165,10 @@ def main() -> int:
         flow_failures: list[dict[str, object]] = []
         flow_warnings: list[dict[str, object]] = []
         ranges = required_price_ranges(args.validation_start, args.validation_end)
-        by_timeframe = {timeframe: (left, right) for timeframe, left, right in ranges}
+        if len(ranges) != 1 or ranges[0][0] != "D1":
+            raise RuntimeError("durable validation preparation must remain D1-only")
+        _, d1_left, d1_right = ranges[0]
 
-        # Phase 1 is deliberately cheap: establish the versioned D1 session
-        # calendar for every market before paying for large H1/M15 backfills.
-        d1_left, d1_right = by_timeframe["D1"]
         for symbol in CORE_VALIDATION_SYMBOLS:
             ok, payload = _retry(
                 f"price:{symbol}:D1",
@@ -233,57 +189,24 @@ def main() -> int:
             "max_points": args.max_points,
             "minimum_acceptance_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
             "symbols": list(CORE_VALIDATION_SYMBOLS),
+            "persistent_price_timeframes": ["D1"],
+            "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
+            "m15_source": "M1_ON_DEMAND_AGGREGATION",
             "price_operation_failures": price_failures,
             "optional_flow_failures": flow_failures,
             "optional_flow_warnings": flow_warnings,
             "operations": operations,
         }
         if price_failures:
-            base_artifact["status"] = "CALENDAR_NOT_READY"
+            base_artifact["status"] = "D1_NOT_READY"
             base_artifact["readiness"] = {
                 "status": "NOT_EVALUATED",
-                "reason": "D1 calendar preparation failed",
+                "reason": "D1 durable history preparation failed",
             }
             _write(args.artifact, base_artifact)
             print(json.dumps(base_artifact, ensure_ascii=False, sort_keys=True), flush=True)
             return 2
 
-        session_capacity, capacity_shortfall = _session_capacity(
-            history,
-            validation_start=args.validation_start,
-            split_date=args.split_date,
-            validation_end=args.validation_end,
-            step_sessions=args.step_sessions,
-            max_points=args.max_points,
-        )
-        base_artifact["session_capacity"] = session_capacity
-        if capacity_shortfall:
-            base_artifact["status"] = "INSUFFICIENT_DATA"
-            base_artifact["capacity_shortfall"] = capacity_shortfall
-            base_artifact["readiness"] = {
-                "status": "NOT_EVALUATED",
-                "reason": "contract-aware exchange-session capacity is insufficient",
-            }
-            _write(args.artifact, base_artifact)
-            print(json.dumps(base_artifact, ensure_ascii=False, sort_keys=True), flush=True)
-            return 0
-
-        # Phase 2 runs only after both governed periods are statistically viable.
-        for symbol in CORE_VALIDATION_SYMBOLS:
-            for timeframe in ("H1", "M15"):
-                left, right = by_timeframe[timeframe]
-                ok, payload = _retry(
-                    f"price:{symbol}:{timeframe}",
-                    lambda s=symbol, tf=timeframe, a=left, b=right: history.sync(
-                        s, timeframe=tf, from_date=a, till_date=b
-                    ).to_dict(),
-                )
-                operations.append(payload)
-                if not ok:
-                    price_failures.append(payload)
-
-        # Mandatory price data decides whether validation is possible. If it is
-        # still incomplete, do not spend provider budget on optional flow.
         readiness = ValidationDataReadinessService(history=history).check(
             CORE_VALIDATION_SYMBOLS,
             validation_start=args.validation_start,
@@ -292,10 +215,8 @@ def main() -> int:
         if readiness.status != "READY":
             artifact = {
                 **base_artifact,
-                "status": "DATA_NOT_READY",
+                "status": "D1_NOT_READY",
                 "readiness": readiness.to_dict(),
-                "price_operation_failures": price_failures,
-                "operations": operations,
                 "optional_flow_status": "NOT_RUN",
             }
             _write(args.artifact, artifact)
@@ -333,9 +254,7 @@ def main() -> int:
             "optional_flow_status": "COMPUTED",
             "operations": operations,
         }
-        if price_failures:
-            artifact["status"] = "READY_WITH_PRICE_OPERATION_ERRORS"
-        elif flow_failures:
+        if flow_failures:
             artifact["status"] = "READY_WITH_OPTIONAL_FLOW_ERRORS"
         elif flow_warnings:
             artifact["status"] = "READY_WITH_OPTIONAL_FLOW_WARNINGS"
