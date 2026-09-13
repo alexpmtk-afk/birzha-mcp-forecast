@@ -1,4 +1,4 @@
-name: M23 BR Timeline Speed Once
+name: M23 BR Capacity Feasibility Once
 
 on:
   push:
@@ -13,7 +13,7 @@ permissions:
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -23,26 +23,66 @@ jobs:
           python-version: "3.12"
       - name: Install package
         run: python -m pip install --disable-pip-version-check -e .
-      - name: Measure real BR timeline
+      - name: Probe real BR capacity without model evaluation
         shell: bash
         run: |
           python - <<'PY'
-          import time
-          from datetime import date
+          import json
+          from birzha.application.historical_data import HistoricalDataService
+          from birzha.application.market_data import MarketDataService
           from birzha.application.upstream_control import ProcessUpstreamControlPlane
-          from birzha.providers.moex_history import MoexHistoricalFutureResolver
-          from birzha.providers.moex_iss import MoexIssClient
+          from birzha.application.validation_capacity import stored_contract_capacity
+          from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
-          control = ProcessUpstreamControlPlane()
-          resolver = MoexHistoricalFutureResolver(MoexIssClient(control_plane=control))
-          started = time.monotonic()
-          timeline = resolver.timeline("BR", date(2024,1,1), date(2024,1,31))
-          elapsed = time.monotonic() - started
-          print(f"BR_TIMELINE_ROWS={len(timeline)}")
-          print(f"BR_TIMELINE_ELAPSED_SECONDS={elapsed:.3f}")
-          if not timeline:
-              raise SystemExit("timeline is empty")
-          if elapsed > 25:
-              raise SystemExit(f"corrected pacing unexpectedly slow: {elapsed:.3f}s")
-          print("BR_TIMELINE_SPEED_REGRESSION=PASS")
+          store = DuckDBHistoricalCandleStore(":memory:")
+          try:
+              history = HistoricalDataService(
+                  market_data=MarketDataService.default(
+                      control_plane=ProcessUpstreamControlPlane()
+                  ),
+                  store=store,
+              )
+              sync = history.sync(
+                  "BR",
+                  timeframe="D1",
+                  from_date="2013-01-01",
+                  till_date="2024-12-31",
+              )
+              periods = {
+                  "development_candidate": ("2013-01-01", "2018-12-31"),
+                  "holdout_candidate": ("2019-01-01", "2024-12-31"),
+              }
+              result = {
+                  "mode": "CAPACITY_ONLY_NO_MODEL",
+                  "model_status": "NOT_EVALUATED",
+                  "minimum_observations": 20,
+                  "sync_contract_count": len(sync.contracts),
+                  "sync_fetched_candles": sync.fetched_candles,
+              }
+              all_pass = True
+              for name, (start, end) in periods.items():
+                  cap = stored_contract_capacity(
+                      history,
+                      "BR",
+                      from_date=start,
+                      till_date=end,
+                      step_sessions=5,
+                      max_points=240,
+                  )
+                  passes = all(
+                      count >= 20
+                      for count in cap.non_overlapping_observations.values()
+                  )
+                  all_pass = all_pass and passes
+                  result[name] = {
+                      "from": start,
+                      "till": end,
+                      **cap.to_dict(),
+                      "passes_20": passes,
+                  }
+              print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+              if not all_pass:
+                  raise SystemExit(2)
+          finally:
+              store.close()
           PY
