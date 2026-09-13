@@ -17,12 +17,13 @@ from birzha.storage.orchestration_store import MemoryOrchestrationStore
 
 def _start() -> tuple[WorkflowOrchestrator, str]:
     service = WorkflowOrchestrator(MemoryOrchestrationStore())
-    run = service.start_core_validation(
+    run, created = service.start_core_validation(
         development_start="2021-01-01",
         split_date="2022-12-31",
         holdout_end="2024-12-31",
         source_sha="abc123",
     )
+    assert created is True
     return service, run.workflow_id
 
 
@@ -49,6 +50,45 @@ def _pass_stage(
     while state["stage"] == stage.value and state["status"] == WorkflowStatus.RUNNING.value:
         state = _pass_one(service, workflow_id)
     return state
+
+
+def test_same_immutable_source_start_is_idempotent() -> None:
+    store = MemoryOrchestrationStore()
+    service = WorkflowOrchestrator(store)
+    first, first_created = service.start_core_validation(
+        development_start="2021-01-01",
+        split_date="2022-12-31",
+        holdout_end="2024-12-31",
+        source_sha="a" * 40,
+    )
+    second, second_created = service.start_core_validation(
+        development_start="2021-01-01",
+        split_date="2022-12-31",
+        holdout_end="2024-12-31",
+        source_sha="a" * 40,
+    )
+    assert first_created is True
+    assert second_created is False
+    assert second.workflow_id == first.workflow_id
+    assert len(store.list_workflows()) == 1
+
+
+def test_different_source_gets_different_workflow_identity() -> None:
+    store = MemoryOrchestrationStore()
+    service = WorkflowOrchestrator(store)
+    first, _ = service.start_core_validation(
+        development_start="2021-01-01",
+        split_date="2022-12-31",
+        holdout_end="2024-12-31",
+        source_sha="a" * 40,
+    )
+    second, _ = service.start_core_validation(
+        development_start="2021-01-01",
+        split_date="2022-12-31",
+        holdout_end="2024-12-31",
+        source_sha="b" * 40,
+    )
+    assert second.workflow_id != first.workflow_id
 
 
 def test_workflow_advances_automatically_but_stops_at_protected_gates() -> None:

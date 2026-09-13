@@ -75,12 +75,18 @@ def install_orchestration_tools(
                 "message": "Основная проверка уже запущена; второй параллельный процесс не создан.",
                 "workflow": _present(orchestrator.status(same[0].workflow_id)),
             }
-        run = orchestrator.start_core_validation(
+        run, created = orchestrator.start_core_validation(
             development_start=DEVELOPMENT_START,
             split_date=SPLIT_DATE,
             holdout_end=HOLDOUT_END,
             source_sha=settings.source_sha,
         )
+        if not created:
+            return {
+                "status": "ALREADY_EXISTS",
+                "message": "Для этой точной версии кода уже существует долговечная цепочка; дубликат не создан.",
+                "workflow": _present(orchestrator.status(run.workflow_id)),
+            }
         return {
             "status": "STARTED",
             "message": "Автономная цепочка проверки запущена и сохранена в постоянном хранилище.",

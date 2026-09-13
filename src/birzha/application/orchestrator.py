@@ -7,9 +7,9 @@ from the durable store. Protected holdout and promotion gates never auto-open.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
 from birzha.application.orchestration_plan import build_core_validation_actions
 from birzha.domain.orchestration import (
@@ -55,13 +55,35 @@ class WorkflowOrchestrator:
         split_date: str,
         holdout_end: str,
         source_sha: str,
-    ) -> WorkflowRun:
+    ) -> tuple[WorkflowRun, bool]:
+        """Ensure exactly one durable workflow exists for this immutable source.
+
+        Returns ``(run, created)``. The deterministic identity closes the race
+        between two simultaneous start calls: both target the same primary key,
+        and a loser re-reads the winner after a conflicting/ambiguous write.
+        """
         if not development_start < split_date < holdout_end:
             raise ValueError("expected development_start < split_date < holdout_end")
         if not source_sha.strip():
             raise ValueError("source_sha must be non-empty")
+        workflow_id = core_validation_workflow_id(
+            development_start=development_start,
+            split_date=split_date,
+            holdout_end=holdout_end,
+            source_sha=source_sha,
+        )
+        existing = self.store.get_workflow(workflow_id)
+        if existing is not None:
+            _assert_same_core_identity(
+                existing,
+                development_start=development_start,
+                split_date=split_date,
+                holdout_end=holdout_end,
+                source_sha=source_sha,
+            )
+            return existing, False
+
         now = _now()
-        workflow_id = f"core-validation-{uuid4().hex}"
         metadata: dict[str, object] = {
             "development_start": development_start,
             "split_date": split_date,
@@ -86,8 +108,25 @@ class WorkflowOrchestrator:
             holdout_end,
             source_sha,
         )
-        self.store.create_workflow(run, actions)
-        return run
+        try:
+            self.store.create_workflow(run, actions)
+        except Exception:
+            # The write may have lost a concurrent race, or the client may have
+            # lost the acknowledgement after the server committed it. Recover
+            # only when the exact deterministic workflow now exists; otherwise
+            # preserve the original failure.
+            winner = self.store.get_workflow(workflow_id)
+            if winner is None:
+                raise
+            _assert_same_core_identity(
+                winner,
+                development_start=development_start,
+                split_date=split_date,
+                holdout_end=holdout_end,
+                source_sha=source_sha,
+            )
+            return winner, False
+        return run, True
 
     def list(self, *, active_only: bool = False, limit: int = 50) -> dict[str, object]:
         runs = self.store.list_workflows(active_only=active_only, limit=limit)
@@ -145,9 +184,6 @@ class WorkflowOrchestrator:
             lease_until=(now_dt + timedelta(seconds=lease_seconds)).isoformat(),
         )
         if claimed is None:
-            # The store may have converted an expired final lease into FAILED.
-            # Reconcile durable stage state immediately instead of leaving the
-            # workflow apparently RUNNING forever.
             self._advance_if_ready(workflow_id)
         return claimed
 
@@ -298,6 +334,46 @@ class WorkflowOrchestrator:
         if run is None:
             raise KeyError(f"workflow not found: {workflow_id}")
         return run
+
+
+def core_validation_workflow_id(
+    *,
+    development_start: str,
+    split_date: str,
+    holdout_end: str,
+    source_sha: str,
+) -> str:
+    canonical = "|".join(
+        (
+            CORE_VALIDATION_WORKFLOW,
+            development_start[:10],
+            split_date[:10],
+            holdout_end[:10],
+            source_sha.strip().lower(),
+        )
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"core-validation-{digest}"
+
+
+def _assert_same_core_identity(
+    run: WorkflowRun,
+    *,
+    development_start: str,
+    split_date: str,
+    holdout_end: str,
+    source_sha: str,
+) -> None:
+    expected = {
+        "development_start": development_start,
+        "split_date": split_date,
+        "holdout_end": holdout_end,
+        "source_sha": source_sha,
+    }
+    if run.kind != CORE_VALIDATION_WORKFLOW or any(
+        run.metadata.get(key) != value for key, value in expected.items()
+    ):
+        raise RuntimeError("deterministic workflow identity collision")
 
 
 def _next_stage(stage: WorkflowStage) -> WorkflowStage:
