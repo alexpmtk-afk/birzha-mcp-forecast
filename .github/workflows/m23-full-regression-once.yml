@@ -1,8 +1,8 @@
-name: M23 Full Regression Once
+name: Staged Full Regression
 
 on:
   push:
-    branches: [m23-ydb-model-validation]
+    branches: [m23-ydb-model-validation, m24-durable-orchestration]
     paths:
       - '.github/workflows/m23-full-regression-once.yml'
       - 'pyproject.toml'
@@ -66,10 +66,10 @@ jobs:
           python-version: '3.12'
 
       - name: Build Docker image
-        run: docker build --pull -t birzha-mcp-forecast:m23-regression .
+        run: docker build --pull -t birzha-mcp-forecast:staged-regression .
 
       - name: Run Docker container
-        run: docker run --rm -d --name birzha-m23-regression -p 8080:8080 birzha-mcp-forecast:m23-regression
+        run: docker run --rm -d --name birzha-staged-regression -p 8080:8080 birzha-mcp-forecast:staged-regression
 
       - name: Wait for health endpoint
         run: |
@@ -80,7 +80,7 @@ jobs:
             fi
             sleep 1
           done
-          docker logs birzha-m23-regression
+          docker logs birzha-staged-regression
           exit 1
 
       - name: Install smoke dependency
@@ -91,10 +91,8 @@ jobs:
 
       - name: Dump container logs on failure
         if: failure()
-        run: docker logs birzha-m23-regression || true
+        run: docker logs birzha-staged-regression || true
 
       - name: Stop Docker container
         if: always()
-        run: docker stop birzha-m23-regression || true
-
-# Preflight rerun marker: 2026-09-12
+        run: docker stop birzha-staged-regression || true
