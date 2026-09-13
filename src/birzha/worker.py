@@ -3,6 +3,10 @@
 This is intentionally separate from the public MCP surface. The worker discovers
 safe runnable workflows from YDB, executes at most one bounded action per tick,
 and persists the result before returning.
+
+Yandex Serverless Container triggers invoke the container with an HTTP POST to
+its invocation address, so ``/`` is the canonical timer entry point. ``/tick``
+is kept as an explicit diagnostic alias.
 """
 
 from __future__ import annotations
@@ -72,6 +76,7 @@ async def tick(_: Request) -> JSONResponse:
 app = Starlette(
     debug=False,
     routes=[
+        Route("/", tick, methods=["POST"]),
         Route("/healthz", healthz, methods=["GET"]),
         Route("/tick", tick, methods=["POST"]),
     ],
