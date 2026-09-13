@@ -25,6 +25,8 @@ DATA_QUALITY_CONTRACT_VERSION = "DATA_QUALITY_CONTRACT_V2"
 D1_ANALYSIS_LOOKBACK_DAYS = 300
 D1_ANCHOR_LOOKBACK_CANDLES = 60
 H1_ANCHOR_LOOKBACK_CANDLES = 160
+H1_MIN_CONTEXT_DAYS = 14
+M15_MIN_CONTEXT_DAYS = 5
 M15_MAX_LOOKBACK_DAYS = 10
 
 
@@ -53,8 +55,11 @@ class MarketSnapshotService:
         """Build the snapshot in three causal stages.
 
         1. Load completed D1 and identify the current structural leg.
-        2. Load H1 only from that D1 leg anchor and refine the intraday anchor.
-        3. Build M15 from M1 only for the bounded tactical window ending at T0.
+        2. Load H1 only after D1 selected the leg. If that anchor is very recent,
+           include a small pre-anchor warm-up window so feature calculations can
+           still satisfy the fixed quality contract without persisting H1.
+        3. Build M15 from M1 only for a bounded tactical window ending at T0,
+           likewise allowing a short feature warm-up before a recent H1 anchor.
 
         The market-data implementation decides where D1 comes from. In MCP/YDB
         runtime it is the durable D1 store; H1/M15 are always direct on-demand
@@ -80,16 +85,22 @@ class MarketSnapshotService:
             max_candles=D1_ANCHOR_LOOKBACK_CANDLES,
         )
 
-        # Stage 2: H1 is contextual, requested only after D1 selected the leg.
+        # Stage 2: H1 is contextual and requested only after D1 selected the leg.
+        # The analysis anchor stays unchanged; the earlier start is feature warm-up
+        # only and remains an on-demand provider read.
+        d1_anchor_date = date.fromisoformat(d1_anchor)
+        h1_context_floor = till - timedelta(days=H1_MIN_CONTEXT_DAYS)
+        h1_start = min(d1_anchor_date, h1_context_floor).isoformat()
         h1 = self.market_data.candles_for_instrument(
             instrument,
             timeframe="H1",
-            from_date=d1_anchor,
+            from_date=h1_start,
             till_date=till.isoformat(),
             completed_only=True,
         )
+        h1_leg = _slice_from(h1, d1_anchor)
         h1_anchor = _structural_anchor(
-            h1,
+            h1_leg,
             direction=d1_direction,
             max_candles=H1_ANCHOR_LOOKBACK_CANDLES,
             fallback=d1_anchor,
@@ -98,7 +109,10 @@ class MarketSnapshotService:
         # Stage 3: M15 is provider-side M1 aggregation for a short tactical
         # window. Never request months/years of M1 merely to populate storage.
         tactical_floor = till - timedelta(days=M15_MAX_LOOKBACK_DAYS)
-        m15_start = max(date.fromisoformat(h1_anchor), tactical_floor).isoformat()
+        m15_context_floor = till - timedelta(days=M15_MIN_CONTEXT_DAYS)
+        h1_anchor_date = date.fromisoformat(h1_anchor)
+        m15_context_start = min(h1_anchor_date, m15_context_floor)
+        m15_start = max(m15_context_start, tactical_floor).isoformat()
         m15 = self.market_data.candles_for_instrument(
             instrument,
             timeframe="M15",
@@ -163,7 +177,10 @@ class MarketSnapshotService:
             flow_status=flow_status,
             reasons=tuple(warnings),
         )
-        volume_profile = profile_from_candles(h1, bins=24)
+        # Keep the profile tied to the D1-selected structural leg; the H1 rows
+        # before that anchor are warm-up context for feature calculations only.
+        h1_profile = _slice_from(h1, d1_anchor)
+        volume_profile = profile_from_candles(h1_profile, bins=24)
         if volume_profile is not None:
             warnings.append("VOLUME_PROFILE:approximate_candle_proxy")
         source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
@@ -266,7 +283,26 @@ def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
         for candle in series.candles
         if candle.completed and _timestamp(candle.end) <= boundary
     )
-    return CandleSeries(instrument=series.instrument, timeframe=series.timeframe, candles=candles)
+    return CandleSeries(
+        instrument=series.instrument,
+        timeframe=series.timeframe,
+        candles=candles,
+        source=series.source,
+    )
+
+
+def _slice_from(series: CandleSeries, from_date: str) -> CandleSeries:
+    """Slice a fetched context series without causing another provider read."""
+    boundary = date.fromisoformat(from_date[:10])
+    candles = tuple(
+        candle for candle in series.candles if date.fromisoformat(candle.begin[:10]) >= boundary
+    )
+    return CandleSeries(
+        instrument=series.instrument,
+        timeframe=series.timeframe,
+        candles=candles,
+        source=series.source,
+    )
 
 
 def _state(series: CandleSeries) -> TimeframeState:
