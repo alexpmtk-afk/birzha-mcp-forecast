@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_SHA: 9933ebcf0b42655604d898413c6edbfc471fd4c6
+  APP_SHA: 06a4121baa183a64766b63c9893a476136753648
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
   PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
@@ -90,7 +90,7 @@ jobs:
           python -m pip install --disable-pip-version-check -e ./app
           echo "APP_SOURCE_SHA=PASS $APP_SHA"
 
-      - name: Run read-only YDB readiness audit
+      - name: Run read-only D1 YDB readiness audit
         shell: bash
         run: |
           set -euo pipefail
