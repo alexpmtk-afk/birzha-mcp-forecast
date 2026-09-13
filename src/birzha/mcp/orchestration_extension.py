@@ -8,7 +8,7 @@ from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.config import Settings
 from birzha.domain.orchestration import WorkflowStage
 from birzha.storage.orchestration_store import MemoryOrchestrationStore
-from birzha.storage.ydb_orchestration_store import YdbOrchestrationStore
+from birzha.storage.ydb_runtime_orchestration_store import YdbRuntimeOrchestrationStore
 from birzha.storage.ydb_state import YdbRuntime
 
 
@@ -48,7 +48,7 @@ def install_orchestration_tools(
     if settings.state_backend == "ydb":
         if ydb_runtime is None:
             raise RuntimeError("YDB runtime is required for durable orchestration")
-        store = YdbOrchestrationStore(ydb_runtime.pool)
+        store = YdbRuntimeOrchestrationStore(ydb_runtime.pool)
     else:
         store = MemoryOrchestrationStore()
     orchestrator = WorkflowOrchestrator(store)
