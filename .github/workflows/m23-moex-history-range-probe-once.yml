@@ -1,0 +1,43 @@
+name: M23 MOEX History Range Probe Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m23-moex-history-range-probe-once.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe date selector versus ranged history
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, urllib.parse, urllib.request
+          base='https://iss.moex.com/iss/history/engines/futures/markets/forts/securities.json'
+          cols='TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,LASTTRADEDATE'
+          def get(params):
+              url=base+'?'+urllib.parse.urlencode(params)
+              req=urllib.request.Request(url,headers={'Accept':'application/json','User-Agent':'BIRZHA-M23-DIAGNOSTIC'})
+              with urllib.request.urlopen(req,timeout=30) as r:
+                  return json.load(r)
+          def rows(payload,name):
+              t=payload.get(name) or {}; c=t.get('columns') or []; d=t.get('data') or []
+              return [dict(zip(c,x)) for x in d]
+          common={'iss.meta':'off','iss.only':'history,history.cursor','history.columns':cols,'assetcode':'BR'}
+          one=get({**common,'date':'2024-01-10'})
+          ranged=get({**common,'from':'2024-01-10','till':'2024-01-15'})
+          for label,p in [('DATE',one),('RANGE',ranged)]:
+              rr=rows(p,'history'); cur=rows(p,'history.cursor')
+              print(label+'_ROWS='+str(len(rr)))
+              print(label+'_DATES='+json.dumps(sorted({str(x.get('TRADEDATE')) for x in rr if x.get('TRADEDATE')})))
+              print(label+'_SECIDS='+json.dumps(sorted({str(x.get('SECID')) for x in rr if x.get('SECID')})))
+              print(label+'_CURSOR='+json.dumps(cur,ensure_ascii=False,sort_keys=True))
+          PY
