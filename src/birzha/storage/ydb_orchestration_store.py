@@ -72,63 +72,76 @@ class YdbOrchestrationStore(OrchestrationStore):
         )
 
     def create_workflow(self, run: WorkflowRun, actions: tuple[WorkflowAction, ...]) -> None:
-        if self.get_workflow(run.workflow_id) is not None:
-            raise ValueError(f"workflow already exists: {run.workflow_id}")
+        if not actions:
+            raise ValueError("workflow must contain at least one action")
+        row_type = (
+            ydb.StructType()
+            .add_member("action_id", ydb.PrimitiveType.Utf8)
+            .add_member("workflow_id", ydb.PrimitiveType.Utf8)
+            .add_member("stage", ydb.PrimitiveType.Utf8)
+            .add_member("kind", ydb.PrimitiveType.Utf8)
+            .add_member("sequence", ydb.PrimitiveType.Uint64)
+            .add_member("payload_json", ydb.PrimitiveType.Utf8)
+            .add_member("status", ydb.PrimitiveType.Utf8)
+            .add_member("attempt", ydb.PrimitiveType.Uint64)
+            .add_member("max_attempts", ydb.PrimitiveType.Uint64)
+            .add_member("lease_owner", ydb.PrimitiveType.Utf8)
+            .add_member("lease_until", ydb.PrimitiveType.Utf8)
+            .add_member("evidence_json", ydb.PrimitiveType.Utf8)
+            .add_member("last_error", ydb.PrimitiveType.Utf8)
+        )
+        rows = [_action_row(action) for action in actions]
         self._pool.execute_with_retries(
             f"""
             DECLARE $workflow_id AS Utf8;
-            DECLARE $kind AS Utf8;
-            DECLARE $stage AS Utf8;
-            DECLARE $status AS Utf8;
+            DECLARE $run_kind AS Utf8;
+            DECLARE $run_stage AS Utf8;
+            DECLARE $run_status AS Utf8;
             DECLARE $created_at AS Utf8;
             DECLARE $updated_at AS Utf8;
             DECLARE $metadata_json AS Utf8;
-            DECLARE $last_error AS Utf8;
-            INSERT INTO `{self._runs_table}`
-                (workflow_id, kind, stage, status, created_at, updated_at, metadata_json, last_error)
-            VALUES
-                ($workflow_id, $kind, $stage, $status, $created_at, $updated_at, $metadata_json, $last_error);
-            """,
-            {
-                "$workflow_id": _utf8(run.workflow_id),
-                "$kind": _utf8(run.kind),
-                "$stage": _utf8(run.stage.value),
-                "$status": _utf8(run.status.value),
-                "$created_at": _utf8(run.created_at),
-                "$updated_at": _utf8(run.updated_at),
-                "$metadata_json": _utf8(_json(run.metadata)),
-                "$last_error": _utf8(run.last_error or ""),
-            },
-            retry_settings=ydb.RetrySettings(idempotent=True),
-        )
-        for action in actions:
-            self._insert_action(action)
+            DECLARE $run_last_error AS Utf8;
+            DECLARE $rows AS List<Struct<
+                action_id:Utf8,
+                workflow_id:Utf8,
+                stage:Utf8,
+                kind:Utf8,
+                sequence:Uint64,
+                payload_json:Utf8,
+                status:Utf8,
+                attempt:Uint64,
+                max_attempts:Uint64,
+                lease_owner:Utf8,
+                lease_until:Utf8,
+                evidence_json:Utf8,
+                last_error:Utf8
+            >>;
 
-    def _insert_action(self, action: WorkflowAction) -> None:
-        self._pool.execute_with_retries(
-            f"""
-            DECLARE $action_id AS Utf8;
-            DECLARE $workflow_id AS Utf8;
-            DECLARE $stage AS Utf8;
-            DECLARE $kind AS Utf8;
-            DECLARE $sequence AS Uint64;
-            DECLARE $payload_json AS Utf8;
-            DECLARE $status AS Utf8;
-            DECLARE $attempt AS Uint64;
-            DECLARE $max_attempts AS Uint64;
-            DECLARE $lease_owner AS Utf8;
-            DECLARE $lease_until AS Utf8;
-            DECLARE $evidence_json AS Utf8;
-            DECLARE $last_error AS Utf8;
             INSERT INTO `{self._actions_table}`
                 (action_id, workflow_id, stage, kind, sequence, payload_json, status,
                  attempt, max_attempts, lease_owner, lease_until, evidence_json, last_error)
+            SELECT action_id, workflow_id, stage, kind, sequence, payload_json, status,
+                   attempt, max_attempts, lease_owner, lease_until, evidence_json, last_error
+            FROM AS_TABLE($rows);
+
+            INSERT INTO `{self._runs_table}`
+                (workflow_id, kind, stage, status, created_at, updated_at, metadata_json, last_error)
             VALUES
-                ($action_id, $workflow_id, $stage, $kind, $sequence, $payload_json, $status,
-                 $attempt, $max_attempts, $lease_owner, $lease_until, $evidence_json, $last_error);
+                ($workflow_id, $run_kind, $run_stage, $run_status, $created_at,
+                 $updated_at, $metadata_json, $run_last_error);
             """,
-            _action_params(action),
-            retry_settings=ydb.RetrySettings(idempotent=True),
+            {
+                "$workflow_id": _utf8(run.workflow_id),
+                "$run_kind": _utf8(run.kind),
+                "$run_stage": _utf8(run.stage.value),
+                "$run_status": _utf8(run.status.value),
+                "$created_at": _utf8(run.created_at),
+                "$updated_at": _utf8(run.updated_at),
+                "$metadata_json": _utf8(_json(run.metadata)),
+                "$run_last_error": _utf8(run.last_error or ""),
+                "$rows": (rows, ydb.ListType(row_type)),
+            },
+            retry_settings=ydb.RetrySettings(idempotent=False),
         )
 
     def get_workflow(self, workflow_id: str) -> WorkflowRun | None:
@@ -142,6 +155,31 @@ class YdbOrchestrationStore(OrchestrationStore):
         )
         row = _first_row(result)
         return None if row is None else _workflow_from_row(row)
+
+    def list_workflows(self, *, active_only: bool = False, limit: int = 50) -> list[WorkflowRun]:
+        if limit <= 0 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        if active_only:
+            query = f"""
+            DECLARE $limit AS Uint64;
+            SELECT * FROM `{self._runs_table}`
+            WHERE status = 'RUNNING' OR status = 'WAITING_APPROVAL'
+            ORDER BY updated_at DESC, workflow_id DESC
+            LIMIT $limit;
+            """
+        else:
+            query = f"""
+            DECLARE $limit AS Uint64;
+            SELECT * FROM `{self._runs_table}`
+            ORDER BY updated_at DESC, workflow_id DESC
+            LIMIT $limit;
+            """
+        result = self._pool.execute_with_retries(
+            query,
+            {"$limit": _uint64(limit)},
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+        return [_workflow_from_row(row) for row in _rows(result)]
 
     def update_workflow(self, run: WorkflowRun) -> None:
         self._pool.execute_with_retries(
@@ -205,16 +243,33 @@ class YdbOrchestrationStore(OrchestrationStore):
         now: str,
         lease_until: str,
     ) -> WorkflowAction | None:
+        # The NOT EXISTS guard prevents a later invocation from selecting the
+        # next PENDING action while a prior action in this stage still owns a
+        # live lease. Concurrent readers may still see the same first candidate;
+        # the conditional UPDATE below then permits only the owner that survives
+        # the compare-and-set condition to proceed.
         result = self._pool.execute_with_retries(
             f"""
             DECLARE $workflow_id AS Utf8;
             DECLARE $stage AS Utf8;
             DECLARE $now AS Utf8;
-            SELECT * FROM `{self._actions_table}`
-            WHERE workflow_id = $workflow_id
-              AND stage = $stage
-              AND (status = 'PENDING' OR (status = 'RUNNING' AND lease_until <= $now))
-            ORDER BY sequence, action_id
+            SELECT candidate.*
+            FROM `{self._actions_table}` AS candidate
+            WHERE candidate.workflow_id = $workflow_id
+              AND candidate.stage = $stage
+              AND (
+                    candidate.status = 'PENDING'
+                    OR (candidate.status = 'RUNNING' AND candidate.lease_until <= $now)
+                  )
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM `{self._actions_table}` AS active
+                    WHERE active.workflow_id = $workflow_id
+                      AND active.stage = $stage
+                      AND active.status = 'RUNNING'
+                      AND active.lease_until > $now
+                  )
+            ORDER BY candidate.sequence, candidate.action_id
             LIMIT 1;
             """,
             {
@@ -254,7 +309,11 @@ class YdbOrchestrationStore(OrchestrationStore):
             retry_settings=ydb.RetrySettings(idempotent=True),
         )
         claimed = self._get_action(candidate.action_id)
-        if claimed is None or claimed.status != ActionStatus.RUNNING or claimed.lease_owner != worker_id:
+        if (
+            claimed is None
+            or claimed.status != ActionStatus.RUNNING
+            or claimed.lease_owner != worker_id
+        ):
             return None
         return claimed
 
@@ -335,7 +394,13 @@ class YdbOrchestrationStore(OrchestrationStore):
 
 
 def _json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
 
 
 def _safe_table_name(value: str) -> str:
@@ -411,19 +476,19 @@ def _action_from_row(row: object) -> WorkflowAction:
     )
 
 
-def _action_params(action: WorkflowAction) -> dict[str, object]:
+def _action_row(action: WorkflowAction) -> dict[str, object]:
     return {
-        "$action_id": _utf8(action.action_id),
-        "$workflow_id": _utf8(action.workflow_id),
-        "$stage": _utf8(action.stage.value),
-        "$kind": _utf8(action.kind),
-        "$sequence": _uint64(action.sequence),
-        "$payload_json": _utf8(_json(action.payload)),
-        "$status": _utf8(action.status.value),
-        "$attempt": _uint64(action.attempt),
-        "$max_attempts": _uint64(action.max_attempts),
-        "$lease_owner": _utf8(action.lease_owner or ""),
-        "$lease_until": _utf8(action.lease_until or ""),
-        "$evidence_json": _utf8(_json(action.evidence)),
-        "$last_error": _utf8(action.last_error or ""),
+        "action_id": action.action_id,
+        "workflow_id": action.workflow_id,
+        "stage": action.stage.value,
+        "kind": action.kind,
+        "sequence": action.sequence,
+        "payload_json": _json(action.payload),
+        "status": action.status.value,
+        "attempt": action.attempt,
+        "max_attempts": action.max_attempts,
+        "lease_owner": action.lease_owner or "",
+        "lease_until": action.lease_until or "",
+        "evidence_json": _json(action.evidence),
+        "last_error": action.last_error or "",
     }
