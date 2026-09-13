@@ -10,12 +10,21 @@ from scripts.run_authorized_ydb_model_pipeline_token import (
 )
 
 
-def test_pipeline_token_wrapper_injects_token_into_prepare(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "script_name",
+    [
+        "run_authorized_ydb_prepare_validation.py",
+        "run_authorized_ydb_prepare_validation_runtime.py",
+    ],
+)
+def test_pipeline_token_wrapper_injects_token_into_prepare(
+    tmp_path: Path, script_name: str
+) -> None:
     token_file = tmp_path / "token"
     token_file.write_text("iam-token", encoding="utf-8")
     command = [
         "python",
-        "/repo/scripts/run_authorized_ydb_prepare_validation.py",
+        f"/repo/scripts/{script_name}",
         "--connection-string",
         "grpcs://example.invalid/db",
     ]
@@ -27,14 +36,21 @@ def test_pipeline_token_wrapper_injects_token_into_prepare(tmp_path: Path) -> No
     assert command[-1] == "grpcs://example.invalid/db"
 
 
+@pytest.mark.parametrize(
+    "script_name",
+    [
+        "run_authorized_ydb_validation.py",
+        "run_authorized_ydb_validation_runtime.py",
+    ],
+)
 def test_pipeline_token_wrapper_routes_validation_through_token_wrapper(
-    tmp_path: Path,
+    tmp_path: Path, script_name: str
 ) -> None:
     token_file = tmp_path / "token"
     token_file.write_text("iam-token", encoding="utf-8")
     command = [
         "python",
-        "/repo/scripts/run_authorized_ydb_validation.py",
+        f"/repo/scripts/{script_name}",
         "--connection-string",
         "grpcs://example.invalid/db",
         "--open-holdout",
@@ -50,7 +66,7 @@ def test_pipeline_token_wrapper_routes_validation_through_token_wrapper(
 def test_pipeline_token_wrapper_does_not_duplicate_existing_token_file() -> None:
     command = [
         "python",
-        "/repo/scripts/run_authorized_ydb_prepare_validation.py",
+        "/repo/scripts/run_authorized_ydb_prepare_validation_runtime.py",
         "--token-file",
         "/tmp/token",
     ]
