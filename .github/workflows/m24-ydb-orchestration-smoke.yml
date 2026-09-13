@@ -1,0 +1,135 @@
+name: M24 Real YDB Orchestration Smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m24-ydb-orchestration-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: m24-real-ydb-orchestration-smoke
+  cancel-in-progress: false
+
+env:
+  APP_SHA: 835acc81194ea85840b3c1bb81e475722df2fe6e
+  OIDC_AUDIENCE: https://github.com/alexpmtk-afk
+  HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
+  EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
+  YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
+
+jobs:
+  real-ydb-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Mint Yandex IAM token through GitHub OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "refs/heads/main" ]] || { echo "Refusing YDB smoke outside main" >&2; exit 1; }
+          ENCODED_AUDIENCE="$(python -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["OIDC_AUDIENCE"], safe=""))')"
+          SEP='?'; [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] && SEP='&'
+          OIDC_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${SEP}audience=${ENCODED_AUDIENCE}")"
+          OIDC_JWT="$(python -c 'import json,sys; print(json.load(sys.stdin).get("value", ""))' <<< "$OIDC_RESPONSE")"
+          test -n "$OIDC_JWT"
+          echo "::add-mask::$OIDC_JWT"
+          python - "$OIDC_JWT" <<'PY'
+          import base64, json, os, sys
+          payload=sys.argv[1].split('.')[1]
+          payload += '=' * (-len(payload) % 4)
+          claims=json.loads(base64.urlsafe_b64decode(payload))
+          assert claims.get('sub') == os.environ['EXPECTED_OIDC_SUBJECT'], claims.get('sub')
+          assert claims.get('aud') == os.environ['OIDC_AUDIENCE'], claims.get('aud')
+          assert claims.get('ref') == 'refs/heads/main', claims.get('ref')
+          print('M24_YDB_OIDC_CLAIMS=PASS')
+          PY
+          TOKEN_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -X POST 'https://auth.yandex.cloud/oauth/token' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+            --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
+            --data-urlencode "audience=${HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID}" \
+            --data-urlencode "subject_token=${OIDC_JWT}" \
+            --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
+          IAM_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("access_token", ""))' <<< "$TOKEN_RESPONSE")"
+          test -n "$IAM_TOKEN"
+          echo "::add-mask::$IAM_TOKEN"
+          printf '%s' "$IAM_TOKEN" > "$RUNNER_TEMP/yandex-iam-token"
+          chmod 600 "$RUNNER_TEMP/yandex-iam-token"
+          echo 'M24_YDB_OIDC_TOKEN_EXCHANGE=PASS'
+
+      - name: Checkout exact M24 source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: alexpmtk-afk/birzha-mcp-forecast
+          ref: ${{ env.APP_SHA }}
+          path: app
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify exact M24 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C app rev-parse HEAD)" = "$APP_SHA"
+          echo "M24_APP_SOURCE_SHA=PASS $APP_SHA"
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Install exact M24 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -e ./app
+
+      - name: Create durable checkpoint in real YDB
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd app
+          python scripts/run_ydb_orchestration_smoke.py \
+            --connection-string "$YDB_CONNECTION_STRING" \
+            --token-file "$RUNNER_TEMP/yandex-iam-token" \
+            --prefix "m24_smoke_${GITHUB_RUN_ID}" \
+            --phase create
+
+      - name: Resume checkpoint in a new Python process
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd app
+          python scripts/run_ydb_orchestration_smoke.py \
+            --connection-string "$YDB_CONNECTION_STRING" \
+            --token-file "$RUNNER_TEMP/yandex-iam-token" \
+            --prefix "m24_smoke_${GITHUB_RUN_ID}" \
+            --phase resume
+
+      - name: Cleanup temporary YDB smoke tables
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$RUNNER_TEMP/yandex-iam-token" && -d app ]]; then
+            cd app
+            python scripts/run_ydb_orchestration_smoke.py \
+              --connection-string "$YDB_CONNECTION_STRING" \
+              --token-file "$RUNNER_TEMP/yandex-iam-token" \
+              --prefix "m24_smoke_${GITHUB_RUN_ID}" \
+              --phase cleanup
+          else
+            echo 'M24_YDB_CLEANUP=SKIPPED_NO_TOKEN_OR_SOURCE'
+          fi
+
+      - name: Cleanup ephemeral IAM token
+        if: always()
+        shell: bash
+        run: rm -f "$RUNNER_TEMP/yandex-iam-token"
