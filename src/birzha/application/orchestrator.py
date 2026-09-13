@@ -32,6 +32,7 @@ STAGE_ORDER = (
     WorkflowStage.HOLDOUT_APPROVAL,
     WorkflowStage.HOLDOUT_EVALUATION,
     WorkflowStage.PROMOTION_APPROVAL,
+    WorkflowStage.PROMOTION,
     WorkflowStage.TEST_DEPLOYMENT,
     WorkflowStage.E2E_VERIFICATION,
     WorkflowStage.COMPLETE,
@@ -307,6 +308,11 @@ def _core_actions(
             WorkflowStage.HOLDOUT_EVALUATION,
             "ONE_SHOT_HOLDOUT",
             {"requires_fingerprints": True, "single_use": True},
+        ),
+        (
+            WorkflowStage.PROMOTION,
+            "PROMOTE_ACCEPTED_SOURCE",
+            {"immutable_source_required": True, "requires_green_checks": True},
         ),
         (
             WorkflowStage.TEST_DEPLOYMENT,
