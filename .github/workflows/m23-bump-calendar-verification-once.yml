@@ -1,0 +1,50 @@
+name: M23 Bump Calendar Verification Once
+
+on:
+  push:
+    branches:
+      - m23-ydb-model-validation
+    paths:
+      - .github/workflows/m23-bump-calendar-verification-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: m23-ydb-model-validation
+          fetch-depth: 0
+      - name: Bump verification generations after calendar semantic fix
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("src/birzha/application/historical_data.py")
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              'D1_SESSION_VERIFICATION_VERSION = "D1_SESSION_V1"': 'D1_SESSION_VERIFICATION_VERSION = "D1_SESSION_V2_ACTIVITY"',
+              'H1_FULL_VERIFICATION_VERSION = "H1_FULL_V1"': 'H1_FULL_VERIFICATION_VERSION = "H1_FULL_V2_ACTIVITY"',
+              'M15_FULL_VERIFICATION_VERSION = "M15_FULL_V1"': 'M15_FULL_VERIFICATION_VERSION = "M15_FULL_V2_ACTIVITY"',
+              'CONTRACT_WARMUP_VERIFICATION_VERSION = "CONTRACT_WARMUP_V1"': 'CONTRACT_WARMUP_VERIFICATION_VERSION = "CONTRACT_WARMUP_V2_ACTIVITY"',
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one occurrence of {old!r}, got {count}")
+              text = text.replace(old, new)
+          path.write_text(text, encoding="utf-8")
+      - name: Verify only intended generation constants changed
+        run: |
+          grep -E '^(D1_SESSION|H1_FULL|M15_FULL|CONTRACT_WARMUP)_VERIFICATION_VERSION' src/birzha/application/historical_data.py
+          git diff --check
+          git diff -- src/birzha/application/historical_data.py
+      - name: Commit generation bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/birzha/application/historical_data.py
+          git commit -m "m23: invalidate pre-activity calendar verification"
+          git push origin HEAD:m23-ydb-model-validation
