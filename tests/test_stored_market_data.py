@@ -4,7 +4,10 @@ from types import SimpleNamespace
 import pytest
 
 from birzha.application.historical_data import HistoricalDataService, _verification_symbol
-from birzha.application.stored_market_data import StoredMarketDataView
+from birzha.application.stored_market_data import (
+    DailyHistoryInitializationRequiredError,
+    StoredMarketDataView,
+)
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
@@ -86,6 +89,18 @@ class LiveIntradayBase(Base):
         )
 
 
+class SpyHistory:
+    def __init__(self, store):
+        self.store = store
+        self.sync_calls = []
+
+    def sync(self, symbol, *, timeframe, from_date, till_date):
+        self.sync_calls.append((symbol, timeframe, from_date, till_date))
+
+    def load_exact(self, instrument, *, timeframe, from_date, till_date):
+        return self.store.read(instrument, timeframe, from_date, till_date)
+
+
 def _d1(instrument: Instrument, trade_date: str) -> CandleSeries:
     return CandleSeries(
         instrument,
@@ -137,6 +152,40 @@ def test_intraday_bypasses_durable_store_and_uses_live_base(timeframe: str):
     assert series.source == "LIVE_TEST"
     assert base.calls == [("SBER", timeframe, "2026-09-01", "2026-09-02")]
     assert store.coverage("SBER", timeframe).count == 0
+    store.close()
+
+
+def test_operational_analysis_refuses_to_invent_empty_d1_archive_start():
+    store = DuckDBHistoricalCandleStore(":memory:")
+    history = SpyHistory(store)
+    view = StoredMarketDataView(Base(), history, ensure_daily_history=True)  # type: ignore[arg-type]
+
+    with pytest.raises(DailyHistoryInitializationRequiredError, match="approved from_date"):
+        view.candles_for_instrument(
+            INST,
+            timeframe="D1",
+            from_date="2025-11-17",
+            till_date="2026-09-13",
+        )
+
+    assert history.sync_calls == []
+    store.close()
+
+
+def test_operational_analysis_extends_existing_d1_forward_without_backfilling_earlier():
+    store = DuckDBHistoricalCandleStore(":memory:")
+    store.upsert_series(_d1(INST, "2026-01-15"))
+    history = SpyHistory(store)
+    view = StoredMarketDataView(Base(), history, ensure_daily_history=True)  # type: ignore[arg-type]
+
+    view.candles_for_instrument(
+        INST,
+        timeframe="D1",
+        from_date="2025-11-17",
+        till_date="2026-09-13",
+    )
+
+    assert history.sync_calls == [("SBER", "D1", "2026-01-15", "2026-09-13")]
     store.close()
 
 
