@@ -11,6 +11,7 @@ from birzha.domain.orchestration import (
     WorkflowAction,
     WorkflowRun,
     WorkflowStage,
+    WorkflowStatus,
 )
 
 
@@ -19,6 +20,7 @@ class OrchestrationStore(Protocol):
 
     def create_workflow(self, run: WorkflowRun, actions: tuple[WorkflowAction, ...]) -> None: ...
     def get_workflow(self, workflow_id: str) -> WorkflowRun | None: ...
+    def list_workflows(self, *, active_only: bool = False, limit: int = 50) -> list[WorkflowRun]: ...
     def update_workflow(self, run: WorkflowRun) -> None: ...
     def list_actions(self, workflow_id: str, *, stage: WorkflowStage | None = None) -> list[WorkflowAction]: ...
     def claim_next(
@@ -65,6 +67,23 @@ class MemoryOrchestrationStore:
     def get_workflow(self, workflow_id: str) -> WorkflowRun | None:
         with self._lock:
             return self._runs.get(workflow_id)
+
+    def list_workflows(self, *, active_only: bool = False, limit: int = 50) -> list[WorkflowRun]:
+        if limit <= 0 or limit > 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self._lock:
+            items = list(self._runs.values())
+            if active_only:
+                items = [
+                    item
+                    for item in items
+                    if item.status in {WorkflowStatus.RUNNING, WorkflowStatus.WAITING_APPROVAL}
+                ]
+            return sorted(
+                items,
+                key=lambda item: (item.updated_at, item.workflow_id),
+                reverse=True,
+            )[:limit]
 
     def update_workflow(self, run: WorkflowRun) -> None:
         with self._lock:
