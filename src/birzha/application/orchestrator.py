@@ -58,6 +58,8 @@ class WorkflowOrchestrator:
     ) -> WorkflowRun:
         if not development_start < split_date < holdout_end:
             raise ValueError("expected development_start < split_date < holdout_end")
+        if not source_sha.strip():
+            raise ValueError("source_sha must be non-empty")
         now = _now()
         workflow_id = f"core-validation-{uuid4().hex}"
         metadata: dict[str, object] = {
@@ -86,6 +88,14 @@ class WorkflowOrchestrator:
         )
         self.store.create_workflow(run, actions)
         return run
+
+    def list(self, *, active_only: bool = False, limit: int = 50) -> dict[str, object]:
+        runs = self.store.list_workflows(active_only=active_only, limit=limit)
+        return {
+            "count": len(runs),
+            "active_only": active_only,
+            "workflows": [self.status(item.workflow_id) for item in runs],
+        }
 
     def status(self, workflow_id: str) -> dict[str, object]:
         run = self._require(workflow_id)
