@@ -47,6 +47,7 @@ class Settings:
     ydb_connection_string: str | None = None
     require_mcp_auth: bool = False
     mcp_bearer_token: str | None = None
+    source_sha: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -62,6 +63,13 @@ class Settings:
         if require_auth and not bearer_token:
             raise ValueError("BIRZHA_MCP_BEARER_TOKEN is required when BIRZHA_REQUIRE_MCP_AUTH=true")
 
+        source_sha = (os.getenv("BIRZHA_SOURCE_SHA") or "").strip() or None
+        if source_sha is not None and (
+            len(source_sha) != 40
+            or any(char not in "0123456789abcdefABCDEF" for char in source_sha)
+        ):
+            raise ValueError("BIRZHA_SOURCE_SHA must be a full 40-character Git commit SHA")
+
         return cls(
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8080")),
@@ -73,4 +81,5 @@ class Settings:
             ydb_connection_string=ydb_connection,
             require_mcp_auth=require_auth,
             mcp_bearer_token=bearer_token,
+            source_sha=source_sha,
         )
