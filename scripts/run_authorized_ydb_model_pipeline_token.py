@@ -18,11 +18,17 @@ def _inject_token_file(command: list[str], *, token_file: str) -> list[str]:
         return list(command)
     target = Path(command[1]).name
     updated = list(command)
-    if target == "run_authorized_ydb_prepare_validation.py":
+    if target in {
+        "run_authorized_ydb_prepare_validation.py",
+        "run_authorized_ydb_prepare_validation_runtime.py",
+    }:
         if "--token-file" not in updated:
             updated.extend(["--token-file", token_file])
         return updated
-    if target == "run_authorized_ydb_validation.py":
+    if target in {
+        "run_authorized_ydb_validation.py",
+        "run_authorized_ydb_validation_runtime.py",
+    }:
         updated[1] = str(Path(command[1]).with_name("run_authorized_ydb_validation_token.py"))
         if "--token-file" not in updated:
             updated.extend(["--token-file", token_file])
@@ -35,7 +41,7 @@ def main() -> int:
         add_help=False,
         description=(
             "Inject an externally minted Yandex IAM token into the governed "
-            "YDB model pipeline without changing model/holdout semantics."
+            "D1-only YDB model pipeline without changing model/holdout semantics."
         ),
     )
     parser.add_argument("--token-file", required=True)
