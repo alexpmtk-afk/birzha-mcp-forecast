@@ -178,7 +178,9 @@ def test_retries_still_stretch_window_and_respect_attempt_pacing() -> None:
     assert len(results) == 9
     assert all(result.status_code == 200 for result in results)
     assert executor.total_requests_used == 18
-    assert clock.now >= 17 * policy.effective_min_interval_seconds
+    assert clock.now == pytest.approx(
+        17 * policy.effective_min_interval_seconds
+    )
 
 
 def test_large_command_continues_automatically_with_window_waits() -> None:
