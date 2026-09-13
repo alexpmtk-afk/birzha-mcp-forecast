@@ -38,16 +38,82 @@ def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, obje
     return payload
 
 
+def _quality_diagnostic(
+    validator: WalkForwardValidator,
+    *,
+    symbol: str,
+    as_of_date: str,
+) -> dict[str, object]:
+    """Capture why a mandatory price-quality gate failed without changing it."""
+    try:
+        snapshot = validator.forecasts.snapshots.build(symbol, as_of_date=as_of_date)
+        contract = snapshot.quality_contract
+        if contract is not None:
+            timeframes = [
+                {
+                    "timeframe": item.timeframe,
+                    "candles": item.candles,
+                    "minimum_required": item.minimum_required,
+                    "status": item.status,
+                    "latest_completed_end": item.latest_completed_end,
+                }
+                for item in contract.timeframes
+            ]
+            contract_status = contract.status
+            reasons = list(contract.reasons)
+        else:
+            timeframes = [
+                {"timeframe": "D1", "candles": snapshot.d1.candles, "minimum_required": 50},
+                {"timeframe": "H1", "candles": snapshot.h1.candles, "minimum_required": 50},
+                {"timeframe": "M15", "candles": snapshot.m15.candles, "minimum_required": 50},
+            ]
+            contract_status = snapshot.data_quality
+            reasons = list(snapshot.warnings)
+        payload: dict[str, object] = {
+            "symbol": symbol,
+            "as_of_date": as_of_date,
+            "secid": snapshot.secid,
+            "snapshot_as_of": snapshot.as_of,
+            "status": contract_status,
+            "timeframes": timeframes,
+            "reasons": reasons,
+        }
+    except Exception as exc:
+        payload = {
+            "symbol": symbol,
+            "as_of_date": as_of_date,
+            "status": "DIAGNOSTIC_ERROR",
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:1000],
+        }
+    print("MANDATORY_PRICE_QUALITY_DIAGNOSTIC=" + json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return payload
+
+
 def main() -> int:
     validator = WalkForwardValidator.default()
     gold_resolution = _gold_resolution_evidence(validator)
 
     reports: list[dict[str, object]] = []
+    quality_diagnostics: list[dict[str, object]] = []
     for case in CASES:
         report = validator.run(**case)
         payload = report.to_dict()
         reports.append(payload)
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+        for failure in payload.get("failures", []):
+            failure_text = str(failure)
+            if "mandatory_price_quality_incomplete" not in failure_text:
+                continue
+            failed_date = failure_text.split(":", 1)[0]
+            quality_diagnostics.append(
+                _quality_diagnostic(
+                    validator,
+                    symbol=str(case["symbol"]),
+                    as_of_date=failed_date,
+                )
+            )
 
     evidence = {
         "schema": "BIRZHA_MCP_REAL_MOEX_VALIDATION_V1",
@@ -55,6 +121,7 @@ def main() -> int:
         "quality_acceptance": False,
         "gold_resolution": gold_resolution,
         "reports": reports,
+        "quality_diagnostics": quality_diagnostics,
     }
     output = Path("artifacts/real_moex_validation.json")
     output.parent.mkdir(parents=True, exist_ok=True)
