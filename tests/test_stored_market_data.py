@@ -51,6 +51,41 @@ class NoLiveResolveBase(Base):
         raise AssertionError("stored validation must not use live market resolution")
 
 
+class LiveIntradayBase(Base):
+    def __init__(self):
+        self.calls = []
+
+    def candles_for_instrument(
+        self,
+        instrument,
+        *,
+        timeframe,
+        from_date,
+        till_date,
+        completed_only=True,
+        now=None,
+    ):
+        self.calls.append((instrument.secid, timeframe, from_date, till_date))
+        return CandleSeries(
+            instrument,
+            timeframe,
+            (
+                Candle(
+                    100,
+                    101,
+                    102,
+                    99,
+                    1000,
+                    10,
+                    f"{from_date}T10:00:00",
+                    f"{from_date}T10:59:59",
+                    True,
+                ),
+            ),
+            source="LIVE_TEST",
+        )
+
+
 def _d1(instrument: Instrument, trade_date: str) -> CandleSeries:
     return CandleSeries(
         instrument,
@@ -71,7 +106,7 @@ def _d1(instrument: Instrument, trade_date: str) -> CandleSeries:
     )
 
 
-def test_stored_view_reads_persisted_candles():
+def test_stored_view_reads_persisted_d1_candles():
     store = DuckDBHistoricalCandleStore(":memory:")
     store.upsert_series(_d1(INST, "2026-09-01"))
     history = HistoricalDataService(market_data=SimpleNamespace(), store=store)
@@ -82,6 +117,26 @@ def test_stored_view_reads_persisted_candles():
     assert series.count == 1
     assert series.candles[0].close == 101
     assert series.source == "HISTORICAL_STORE"
+    store.close()
+
+
+@pytest.mark.parametrize("timeframe", ["H1", "M15"])
+def test_intraday_bypasses_durable_store_and_uses_live_base(timeframe: str):
+    store = DuckDBHistoricalCandleStore(":memory:")
+    history = HistoricalDataService(market_data=SimpleNamespace(), store=store)
+    base = LiveIntradayBase()
+    view = StoredMarketDataView(base, history)
+
+    series = view.candles_for_instrument(
+        INST,
+        timeframe=timeframe,
+        from_date="2026-09-01",
+        till_date="2026-09-02",
+    )
+
+    assert series.source == "LIVE_TEST"
+    assert base.calls == [("SBER", timeframe, "2026-09-01", "2026-09-02")]
+    assert store.coverage("SBER", timeframe).count == 0
     store.close()
 
 
