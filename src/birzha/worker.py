@@ -27,8 +27,8 @@ from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.config import Settings
 from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_orchestration_store import YdbOrchestrationStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_runtime_orchestration_store import YdbRuntimeOrchestrationStore
 from birzha.storage.ydb_state import YdbRuntime
 from birzha.version import SERVICE_NAME, VERSION
 
@@ -52,7 +52,7 @@ _history = HistoricalDataService(
     market_data=_market,
     store=YdbHistoricalCandleStore(_runtime.pool),
 )
-_orchestrator = WorkflowOrchestrator(YdbOrchestrationStore(_runtime.pool))
+_orchestrator = WorkflowOrchestrator(YdbRuntimeOrchestrationStore(_runtime.pool))
 _worker = OrchestrationWorker(orchestrator=_orchestrator, history=_history)
 
 
