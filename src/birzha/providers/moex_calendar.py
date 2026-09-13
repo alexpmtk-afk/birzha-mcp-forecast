@@ -8,14 +8,17 @@ from birzha.providers.moex_iss import MoexIssClient, MoexIssError
 
 
 MAX_CALENDAR_PAGES = 100
+ACTIVITY_COLUMNS = ("NUMTRADES", "VOLUME", "VALUE")
 
 
 class MoexTradingCalendar:
     """Return actual trading dates from exact-security MOEX history rows.
 
-    A row in the official history endpoint is direct evidence that the security
-    traded on that date. This avoids inferring sessions from weekdays and avoids
-    treating the ``/dates`` history-availability range as a session calendar.
+    MOEX history can contain placeholder/zero-activity rows on dates when the
+    security did not actually trade.  Such a row is not sufficient evidence of
+    a trading session: when activity fields are present we require positive
+    NUMTRADES, VOLUME or VALUE.  This keeps the expected-session calendar aligned
+    with the candle endpoint and prevents false missing-candle failures.
     """
 
     def __init__(self, client: MoexIssClient) -> None:
@@ -43,7 +46,7 @@ class MoexTradingCalendar:
         base_params = {
             "iss.meta": "off",
             "iss.only": "history,history.cursor",
-            "history.columns": "TRADEDATE",
+            "history.columns": "TRADEDATE,NUMTRADES,VOLUME,VALUE",
             "from": from_date.isoformat(),
             "till": till_date.isoformat(),
         }
@@ -65,6 +68,8 @@ class MoexTradingCalendar:
                 seen_pages.add(signature)
 
             for row in page:
+                if not _has_trading_activity(row):
+                    continue
                 raw = row.get("TRADEDATE") or row.get("tradedate")
                 if not raw:
                     continue
@@ -109,6 +114,28 @@ class MoexTradingCalendar:
             f"MOEX history calendar pagination exceeded safe "
             f"max_pages={MAX_CALENDAR_PAGES} for {security}"
         )
+
+
+def _has_trading_activity(row: dict[str, object]) -> bool:
+    """Return whether a MOEX history row proves an actual trading session.
+
+    Older unit-test doubles may expose only TRADEDATE.  Absence of all activity
+    columns therefore retains legacy row-as-session behaviour for compatibility.
+    Real MOEX rows requested by this provider include the activity columns; when
+    present, all-null/all-zero activity is treated as a non-session.
+    """
+    present = False
+    for key in ACTIVITY_COLUMNS:
+        candidates = (key, key.lower())
+        if any(candidate in row for candidate in candidates):
+            present = True
+        value = next((row[candidate] for candidate in candidates if candidate in row), None)
+        try:
+            if value is not None and float(value) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return not present
 
 
 def _page_signature(page: list[dict[str, object]]) -> tuple[int, str, str]:
