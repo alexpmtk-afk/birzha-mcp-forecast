@@ -89,6 +89,16 @@ class MemoryOrchestrationStore:
         lease_until: str,
     ) -> WorkflowAction | None:
         with self._lock:
+            active = any(
+                item.workflow_id == workflow_id
+                and item.stage == stage
+                and item.status == ActionStatus.RUNNING
+                and item.lease_until is not None
+                and item.lease_until > now
+                for item in self._actions.values()
+            )
+            if active:
+                return None
             candidates = sorted(
                 (
                     item
