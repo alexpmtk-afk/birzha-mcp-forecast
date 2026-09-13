@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, m22-gold-futures-root, m23-ydb-model-validation]
 
 permissions:
   contents: read
