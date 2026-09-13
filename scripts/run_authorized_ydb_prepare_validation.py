@@ -19,9 +19,11 @@ from birzha.application.validation_readiness import (
     required_price_ranges,
 )
 from birzha.providers.moex_analytics import MoexAnalyticsClient
-from birzha.storage.ydb_historical_flow_store import YdbHistoricalFlowStore
-from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_runtime_storage import (
+    YdbRuntimeHistoricalCandleStore,
+    YdbRuntimeHistoricalFlowStore,
+    YdbRuntimeSlotPacingGate,
+)
 
 
 RETRY_DELAYS = (0, 5, 15)
@@ -116,7 +118,10 @@ def _flow_warnings(symbol: str, payload: dict[str, object]) -> list[dict[str, ob
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Prepare exactly the durable D1 YDB history required by six-market validation"
+        description=(
+            "Prepare exactly the durable completed-D1 YDB history required by "
+            "six-market validation; H1/M15 are never persisted here"
+        )
     )
     parser.add_argument("--connection-string", required=True)
     parser.add_argument(
@@ -149,7 +154,7 @@ def main() -> int:
     pool = ydb.QuerySessionPool(driver)
     try:
         control = ProcessUpstreamControlPlane(
-            gate_factory=lambda provider_key: YdbSlotPacingGate(
+            gate_factory=lambda provider_key: YdbRuntimeSlotPacingGate(
                 pool, provider_key=provider_key
             ),
             require_distributed_gate=True,
@@ -157,7 +162,7 @@ def main() -> int:
         market = MarketDataService.default(control_plane=control)
         history = HistoricalDataService(
             market_data=market,
-            store=YdbHistoricalCandleStore(pool),
+            store=YdbRuntimeHistoricalCandleStore(pool),
         )
 
         operations: list[dict[str, object]] = []
@@ -227,7 +232,7 @@ def main() -> int:
         flow_history = HistoricalFlowDataService(
             market_data=market,
             analytics=analytics,
-            store=YdbHistoricalFlowStore(pool),
+            store=YdbRuntimeHistoricalFlowStore(pool),
         )
         flow_from = (
             date.fromisoformat(args.validation_start) - timedelta(days=10)
