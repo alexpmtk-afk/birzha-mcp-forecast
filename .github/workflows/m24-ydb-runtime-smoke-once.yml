@@ -20,7 +20,6 @@ env:
   HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
   YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
-  PREVIOUS_PREFIX: m24runtime_34761251579
 
 jobs:
   real-ydb-smoke:
@@ -78,21 +77,9 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -e ./app
 
-      - name: Allow schema operations to settle
+      - name: Allow YDB schema quota to settle before test
         shell: bash
-        run: sleep 90
-
-      - name: Remove leftovers from first verification run
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd app
-          python scripts/run_ydb_orchestration_smoke.py \
-            --connection-string "$YDB_CONNECTION_STRING" \
-            --token-file "$RUNNER_TEMP/yandex-iam-token" \
-            --prefix "$PREVIOUS_PREFIX" \
-            --phase cleanup
-          echo 'M24_PREVIOUS_SMOKE_CLEANUP=PASS'
+        run: sleep 120
 
       - name: Bootstrap temporary orchestration schema and checkpoint
         shell: bash
@@ -106,6 +93,7 @@ jobs:
             --token-file "$RUNNER_TEMP/yandex-iam-token" \
             --prefix "$PREFIX" \
             --phase create
+          touch "$RUNNER_TEMP/m24-schema-created"
 
       - name: Restart process and prove runtime uses existing schema without DDL
         shell: bash
@@ -119,17 +107,17 @@ jobs:
             --prefix "$PREFIX" \
             --phase resume
 
-      - name: Allow schema operations to settle before cleanup
+      - name: Allow YDB schema quota to settle before cleanup
         if: always()
         shell: bash
-        run: sleep 90
+        run: sleep 120
 
       - name: Cleanup temporary YDB schema
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -f "$RUNNER_TEMP/m24-prefix" && -f "$RUNNER_TEMP/yandex-iam-token" ]]; then
+          if [[ -f "$RUNNER_TEMP/m24-schema-created" && -f "$RUNNER_TEMP/m24-prefix" && -f "$RUNNER_TEMP/yandex-iam-token" ]]; then
             PREFIX="$(cat "$RUNNER_TEMP/m24-prefix")"
             cd app
             python scripts/run_ydb_orchestration_smoke.py \
@@ -137,9 +125,11 @@ jobs:
               --token-file "$RUNNER_TEMP/yandex-iam-token" \
               --prefix "$PREFIX" \
               --phase cleanup
+          else
+            echo 'M24_YDB_SMOKE_CLEANUP=SKIPPED_NO_COMPLETE_SCHEMA'
           fi
 
       - name: Cleanup ephemeral credentials
         if: always()
         shell: bash
-        run: rm -f "$RUNNER_TEMP/yandex-iam-token" "$RUNNER_TEMP/m24-prefix"
+        run: rm -f "$RUNNER_TEMP/yandex-iam-token" "$RUNNER_TEMP/m24-prefix" "$RUNNER_TEMP/m24-schema-created"
