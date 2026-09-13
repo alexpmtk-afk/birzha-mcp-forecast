@@ -10,12 +10,22 @@ class Response:
     def json(self):
         return {
             "history": {
-                "columns": ["TRADEDATE", "NUMTRADES", "VOLUME", "VALUE"],
+                "columns": [
+                    "TRADEDATE",
+                    "NUMTRADES",
+                    "VOLUME",
+                    "VALUE",
+                    "OPEN",
+                    "CLOSE",
+                    "HIGH",
+                    "LOW",
+                    "WAPRICE",
+                ],
                 "data": [
-                    ["2026-01-05", 10, 100, 1000],
-                    ["2026-01-06", 5, 50, 500],
-                    ["2026-01-08", 1, 10, 100],
-                    ["2026-01-09", 2, 20, 200],
+                    ["2026-01-05", 10, 100, 1000, 100, 101, 102, 99, 100.5],
+                    ["2026-01-06", 5, 50, 500, 101, 102, 103, 100, 101.5],
+                    ["2026-01-08", 1, 10, 100, 102, 103, 104, 101, 102.5],
+                    ["2026-01-09", 2, 20, 200, 103, 104, 105, 102, 103.5],
                 ],
             }
         }
@@ -29,7 +39,9 @@ class Client:
         )
         assert params["from"] == "2026-01-01"
         assert params["till"] == "2026-01-10"
-        assert params["history.columns"] == "TRADEDATE,NUMTRADES,VOLUME,VALUE"
+        assert params["history.columns"] == (
+            "TRADEDATE,NUMTRADES,VOLUME,VALUE,OPEN,CLOSE,HIGH,LOW,WAPRICE"
+        )
         return Response()
 
     @staticmethod
@@ -96,6 +108,54 @@ def test_calendar_excludes_zero_activity_history_rows():
     )
 
     assert days == (date(2022, 1, 6), date(2022, 3, 24))
+
+
+class _ActivityWithoutPriceResponse:
+    def json(self):
+        return {
+            "history": {
+                "columns": [
+                    "TRADEDATE",
+                    "NUMTRADES",
+                    "VOLUME",
+                    "VALUE",
+                    "OPEN",
+                    "CLOSE",
+                    "HIGH",
+                    "LOW",
+                    "WAPRICE",
+                ],
+                "data": [
+                    ["2019-06-25", 1, 5, 196159.65, None, None, None, None, 0.0],
+                    ["2019-06-27", 1, 1, 40089.27, 63.53, 63.53, 63.53, 63.53, 63.53],
+                ],
+            }
+        }
+
+
+class _ActivityWithoutPriceClient:
+    def _request(self, path, params):
+        return _ActivityWithoutPriceResponse()
+
+    @staticmethod
+    def _table(payload, name):
+        if name not in payload:
+            return []
+        table = payload[name]
+        return [dict(zip(table["columns"], row)) for row in table["data"]]
+
+
+def test_calendar_excludes_activity_rows_without_usable_price():
+    days = MoexTradingCalendar(_ActivityWithoutPriceClient()).dates(
+        engine="futures",
+        market="forts",
+        board="RFUD",
+        security="BRJ0",
+        from_date=date(2019, 6, 24),
+        till_date=date(2019, 6, 28),
+    )
+
+    assert days == (date(2019, 6, 27),)
 
 
 class _LegacyDateOnlyResponse:

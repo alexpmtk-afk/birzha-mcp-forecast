@@ -1,7 +1,8 @@
-"""Official MOEX ISS trading-session calendar provider."""
+"""Official MOEX ISS price-session calendar provider."""
 
 from __future__ import annotations
 
+import math
 from datetime import date
 
 from birzha.providers.moex_iss import MoexIssClient, MoexIssError
@@ -9,16 +10,20 @@ from birzha.providers.moex_iss import MoexIssClient, MoexIssError
 
 MAX_CALENDAR_PAGES = 100
 ACTIVITY_COLUMNS = ("NUMTRADES", "VOLUME", "VALUE")
+PRICE_COLUMNS = ("OPEN", "CLOSE", "HIGH", "LOW", "WAPRICE")
 
 
 class MoexTradingCalendar:
-    """Return actual trading dates from exact-security MOEX history rows.
+    """Return price-bearing trading dates from exact-security MOEX history rows.
 
     MOEX history can contain placeholder/zero-activity rows on dates when the
-    security did not actually trade.  Such a row is not sufficient evidence of
-    a trading session: when activity fields are present we require positive
-    NUMTRADES, VOLUME or VALUE.  This keeps the expected-session calendar aligned
-    with the candle endpoint and prevents false missing-candle failures.
+    security did not actually trade.  It can also contain rare rows with
+    positive activity but no usable price and no candle at any interval.  Such
+    rows cannot support price history and must not become expected candle dates.
+
+    Real provider rows therefore require both positive trading activity and at
+    least one positive finite price.  Legacy unit-test doubles that omit the
+    corresponding column group retain row-as-session compatibility.
     """
 
     def __init__(self, client: MoexIssClient) -> None:
@@ -46,7 +51,9 @@ class MoexTradingCalendar:
         base_params = {
             "iss.meta": "off",
             "iss.only": "history,history.cursor",
-            "history.columns": "TRADEDATE,NUMTRADES,VOLUME,VALUE",
+            "history.columns": (
+                "TRADEDATE,NUMTRADES,VOLUME,VALUE,OPEN,CLOSE,HIGH,LOW,WAPRICE"
+            ),
             "from": from_date.isoformat(),
             "till": till_date.isoformat(),
         }
@@ -68,7 +75,7 @@ class MoexTradingCalendar:
                 seen_pages.add(signature)
 
             for row in page:
-                if not _has_trading_activity(row):
+                if not _has_trading_activity(row) or not _has_usable_price(row):
                     continue
                 raw = row.get("TRADEDATE") or row.get("tradedate")
                 if not raw:
@@ -117,13 +124,7 @@ class MoexTradingCalendar:
 
 
 def _has_trading_activity(row: dict[str, object]) -> bool:
-    """Return whether a MOEX history row proves an actual trading session.
-
-    Older unit-test doubles may expose only TRADEDATE.  Absence of all activity
-    columns therefore retains legacy row-as-session behaviour for compatibility.
-    Real MOEX rows requested by this provider include the activity columns; when
-    present, all-null/all-zero activity is treated as a non-session.
-    """
+    """Return whether a MOEX history row proves actual trading activity."""
     present = False
     for key in ACTIVITY_COLUMNS:
         candidates = (key, key.lower())
@@ -135,6 +136,29 @@ def _has_trading_activity(row: dict[str, object]) -> bool:
                 return True
         except (TypeError, ValueError):
             continue
+    return not present
+
+
+def _has_usable_price(row: dict[str, object]) -> bool:
+    """Return whether a history row can support a real price candle.
+
+    The BRJ0 2019-06-25 anomaly is the motivating case: MOEX reports one trade,
+    volume and value, while OPEN/CLOSE/HIGH/LOW are null, WAPRICE is zero and
+    D1/H1/M1 candle endpoints all return no rows.  Treating that row as an
+    expected price session would force fabrication or a permanent false gap.
+    """
+    present = False
+    for key in PRICE_COLUMNS:
+        candidates = (key, key.lower())
+        if any(candidate in row for candidate in candidates):
+            present = True
+        value = next((row[candidate] for candidate in candidates if candidate in row), None)
+        try:
+            numeric = float(value) if value is not None else None
+        except (TypeError, ValueError):
+            continue
+        if numeric is not None and math.isfinite(numeric) and numeric > 0:
+            return True
     return not present
 
 
