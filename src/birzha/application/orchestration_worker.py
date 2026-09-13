@@ -76,13 +76,22 @@ class OrchestrationWorker:
         try:
             evidence = self._execute(action)
         except Exception as exc:
-            workflow = self.orchestrator.complete_action(
-                workflow_id,
-                action.action_id,
-                passed=False,
-                evidence={"action_kind": action.kind, "error_type": type(exc).__name__},
-                error=f"{type(exc).__name__}:{exc}",
-            )
+            try:
+                workflow = self.orchestrator.complete_action(
+                    workflow_id,
+                    action.action_id,
+                    worker_id=worker_id,
+                    passed=False,
+                    evidence={"action_kind": action.kind, "error_type": type(exc).__name__},
+                    error=f"{type(exc).__name__}:{exc}",
+                )
+            except RuntimeError:
+                return {
+                    "worker_status": "STALE_LEASE",
+                    "action_id": action.action_id,
+                    "action_kind": action.kind,
+                    "workflow": self.orchestrator.status(workflow_id),
+                }
             return {
                 "worker_status": "ACTION_ERROR",
                 "action_id": action.action_id,
@@ -90,12 +99,21 @@ class OrchestrationWorker:
                 "workflow": workflow,
             }
 
-        workflow = self.orchestrator.complete_action(
-            workflow_id,
-            action.action_id,
-            passed=True,
-            evidence=evidence,
-        )
+        try:
+            workflow = self.orchestrator.complete_action(
+                workflow_id,
+                action.action_id,
+                worker_id=worker_id,
+                passed=True,
+                evidence=evidence,
+            )
+        except RuntimeError:
+            return {
+                "worker_status": "STALE_LEASE",
+                "action_id": action.action_id,
+                "action_kind": action.kind,
+                "workflow": self.orchestrator.status(workflow_id),
+            }
         return {
             "worker_status": "ACTION_PASS",
             "action_id": action.action_id,

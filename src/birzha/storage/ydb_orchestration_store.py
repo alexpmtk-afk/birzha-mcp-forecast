@@ -243,11 +243,37 @@ class YdbOrchestrationStore(OrchestrationStore):
         now: str,
         lease_until: str,
     ) -> WorkflowAction | None:
+        # A crashed worker consumes an attempt at claim time. If its last
+        # allowed lease expires, fail the action instead of reclaiming it
+        # forever. This update is safe to repeat.
+        self._pool.execute_with_retries(
+            f"""
+            DECLARE $workflow_id AS Utf8;
+            DECLARE $stage AS Utf8;
+            DECLARE $now AS Utf8;
+            UPDATE `{self._actions_table}`
+            SET status = 'FAILED',
+                lease_owner = '',
+                lease_until = '',
+                last_error = 'lease expired after maximum attempts'
+            WHERE workflow_id = $workflow_id
+              AND stage = $stage
+              AND status = 'RUNNING'
+              AND lease_until <= $now
+              AND attempt >= max_attempts;
+            """,
+            {
+                "$workflow_id": _utf8(workflow_id),
+                "$stage": _utf8(stage.value),
+                "$now": _utf8(now),
+            },
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+
         # The NOT EXISTS guard prevents a later invocation from selecting the
         # next PENDING action while a prior action in this stage still owns a
         # live lease. Concurrent readers may still see the same first candidate;
-        # the conditional UPDATE below then permits only the owner that survives
-        # the compare-and-set condition to proceed.
+        # the conditional UPDATE below permits only the winning lease owner.
         result = self._pool.execute_with_retries(
             f"""
             DECLARE $workflow_id AS Utf8;
@@ -257,6 +283,7 @@ class YdbOrchestrationStore(OrchestrationStore):
             FROM `{self._actions_table}` AS candidate
             WHERE candidate.workflow_id = $workflow_id
               AND candidate.stage = $stage
+              AND candidate.attempt < candidate.max_attempts
               AND (
                     candidate.status = 'PENDING'
                     OR (candidate.status = 'RUNNING' AND candidate.lease_until <= $now)
@@ -297,6 +324,7 @@ class YdbOrchestrationStore(OrchestrationStore):
                 lease_until = $lease_until,
                 last_error = ''
             WHERE action_id = $action_id
+              AND attempt < max_attempts
               AND (status = 'PENDING' OR (status = 'RUNNING' AND lease_until <= $now));
             """,
             {
@@ -321,6 +349,7 @@ class YdbOrchestrationStore(OrchestrationStore):
         self,
         action_id: str,
         *,
+        worker_id: str,
         status: ActionStatus,
         evidence: dict[str, object] | None = None,
         last_error: str | None = None,
@@ -332,9 +361,12 @@ class YdbOrchestrationStore(OrchestrationStore):
             raise KeyError(action_id)
         if current.status != ActionStatus.RUNNING:
             raise RuntimeError(f"action is not RUNNING: {action_id}")
+        if current.lease_owner != worker_id:
+            raise RuntimeError(f"action lease ownership lost: {action_id}")
         self._pool.execute_with_retries(
             f"""
             DECLARE $action_id AS Utf8;
+            DECLARE $worker_id AS Utf8;
             DECLARE $status AS Utf8;
             DECLARE $evidence_json AS Utf8;
             DECLARE $last_error AS Utf8;
@@ -344,10 +376,13 @@ class YdbOrchestrationStore(OrchestrationStore):
                 last_error = $last_error,
                 lease_owner = '',
                 lease_until = ''
-            WHERE action_id = $action_id AND status = 'RUNNING';
+            WHERE action_id = $action_id
+              AND status = 'RUNNING'
+              AND lease_owner = $worker_id;
             """,
             {
                 "$action_id": _utf8(action_id),
+                "$worker_id": _utf8(worker_id),
                 "$status": _utf8(status.value),
                 "$evidence_json": _utf8(_json(evidence or {})),
                 "$last_error": _utf8(last_error or ""),
@@ -357,6 +392,8 @@ class YdbOrchestrationStore(OrchestrationStore):
         updated = self._get_action(action_id)
         if updated is None:
             raise RuntimeError(f"action disappeared after finish: {action_id}")
+        if updated.status != status or updated.lease_owner is not None:
+            raise RuntimeError(f"action lease ownership lost: {action_id}")
         return updated
 
     def reset_action(self, action_id: str) -> WorkflowAction:

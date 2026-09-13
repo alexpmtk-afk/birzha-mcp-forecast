@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
-from birzha.domain.orchestration import WorkflowAction, WorkflowRun, WorkflowStage, WorkflowStatus
+from birzha.domain.orchestration import (
+    ActionStatus,
+    WorkflowAction,
+    WorkflowRun,
+    WorkflowStage,
+    WorkflowStatus,
+)
 from birzha.storage.ydb_orchestration_store import YdbOrchestrationStore
 
 
@@ -61,10 +68,45 @@ def test_ydb_claim_query_refuses_next_pending_while_live_stage_lease_exists() ->
         now="2026-09-13T10:00:00+00:00",
         lease_until="2026-09-13T10:30:00+00:00",
     ) is None
-    query = pool.calls[-1][0]
-    assert "NOT EXISTS" in query
-    assert "active.status = 'RUNNING'" in query
-    assert "active.lease_until > $now" in query
+    expire_query = pool.calls[-2][0]
+    select_query = pool.calls[-1][0]
+    assert "attempt >= max_attempts" in expire_query
+    assert "status = 'FAILED'" in expire_query
+    assert "NOT EXISTS" in select_query
+    assert "active.status = 'RUNNING'" in select_query
+    assert "active.lease_until > $now" in select_query
+    assert "candidate.attempt < candidate.max_attempts" in select_query
+
+
+def test_ydb_finish_query_is_fenced_by_lease_owner() -> None:
+    pool = FakePool()
+    store = YdbOrchestrationStore(pool)  # type: ignore[arg-type]
+    running = replace(
+        _action(),
+        status=ActionStatus.RUNNING,
+        attempt=1,
+        lease_owner="worker-1",
+        lease_until="2026-09-13T10:30:00+00:00",
+    )
+    passed = replace(
+        running,
+        status=ActionStatus.PASS,
+        lease_owner=None,
+        lease_until=None,
+    )
+    states = iter((running, passed))
+    store._get_action = lambda _action_id: next(states)  # type: ignore[method-assign]
+
+    result = store.finish_action(
+        running.action_id,
+        worker_id="worker-1",
+        status=ActionStatus.PASS,
+    )
+    assert result.status == ActionStatus.PASS
+    query, params, _ = pool.calls[-1]
+    assert "lease_owner = $worker_id" in query
+    assert params is not None
+    assert params["$worker_id"][0] == "worker-1"
 
 
 def test_ydb_active_workflow_discovery_is_bounded() -> None:

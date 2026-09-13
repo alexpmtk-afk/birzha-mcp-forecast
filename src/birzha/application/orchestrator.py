@@ -137,23 +137,32 @@ class WorkflowOrchestrator:
         if run.stage in PROTECTED_GATES or run.stage == WorkflowStage.COMPLETE:
             return None
         now_dt = datetime.now(UTC)
-        return self.store.claim_next(
+        claimed = self.store.claim_next(
             workflow_id,
             stage=run.stage,
             worker_id=worker_id,
             now=now_dt.isoformat(),
             lease_until=(now_dt + timedelta(seconds=lease_seconds)).isoformat(),
         )
+        if claimed is None:
+            # The store may have converted an expired final lease into FAILED.
+            # Reconcile durable stage state immediately instead of leaving the
+            # workflow apparently RUNNING forever.
+            self._advance_if_ready(workflow_id)
+        return claimed
 
     def complete_action(
         self,
         workflow_id: str,
         action_id: str,
         *,
+        worker_id: str,
         passed: bool,
         evidence: dict[str, object] | None = None,
         error: str | None = None,
     ) -> dict[str, object]:
+        if not worker_id.strip():
+            raise ValueError("worker_id must be non-empty")
         run = self._require(workflow_id)
         action = _action_by_id(self.store.list_actions(workflow_id), action_id)
         if action.stage != run.stage:
@@ -161,12 +170,14 @@ class WorkflowOrchestrator:
         if passed:
             self.store.finish_action(
                 action_id,
+                worker_id=worker_id,
                 status=ActionStatus.PASS,
                 evidence=evidence,
             )
         else:
             failed = self.store.finish_action(
                 action_id,
+                worker_id=worker_id,
                 status=ActionStatus.FAILED,
                 evidence=evidence,
                 last_error=(error or "action failed")[:1500],

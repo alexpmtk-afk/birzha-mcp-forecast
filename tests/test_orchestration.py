@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from birzha.application.orchestrator import OrchestrationGateError, WorkflowOrchestrator
-from birzha.domain.orchestration import WorkflowStage, WorkflowStatus
+from birzha.domain.orchestration import (
+    ActionStatus,
+    WorkflowAction,
+    WorkflowRun,
+    WorkflowStage,
+    WorkflowStatus,
+)
 from birzha.storage.orchestration_store import MemoryOrchestrationStore
 
 
@@ -19,11 +27,13 @@ def _start() -> tuple[WorkflowOrchestrator, str]:
 
 
 def _pass_one(service: WorkflowOrchestrator, workflow_id: str) -> dict[str, object]:
-    action = service.claim_next(workflow_id, worker_id="worker-test")
+    worker_id = "worker-test"
+    action = service.claim_next(workflow_id, worker_id=worker_id)
     assert action is not None
     return service.complete_action(
         workflow_id,
         action.action_id,
+        worker_id=worker_id,
         passed=True,
         evidence={"proof": "PASS"},
     )
@@ -111,11 +121,13 @@ def test_action_retries_then_fails_closed() -> None:
     service, workflow_id = _start()
 
     for attempt in range(1, 4):
-        action = service.claim_next(workflow_id, worker_id=f"worker-{attempt}")
+        worker_id = f"worker-{attempt}"
+        action = service.claim_next(workflow_id, worker_id=worker_id)
         assert action is not None
         state = service.complete_action(
             workflow_id,
             action.action_id,
+            worker_id=worker_id,
             passed=False,
             error=f"failure-{attempt}",
         )
@@ -137,3 +149,97 @@ def test_status_exposes_checkpointed_next_action_without_chat_memory() -> None:
     assert next_action["payload"]["symbol"] == "SBER"
     assert next_action["payload"]["timeframe"] == "D1"
     assert "current_stage_actions" not in state
+
+
+def _minimal_run_and_action(*, max_attempts: int = 3) -> tuple[WorkflowRun, WorkflowAction]:
+    run = WorkflowRun(
+        workflow_id="lease-test",
+        kind="TEST",
+        stage=WorkflowStage.HISTORY_PREPARATION,
+        status=WorkflowStatus.RUNNING,
+        created_at="2026-09-13T10:00:00+00:00",
+        updated_at="2026-09-13T10:00:00+00:00",
+    )
+    action = WorkflowAction(
+        action_id="lease-test:1",
+        workflow_id=run.workflow_id,
+        stage=run.stage,
+        kind="HISTORY_SYNC_CHUNK",
+        sequence=1,
+        payload={},
+        max_attempts=max_attempts,
+    )
+    return run, action
+
+
+def test_stale_worker_cannot_finish_after_lease_was_reclaimed() -> None:
+    store = MemoryOrchestrationStore()
+    run, action = _minimal_run_and_action()
+    store.create_workflow(run, (action,))
+
+    first = store.claim_next(
+        run.workflow_id,
+        stage=run.stage,
+        worker_id="worker-old",
+        now="2026-09-13T10:00:00+00:00",
+        lease_until="2026-09-13T10:00:10+00:00",
+    )
+    assert first is not None
+    second = store.claim_next(
+        run.workflow_id,
+        stage=run.stage,
+        worker_id="worker-new",
+        now="2026-09-13T10:00:11+00:00",
+        lease_until="2026-09-13T10:00:21+00:00",
+    )
+    assert second is not None
+    assert second.lease_owner == "worker-new"
+
+    with pytest.raises(RuntimeError, match="lease ownership lost"):
+        store.finish_action(
+            action.action_id,
+            worker_id="worker-old",
+            status=ActionStatus.PASS,
+        )
+
+    finished = store.finish_action(
+        action.action_id,
+        worker_id="worker-new",
+        status=ActionStatus.PASS,
+    )
+    assert finished.status == ActionStatus.PASS
+
+
+def test_expired_final_lease_fails_closed_instead_of_reclaiming_forever() -> None:
+    store = MemoryOrchestrationStore()
+    run, action = _minimal_run_and_action(max_attempts=2)
+    store.create_workflow(run, (action,))
+
+    first = store.claim_next(
+        run.workflow_id,
+        stage=run.stage,
+        worker_id="worker-1",
+        now="2026-09-13T10:00:00+00:00",
+        lease_until="2026-09-13T10:00:10+00:00",
+    )
+    assert first is not None and first.attempt == 1
+    second = store.claim_next(
+        run.workflow_id,
+        stage=run.stage,
+        worker_id="worker-2",
+        now="2026-09-13T10:00:11+00:00",
+        lease_until="2026-09-13T10:00:21+00:00",
+    )
+    assert second is not None and second.attempt == 2
+
+    assert store.claim_next(
+        run.workflow_id,
+        stage=run.stage,
+        worker_id="worker-3",
+        now="2026-09-13T10:00:22+00:00",
+        lease_until="2026-09-13T10:00:32+00:00",
+    ) is None
+    final = store.list_actions(run.workflow_id)[0]
+    assert final.status == ActionStatus.FAILED
+    assert final.attempt == 2
+    assert final.last_error == "lease expired after maximum attempts"

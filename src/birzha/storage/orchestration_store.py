@@ -36,6 +36,7 @@ class OrchestrationStore(Protocol):
         self,
         action_id: str,
         *,
+        worker_id: str,
         status: ActionStatus,
         evidence: dict[str, object] | None = None,
         last_error: str | None = None,
@@ -108,6 +109,26 @@ class MemoryOrchestrationStore:
         lease_until: str,
     ) -> WorkflowAction | None:
         with self._lock:
+            # A crashed worker consumes an attempt when it claims work. Once the
+            # final lease expires, fail that action instead of reclaiming it
+            # forever. The orchestrator will then fail the enclosing workflow.
+            for action_id, item in list(self._actions.items()):
+                if (
+                    item.workflow_id == workflow_id
+                    and item.stage == stage
+                    and item.status == ActionStatus.RUNNING
+                    and item.lease_until is not None
+                    and item.lease_until <= now
+                    and item.attempt >= item.max_attempts
+                ):
+                    self._actions[action_id] = replace(
+                        item,
+                        status=ActionStatus.FAILED,
+                        lease_owner=None,
+                        lease_until=None,
+                        last_error="lease expired after maximum attempts",
+                    )
+
             active = any(
                 item.workflow_id == workflow_id
                 and item.stage == stage
@@ -124,6 +145,7 @@ class MemoryOrchestrationStore:
                     for item in self._actions.values()
                     if item.workflow_id == workflow_id
                     and item.stage == stage
+                    and item.attempt < item.max_attempts
                     and (
                         item.status == ActionStatus.PENDING
                         or (
@@ -153,6 +175,7 @@ class MemoryOrchestrationStore:
         self,
         action_id: str,
         *,
+        worker_id: str,
         status: ActionStatus,
         evidence: dict[str, object] | None = None,
         last_error: str | None = None,
@@ -163,6 +186,8 @@ class MemoryOrchestrationStore:
             current = self._actions[action_id]
             if current.status != ActionStatus.RUNNING:
                 raise RuntimeError(f"action is not RUNNING: {action_id}")
+            if current.lease_owner != worker_id:
+                raise RuntimeError(f"action lease ownership lost: {action_id}")
             updated = replace(
                 current,
                 status=status,
