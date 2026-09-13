@@ -277,7 +277,7 @@ class MoexIssClient:
         finite OHLC payload. Incomplete rows are ignored so the caller still
         fails closed on a genuine price gap.
         """
-        if instrument.asset_class != "future":
+        if instrument.asset_class != "future" or instrument.source != "MOEX_ISS_HISTORY":
             return candles, False
 
         native_dates = {candle.begin[:10] for candle in candles if len(candle.begin) >= 10}
@@ -454,7 +454,11 @@ class MoexIssClient:
                 from_date=from_date,
                 till_date=till_date,
             )
-        if tf == "D1" and instrument.asset_class == "future":
+        if (
+            tf == "D1"
+            and instrument.asset_class == "future"
+            and instrument.source == "MOEX_ISS_HISTORY"
+        ):
             candles, used_history_fallback = self._fill_legacy_future_d1_from_history(
                 instrument,
                 candles,
