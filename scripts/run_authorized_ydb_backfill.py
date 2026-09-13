@@ -11,8 +11,10 @@ from birzha.application.historical_data import HistoricalDataService
 from birzha.application.history_policy import require_persistent_price_timeframes
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_runtime_storage import (
+    YdbRuntimeHistoricalCandleStore,
+    YdbRuntimeSlotPacingGate,
+)
 
 
 CORE_SYMBOLS = ("SBER", "GOLD", "IMOEX", "RTSI", "Si", "BR")
@@ -57,12 +59,14 @@ def main() -> int:
     driver.wait(timeout=15, fail_fast=True)
     pool = ydb.QuerySessionPool(driver)
     control = ProcessUpstreamControlPlane(
-        gate_factory=lambda provider_key: YdbSlotPacingGate(pool, provider_key=provider_key),
+        gate_factory=lambda provider_key: YdbRuntimeSlotPacingGate(
+            pool, provider_key=provider_key
+        ),
         require_distributed_gate=True,
     )
     history = HistoricalDataService(
         market_data=MarketDataService.default(control_plane=control),
-        store=YdbHistoricalCandleStore(pool),
+        store=YdbRuntimeHistoricalCandleStore(pool),
     )
 
     failures: list[dict[str, str]] = []
