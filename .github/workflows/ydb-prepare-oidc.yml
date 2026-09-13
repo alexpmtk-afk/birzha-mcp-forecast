@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_SHA: e88a4a7f69a83212b6de265a7f58a2d4d4bc327c
+  APP_SHA: d18eed92899266548fbe544f5fb76c5ecd44d0e3
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
   HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
@@ -97,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           cd app
-          python scripts/run_authorized_ydb_prepare_validation.py \
+          python scripts/run_authorized_ydb_prepare_validation_runtime.py \
             --connection-string "$YDB_CONNECTION_STRING" \
             --token-file "$RUNNER_TEMP/yandex-iam-token" \
             --validation-start 2021-01-01 \
