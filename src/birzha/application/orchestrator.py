@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from birzha.application.orchestration_plan import build_core_validation_actions
 from birzha.domain.orchestration import (
     ActionStatus,
     WorkflowAction,
@@ -76,7 +77,13 @@ class WorkflowOrchestrator:
             updated_at=now,
             metadata=metadata,
         )
-        actions = _core_actions(workflow_id, development_start, split_date, holdout_end, source_sha)
+        actions = build_core_validation_actions(
+            workflow_id,
+            development_start,
+            split_date,
+            holdout_end,
+            source_sha,
+        )
         self.store.create_workflow(run, actions)
         return run
 
@@ -87,11 +94,18 @@ class WorkflowOrchestrator:
         for action in actions:
             counts[action.status.value] += 1
         current = [item for item in actions if item.stage == run.stage]
+        current_counts = {status.value: 0 for status in ActionStatus}
+        for action in current:
+            current_counts[action.status.value] += 1
+        failed = [item.to_dict() for item in current if item.status == ActionStatus.FAILED][:5]
         return {
             **run.to_dict(),
             "storage_scope": self.store.storage_scope,
             "action_counts": counts,
-            "current_stage_actions": [item.to_dict() for item in current],
+            "current_stage_total": len(current),
+            "current_stage_counts": current_counts,
+            "current_stage_completed": current_counts[ActionStatus.PASS.value],
+            "current_stage_failed": failed,
             "next_action": _next_pending(current),
             "requires_approval": run.stage in PROTECTED_GATES,
         }
@@ -263,79 +277,6 @@ class WorkflowOrchestrator:
         if run is None:
             raise KeyError(f"workflow not found: {workflow_id}")
         return run
-
-
-def _core_actions(
-    workflow_id: str,
-    development_start: str,
-    split_date: str,
-    holdout_end: str,
-    source_sha: str,
-) -> tuple[WorkflowAction, ...]:
-    specs = (
-        (
-            WorkflowStage.HISTORY_PREPARATION,
-            "PREPARE_HISTORY",
-            {
-                "validation_start": development_start,
-                "split_date": split_date,
-                "validation_end": holdout_end,
-                "source_sha": source_sha,
-                "execution_policy": "checkpointed/chunked; never one opaque multi-hour request in production",
-            },
-        ),
-        (
-            WorkflowStage.READINESS_AUDIT,
-            "READINESS_AUDIT",
-            {
-                "validation_start": development_start,
-                "validation_end": holdout_end,
-                "required_markets": ["SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI"],
-                "required_timeframes": ["D1", "H1", "M15"],
-            },
-        ),
-        (
-            WorkflowStage.SEALED_DEVELOPMENT,
-            "SEALED_DEVELOPMENT",
-            {
-                "development_start": development_start,
-                "split_date": split_date,
-                "holdout_end": holdout_end,
-                "holdout_open": False,
-            },
-        ),
-        (
-            WorkflowStage.HOLDOUT_EVALUATION,
-            "ONE_SHOT_HOLDOUT",
-            {"requires_fingerprints": True, "single_use": True},
-        ),
-        (
-            WorkflowStage.PROMOTION,
-            "PROMOTE_ACCEPTED_SOURCE",
-            {"immutable_source_required": True, "requires_green_checks": True},
-        ),
-        (
-            WorkflowStage.TEST_DEPLOYMENT,
-            "DEPLOY_ACCEPTED_SOURCE_TO_TEST",
-            {"immutable_source_required": True},
-        ),
-        (
-            WorkflowStage.E2E_VERIFICATION,
-            "AUTHENTICATED_E2E",
-            {"fail_closed": True},
-        ),
-    )
-    return tuple(
-        WorkflowAction(
-            action_id=f"{workflow_id}:{index:02d}:{stage.value}",
-            workflow_id=workflow_id,
-            stage=stage,
-            kind=kind,
-            sequence=index,
-            payload=payload,
-        )
-        for index, (stage, kind, payload) in enumerate(specs, start=1)
-    )
 
 
 def _next_stage(stage: WorkflowStage) -> WorkflowStage:
