@@ -14,7 +14,7 @@ permissions:
 jobs:
   inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     env:
       OIDC_AUDIENCE: https://github.com/alexpmtk-afk
       HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
@@ -58,7 +58,7 @@ jobs:
       - name: Install YDB client
         run: python -m pip install --disable-pip-version-check 'ydb>=3.17,<4'
 
-      - name: Read preparation progress
+      - name: Read lightweight preparation progress
         shell: bash
         run: |
           python - <<'PY'
@@ -94,20 +94,14 @@ jobs:
               GROUP BY symbol, timeframe
               ORDER BY timeframe, symbol;
           ''')
-          sessions=rows('''
-              SELECT symbol, COUNT(*) AS sessions,
-                     MIN(trade_date) AS min_date, MAX(trade_date) AS max_date
-              FROM `historical_candles_sessions`
+          session_verified=rows('''
+              SELECT symbol, COUNT(*) AS ranges,
+                     MIN(from_date) AS min_from, MAX(till_date) AS max_till
+              FROM `historical_candles_session_verified_ranges`
               GROUP BY symbol
               ORDER BY symbol;
           ''')
-          candles=rows('''
-              SELECT timeframe, COUNT(*) AS candles
-              FROM `historical_candles`
-              GROUP BY timeframe
-              ORDER BY timeframe;
-          ''')
-          payload={'verified_ranges':verified,'session_rows':sessions,'candle_counts':candles}
+          payload={'verified_ranges':verified,'session_verified_ranges':session_verified}
           print('M23_PROGRESS_JSON='+json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str))
           pool.stop(); driver.stop(timeout=5)
           PY
