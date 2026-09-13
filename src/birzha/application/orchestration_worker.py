@@ -29,6 +29,24 @@ class OrchestrationWorker:
     orchestrator: WorkflowOrchestrator
     history: HistoricalDataService
 
+    def run_next_active(self, *, worker_id: str) -> dict[str, object]:
+        active = self.orchestrator.store.list_workflows(active_only=True, limit=100)
+        for run in reversed(active):
+            if run.status != WorkflowStatus.RUNNING:
+                continue
+            state = self.orchestrator.status(run.workflow_id)
+            next_action = state.get("next_action")
+            if not isinstance(next_action, dict):
+                continue
+            kind = str(next_action.get("kind") or "")
+            if kind not in SAFE_UNATTENDED_KINDS:
+                continue
+            return self.run_once(run.workflow_id, worker_id=worker_id)
+        return {
+            "worker_status": "NO_SAFE_RUNNABLE_WORK",
+            "active_workflows": len(active),
+        }
+
     def run_once(self, workflow_id: str, *, worker_id: str) -> dict[str, object]:
         state = self.orchestrator.status(workflow_id)
         if state["status"] != WorkflowStatus.RUNNING.value:
@@ -50,7 +68,10 @@ class OrchestrationWorker:
             lease_seconds=1800,
         )
         if action is None:
-            return {"worker_status": "BUSY_OR_IDLE", "workflow": self.orchestrator.status(workflow_id)}
+            return {
+                "worker_status": "BUSY_OR_IDLE",
+                "workflow": self.orchestrator.status(workflow_id),
+            }
 
         try:
             evidence = self._execute(action)
