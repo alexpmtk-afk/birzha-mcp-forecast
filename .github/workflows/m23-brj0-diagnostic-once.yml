@@ -1,0 +1,86 @@
+name: M23 BRJ0 MOEX Diagnostic Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m23-brj0-diagnostic-once.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Compare official MOEX history and D1 candles for BRJ0
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import urllib.parse
+          import urllib.request
+
+          BASE = "https://iss.moex.com/iss"
+          HEADERS = {"Accept": "application/json", "User-Agent": "BIRZHA-MCP-FORECAST-DIAGNOSTIC/1.0"}
+
+          def get(path, params):
+              url = BASE + path + "?" + urllib.parse.urlencode(params)
+              req = urllib.request.Request(url, headers=HEADERS)
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+
+          def table(payload, name):
+              t = payload.get(name) or {}
+              cols = t.get("columns") or []
+              return [dict(zip(cols, row)) for row in (t.get("data") or [])]
+
+          history = get(
+              "/history/engines/futures/markets/forts/boards/RFUD/securities/BRJ0.json",
+              {
+                  "iss.meta": "off",
+                  "iss.only": "history",
+                  "history.columns": "TRADEDATE,NUMTRADES,VOLUME,VALUE,OPEN,CLOSE",
+                  "from": "2019-06-20",
+                  "till": "2019-06-28",
+              },
+          )
+          candles = get(
+              "/engines/futures/markets/forts/boards/RFUD/securities/BRJ0/candles.json",
+              {
+                  "iss.meta": "off",
+                  "interval": 24,
+                  "from": "2019-06-20",
+                  "till": "2019-06-28",
+                  "candles.columns": "open,close,high,low,value,volume,begin,end",
+              },
+          )
+          security = get(
+              "/engines/futures/markets/forts/boards/RFUD/securities/BRJ0.json",
+              {
+                  "iss.meta": "off",
+                  "iss.only": "securities",
+                  "securities.columns": "SECID,BOARDID,SHORTNAME,NAME,LASTTRADEDATE,ASSETCODE",
+              },
+          )
+
+          h = table(history, "history")
+          c = table(candles, "candles")
+          s = table(security, "securities")
+          print("BRJ0_SECURITY=" + json.dumps(s, ensure_ascii=False, sort_keys=True))
+          print("BRJ0_HISTORY=" + json.dumps(h, ensure_ascii=False, sort_keys=True))
+          print("BRJ0_D1_CANDLES=" + json.dumps(c, ensure_ascii=False, sort_keys=True))
+
+          h25 = [r for r in h if str(r.get("TRADEDATE"))[:10] == "2019-06-25"]
+          c25 = [r for r in c if str(r.get("begin"))[:10] == "2019-06-25"]
+          activity = any(
+              (r.get(k) is not None and float(r.get(k) or 0) > 0)
+              for r in h25 for k in ("NUMTRADES", "VOLUME", "VALUE")
+          )
+          print(f"BRJ0_2019_06_25_HISTORY_ROWS={len(h25)}")
+          print(f"BRJ0_2019_06_25_POSITIVE_ACTIVITY={str(activity).lower()}")
+          print(f"BRJ0_2019_06_25_D1_CANDLES={len(c25)}")
+          print("BRJ0_MOEX_DIAGNOSTIC=PASS")
+          PY
