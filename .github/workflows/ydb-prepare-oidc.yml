@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_SHA: d18eed92899266548fbe544f5fb76c5ecd44d0e3
+  APP_SHA: 06a4121baa183a64766b63c9893a476136753648
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
   HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
@@ -92,7 +92,7 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -e ./app
 
-      - name: Run governed six-market historical preparation
+      - name: Run governed six-market D1 historical preparation
         shell: bash
         run: |
           set -euo pipefail
@@ -117,7 +117,7 @@ jobs:
           from pathlib import Path
           p=Path(os.environ['RUNNER_TEMP'])/'ydb_validation_data_preparation.json'
           d=json.loads(p.read_text())
-          summary={k:d.get(k) for k in ('validation_protocol','status','validation_start','split_date','validation_end')}
+          summary={k:d.get(k) for k in ('validation_protocol','status','validation_start','split_date','validation_end','persistent_price_timeframes','intraday_mode','m15_source')}
           readiness=d.get('readiness') or {}
           summary['readiness_status']=readiness.get('status')
           summary['capacity_shortfall']=d.get('capacity_shortfall',{})
