@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 
-from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.snapshot import (
+    H1_MIN_CONTEXT_DAYS,
+    M15_MAX_LOOKBACK_DAYS,
+    M15_MIN_CONTEXT_DAYS,
+    MarketSnapshotService,
+)
 from birzha.domain.market import Candle, CandleSeries, Instrument
 
 
@@ -33,8 +38,9 @@ def _candle(day: date, *, hour: int, minute: int, close: float, minutes: int) ->
 
 
 class RecordingMarket:
-    def __init__(self) -> None:
+    def __init__(self, *, pivot_days_ago: int = 15) -> None:
         self.calls: list[tuple[str, str, str]] = []
+        self.pivot_days_ago = pivot_days_ago
 
     def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
         assert symbol == "SBER"
@@ -53,9 +59,9 @@ class RecordingMarket:
         self.calls.append((timeframe, from_date, till_date))
         till = date.fromisoformat(till_date)
         if timeframe == "D1":
-            # One clear local low 15 days before T0, then a rising leg.
+            # One clear local low before T0, then a rising leg.
             days = [till - timedelta(days=69 - index) for index in range(70)]
-            pivot = len(days) - 16
+            pivot = len(days) - 1 - self.pivot_days_ago
             closes = []
             for index, _day in enumerate(days):
                 if index <= pivot:
@@ -120,5 +126,25 @@ def test_snapshot_is_strictly_staged_d1_then_h1_then_m15() -> None:
     assert date.fromisoformat(m15_call[1]) >= date(2026, 9, 3)
     assert m15_call[2] == "2026-09-13"
     assert snapshot.d1.candles >= 50
+    assert snapshot.h1.candles >= 50
+    assert snapshot.m15.candles >= 50
+
+
+def test_recent_leg_anchor_keeps_anchor_but_adds_bounded_feature_warmup() -> None:
+    market = RecordingMarket(pivot_days_ago=2)
+    service = MarketSnapshotService(market_data=market, flow=None)  # type: ignore[arg-type]
+
+    snapshot = service.build("SBER", as_of_date="2026-09-13")
+
+    _, h1_call, m15_call = market.calls
+    till = date(2026, 9, 13)
+    h1_start = date.fromisoformat(h1_call[1])
+    m15_start = date.fromisoformat(m15_call[1])
+
+    # D1 still chooses the movement leg first; warm-up only moves the provider
+    # request backward enough to satisfy the unchanged 50-candle feature gate.
+    assert h1_start <= till - timedelta(days=H1_MIN_CONTEXT_DAYS)
+    assert m15_start <= till - timedelta(days=M15_MIN_CONTEXT_DAYS)
+    assert m15_start >= till - timedelta(days=M15_MAX_LOOKBACK_DAYS)
     assert snapshot.h1.candles >= 50
     assert snapshot.m15.candles >= 50
