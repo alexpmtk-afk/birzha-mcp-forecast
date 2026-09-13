@@ -66,6 +66,18 @@ def test_quarterly_rolls_reduce_real_mature_sample_capacity() -> None:
     assert result.non_overlapping_observations[20] == 16
 
 
+def test_sparse_roll_safe_windows_are_not_thinned_twice() -> None:
+    # Only indexes 0 and 25 can mature through the 20-session horizon. Their
+    # windows are already disjoint, so both are independent observations even
+    # though the nominal T0 cadence is five sessions.
+    secids = ["A"] * 21 + ["B"] * 4 + ["C"] * 21
+
+    result = _capacity("GOLD", secids)
+
+    assert result.mature_raw_candidates == 2
+    assert result.non_overlapping_observations == {5: 2, 10: 2, 20: 2}
+
+
 def test_capacity_checks_entire_contract_window_not_only_endpoints() -> None:
     # At index 0 and index 20 the contract is A, but B appears in between.
     # A start/end-only test would incorrectly accept this forecast window.

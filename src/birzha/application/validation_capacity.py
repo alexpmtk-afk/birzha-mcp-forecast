@@ -39,16 +39,19 @@ def stored_contract_capacity(
     max_points: int,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
 ) -> ContractAwareCapacity:
-    """Count samples that can mature without crossing stored contract identity.
+    """Count samples that mature on one exact contract and do not overlap.
 
     This check uses only the already-verified D1 session calendar. It does not
     inspect prices or forecast outcomes, so it is safe to run before development
     and before the governed holdout is opened.
 
     The walk-forward validator requires every forecast horizon to mature on the
-    exact same instrument as T0. We therefore keep a raw candidate only when the
-    stored active SECID is unchanged from T0 through the longest horizon. The
-    resulting raw candidates are then thinned exactly like validation statistics.
+    exact same instrument as T0. A raw candidate is therefore retained only when
+    the stored active SECID is unchanged from T0 through the longest horizon.
+    Non-overlap is then counted from the *actual retained T0 indexes*. This is
+    important for rolling futures: rejected candidates around a roll already
+    create extra spacing and must not be thinned a second time by a blind
+    every-N rule.
     """
     if step_sessions <= 0:
         raise ValueError("step_sessions must be > 0")
@@ -79,26 +82,38 @@ def stored_contract_capacity(
     )
 
     longest = max(horizons)
-    mature = 0
+    mature_indexes: list[int] = []
     stop = max(0, len(sessions) - longest)
     for index in range(0, stop, step_sessions):
         window = sessions[index : index + longest + 1]
         secids = {contract_by_date[item] for item in window}
         if len(secids) != 1:
             continue
-        mature += 1
-        if mature >= max_points:
+        mature_indexes.append(index)
+        if len(mature_indexes) >= max_points:
             break
 
-    observations = {}
-    for horizon in horizons:
-        stride = max(1, (horizon + step_sessions - 1) // step_sessions)
-        observations[horizon] = (mature + stride - 1) // stride
+    observations = {
+        horizon: _count_non_overlapping_indexes(mature_indexes, horizon)
+        for horizon in horizons
+    }
     return ContractAwareCapacity(
         sessions=len(sessions),
-        mature_raw_candidates=mature,
+        mature_raw_candidates=len(mature_indexes),
         non_overlapping_observations=observations,
     )
+
+
+def _count_non_overlapping_indexes(indexes: list[int], horizon: int) -> int:
+    """Greedily retain every real window that starts after the prior one ends."""
+    selected = 0
+    previous_end: int | None = None
+    for index in indexes:
+        if previous_end is not None and index < previous_end:
+            continue
+        selected += 1
+        previous_end = index + horizon
+    return selected
 
 
 def _session_symbol(history: HistoricalDataService, symbol: str) -> str:

@@ -10,8 +10,11 @@ from birzha.domain.outcome import HorizonOutcome
 from birzha.domain.validation import WalkForwardReport
 
 
-def _forecast(index: int) -> ForecastRecord:
-    forecast_day = date(2025, 1, 1) + timedelta(days=index)
+START = date(2025, 1, 1)
+
+
+def _forecast(index: int, *, spacing_days: int = 5) -> ForecastRecord:
+    forecast_day = START + timedelta(days=index * spacing_days)
     return ForecastRecord(
         forecast_id=f"fcst_{index}",
         symbol="SBER",
@@ -39,7 +42,15 @@ def _forecast(index: int) -> ForecastRecord:
     )
 
 
-def _outcome(index: int, sessions: int, *, hit: bool) -> HorizonOutcome:
+def _outcome(
+    index: int,
+    sessions: int,
+    *,
+    hit: bool,
+    spacing_days: int = 5,
+) -> HorizonOutcome:
+    forecast_day = START + timedelta(days=index * spacing_days)
+    target_day = forecast_day + timedelta(days=sessions)
     return HorizonOutcome(
         outcome_id=f"out_{index}_{sessions}",
         forecast_id=f"fcst_{index}",
@@ -47,7 +58,7 @@ def _outcome(index: int, sessions: int, *, hit: bool) -> HorizonOutcome:
         secid="SBER",
         horizon_sessions=sessions,
         reference_price=100.0,
-        target_session_end="2025-12-31T18:50:00+03:00",
+        target_session_end=f"{target_day.isoformat()}T18:50:00+03:00",
         target_close=101.0,
         actual_return_pct=1.0,
         direction_hit=hit,
@@ -56,13 +67,21 @@ def _outcome(index: int, sessions: int, *, hit: bool) -> HorizonOutcome:
     )
 
 
-def _pairs(count: int):
+def _pairs(count: int, *, spacing_days: int = 5):
     pairs = []
     for index in range(count):
-        forecast = _forecast(index)
+        forecast = _forecast(index, spacing_days=spacing_days)
         for sessions in (5, 10, 20):
             pairs.append(
-                (forecast, _outcome(index, sessions, hit=(index % 2 == 0)))
+                (
+                    forecast,
+                    _outcome(
+                        index,
+                        sessions,
+                        hit=(index % 2 == 0),
+                        spacing_days=spacing_days,
+                    ),
+                )
             )
     return pairs
 
@@ -92,12 +111,31 @@ def test_statistics_thin_overlapping_windows_by_horizon() -> None:
 def test_stride_is_one_when_forecast_spacing_already_covers_horizon() -> None:
     metrics = {
         item.sessions: item
-        for item in summarize_walk_forward(_pairs(8), step_sessions=10)
+        for item in summarize_walk_forward(
+            _pairs(8, spacing_days=10), step_sessions=10
+        )
     }
 
     assert metrics[5].sampling_stride == 1
     assert metrics[10].sampling_stride == 1
     assert metrics[20].sampling_stride == 2
+    assert metrics[5].observations == 8
+    assert metrics[10].observations == 8
+    assert metrics[20].observations == 4
+
+
+def test_sparse_successful_windows_are_not_thinned_twice() -> None:
+    metric = next(
+        item
+        for item in summarize_walk_forward(
+            _pairs(4, spacing_days=25), step_sessions=5
+        )
+        if item.sessions == 20
+    )
+
+    assert metric.raw_observations == 4
+    assert metric.sampling_stride == 4
+    assert metric.observations == 4
 
 
 def test_many_overlapping_raw_forecasts_do_not_fake_minimum_sample() -> None:

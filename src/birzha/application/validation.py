@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from statistics import fmean
 
 from birzha.application.forecast import ForecastService, build_forecast_from_snapshot
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.historical_flow import HistoricalFlowDataService
-from birzha.application.market_data import MarketDataService, is_futures_root_symbol
+from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService, is_futures_root_symbol
 from birzha.application.outcome import OutcomeService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.stored_market_data import StoredMarketDataView
@@ -338,14 +338,13 @@ def summarize_walk_forward(
     *,
     step_sessions: int = 1,
 ) -> tuple[HorizonValidationMetrics, ...]:
-    """Summarize only non-overlapping forecast windows for each horizon.
+    """Summarize only genuinely non-overlapping forecast windows.
 
-    Forecast T0s are generated every ``step_sessions`` exchange sessions. For a
-    horizon ``h`` we therefore keep every ceil(h / step_sessions)-th successful
-    forecast. Failed/missing forecasts can only increase the actual separation,
-    so this deterministic thinning never creates overlap that was not already
-    present. It removes label overlap; it does not claim that market observations
-    are otherwise statistically independent.
+    ``step_sessions`` still describes the scheduled T0 cadence and is retained
+    in the report as the nominal sampling stride. Selection itself uses the
+    actual successful T0 and target timestamps. This matters when rolls or
+    quality gates already removed intermediate candidates: those gaps create
+    real separation and must not be thinned a second time.
     """
     if step_sessions <= 0:
         raise ValueError("step_sessions must be > 0")
@@ -362,7 +361,7 @@ def summarize_walk_forward(
             key=lambda item: item[0].created_at_t0,
         )
         sampling_stride = max(1, (sessions + step_sessions - 1) // step_sessions)
-        subset = raw_subset[::sampling_stride]
+        subset = _select_non_overlapping_pairs(raw_subset)
         directional = [
             outcome for _, outcome in subset if outcome.direction_hit is not None
         ]
@@ -405,3 +404,35 @@ def summarize_walk_forward(
             )
         )
     return tuple(result)
+
+
+def _select_non_overlapping_pairs(
+    pairs: list[tuple[ForecastRecord, HorizonOutcome]],
+) -> list[tuple[ForecastRecord, HorizonOutcome]]:
+    """Return a maximum deterministic set of non-overlapping realized windows."""
+    ordered = sorted(
+        pairs,
+        key=lambda item: (
+            _validation_time(item[1].target_session_end),
+            _validation_time(item[0].created_at_t0),
+        ),
+    )
+    selected: list[tuple[ForecastRecord, HorizonOutcome]] = []
+    previous_end: datetime | None = None
+    for forecast, outcome in ordered:
+        start = _validation_time(forecast.created_at_t0)
+        end = _validation_time(outcome.target_session_end)
+        if end <= start:
+            raise ValueError("outcome target must be after forecast T0")
+        if previous_end is not None and start < previous_end:
+            continue
+        selected.append((forecast, outcome))
+        previous_end = end
+    return sorted(selected, key=lambda item: item[0].created_at_t0)
+
+
+def _validation_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=MOEX_TIMEZONE)
+    return parsed.astimezone(MOEX_TIMEZONE)
