@@ -1,4 +1,4 @@
-"""Read-only market-data view backed by the persistent Historical Data store."""
+"""Layered market-data view: durable D1 plus on-demand intraday data."""
 
 from __future__ import annotations
 
@@ -12,9 +12,21 @@ from birzha.domain.market import CandleSeries, Instrument
 
 @dataclass(slots=True)
 class StoredMarketDataView:
+    """Use shared history only for D1; route intraday directly to MOEX.
+
+    ``require_stored_resolution`` is used by frozen validation: contract identity
+    must come from the already verified D1 session map and no live resolver may
+    silently change it. ``ensure_daily_history`` is used by operational MCP
+    analysis: missing D1 coverage may be repaired before the snapshot is built.
+
+    H1/M15 are never read from or written to durable candle history by this
+    view. They are fetched from ``base`` for the requested analysis window.
+    """
+
     base: MarketDataService
     history: HistoricalDataService
     require_stored_resolution: bool = False
+    ensure_daily_history: bool = False
 
     @property
     def provider(self):
@@ -32,44 +44,45 @@ class StoredMarketDataView:
         return self.history.store.stored_instrument(secid)
 
     def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
-        if as_of is not None and is_futures_root_symbol(symbol):
-            trade_date = as_of.isoformat()
-            session_symbol = _verification_symbol(symbol, "D1", is_root=True)
-            if not self.history.store.is_session_range_verified(
-                session_symbol, trade_date, trade_date
-            ):
-                raise RuntimeError(
-                    f"stored futures session is not verified for {symbol} {trade_date}"
-                )
-            secids = self.history.store.stored_session_secids(
-                session_symbol, trade_date
-            )
-            if len(secids) != 1:
-                raise RuntimeError(
-                    f"stored futures session must resolve to exactly one contract for "
-                    f"{symbol} {trade_date}; found={secids}"
-                )
-            instrument = self.stored_instrument(secids[0])
-            if instrument is None:
-                raise RuntimeError(
-                    f"stored instrument metadata missing for {symbol} {trade_date}: "
-                    f"{secids[0]}"
-                )
-            root = (instrument.root_symbol or instrument.symbol).upper()
-            if root != symbol.upper():
-                raise RuntimeError(
-                    f"stored contract root mismatch for {symbol} {trade_date}: "
-                    f"{instrument.secid}/{root}"
-                )
-            return instrument
-
-        stored = self.stored_instrument(symbol)
-        if stored is not None:
-            return stored
         if self.require_stored_resolution:
+            if as_of is not None and is_futures_root_symbol(symbol):
+                trade_date = as_of.isoformat()
+                session_symbol = _verification_symbol(symbol, "D1", is_root=True)
+                if not self.history.store.is_session_range_verified(
+                    session_symbol, trade_date, trade_date
+                ):
+                    raise RuntimeError(
+                        f"stored futures session is not verified for {symbol} {trade_date}"
+                    )
+                secids = self.history.store.stored_session_secids(
+                    session_symbol, trade_date
+                )
+                if len(secids) != 1:
+                    raise RuntimeError(
+                        f"stored futures session must resolve to exactly one contract for "
+                        f"{symbol} {trade_date}; found={secids}"
+                    )
+                instrument = self.stored_instrument(secids[0])
+                if instrument is None:
+                    raise RuntimeError(
+                        f"stored instrument metadata missing for {symbol} {trade_date}: "
+                        f"{secids[0]}"
+                    )
+                root = (instrument.root_symbol or instrument.symbol).upper()
+                if root != symbol.upper():
+                    raise RuntimeError(
+                        f"stored contract root mismatch for {symbol} {trade_date}: "
+                        f"{instrument.secid}/{root}"
+                    )
+                return instrument
+
+            stored = self.stored_instrument(symbol)
+            if stored is not None:
+                return stored
             raise RuntimeError(
                 f"stored instrument metadata missing for frozen validation: {symbol}"
             )
+
         return self.base.resolve(symbol, as_of=as_of)
 
     def candles_for_instrument(
@@ -82,9 +95,29 @@ class StoredMarketDataView:
         completed_only: bool = True,
         now: datetime | None = None,
     ) -> CandleSeries:
+        tf = timeframe.upper()
+        if tf != "D1":
+            return self.base.candles_for_instrument(
+                instrument,
+                timeframe=tf,
+                from_date=from_date,
+                till_date=till_date,
+                completed_only=completed_only,
+                now=now,
+            )
+
+        if self.ensure_daily_history:
+            persistent_symbol = instrument.root_symbol or instrument.symbol
+            self.history.sync(
+                persistent_symbol,
+                timeframe="D1",
+                from_date=from_date,
+                till_date=till_date,
+            )
+
         series = self.history.load_exact(
             instrument,
-            timeframe=timeframe,
+            timeframe="D1",
             from_date=from_date,
             till_date=till_date,
         )
@@ -93,7 +126,7 @@ class StoredMarketDataView:
             candles = tuple(item for item in candles if item.completed)
         return CandleSeries(
             instrument=instrument,
-            timeframe=timeframe.upper(),
+            timeframe="D1",
             candles=tuple(candles),
             source="HISTORICAL_STORE",
         )
