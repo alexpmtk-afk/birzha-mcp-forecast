@@ -1,19 +1,21 @@
 """Deterministic action plan for autonomous core validation.
 
-Historical preparation is deliberately split into bounded calendar chunks so a
-worker can checkpoint progress after every successful unit. A container restart
-therefore repeats at most one idempotent chunk instead of a multi-hour run.
+Persistent historical preparation is deliberately D1-only. H1/M15 remain
+on-demand analysis inputs and must never be scheduled as durable YDB history
+writes. D1 work is split into bounded calendar chunks so a worker can checkpoint
+progress after every successful unit.
 """
 
 from __future__ import annotations
 
 from datetime import date, timedelta
 
+from birzha.application.history_policy import PERSISTENT_PRICE_TIMEFRAMES
 from birzha.domain.orchestration import WorkflowAction, WorkflowStage
 
 
 CORE_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
-CORE_TIMEFRAMES = ("D1", "H1", "M15")
+CORE_PERSISTENT_TIMEFRAMES = tuple(PERSISTENT_PRICE_TIMEFRAMES)
 HISTORY_CHUNK_DAYS = 92
 
 
@@ -28,7 +30,7 @@ def build_core_validation_actions(
     specs: list[tuple[WorkflowStage, str, dict[str, object]]] = []
 
     for symbol in CORE_SYMBOLS:
-        for timeframe in CORE_TIMEFRAMES:
+        for timeframe in CORE_PERSISTENT_TIMEFRAMES:
             for left, right in chunks:
                 specs.append(
                     (
@@ -67,7 +69,8 @@ def build_core_validation_actions(
                     "validation_start": development_start,
                     "validation_end": holdout_end,
                     "required_markets": list(CORE_SYMBOLS),
-                    "required_timeframes": list(CORE_TIMEFRAMES),
+                    "persistent_timeframes": list(CORE_PERSISTENT_TIMEFRAMES),
+                    "intraday_mode": "H1/M15_ON_DEMAND_NOT_PERSISTED",
                 },
             ),
             (
