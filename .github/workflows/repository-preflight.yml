@@ -1,0 +1,67 @@
+name: Repository Preflight
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integrity:
+    name: Repository integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Verify repository structure and runtime contract
+        run: python scripts/repository_preflight.py
+
+  security:
+    name: Public repository policy and credential hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require public repository and canonical default branch
+        env:
+          REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+          REPOSITORY_VISIBILITY: ${{ github.event.repository.visibility }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          echo "REPOSITORY_PRIVATE=${REPOSITORY_PRIVATE}"
+          echo "REPOSITORY_VISIBILITY=${REPOSITORY_VISIBILITY}"
+          echo "DEFAULT_BRANCH=${DEFAULT_BRANCH}"
+          if [ "${REPOSITORY_PRIVATE}" != "false" ] || [ "${REPOSITORY_VISIBILITY}" != "public" ]; then
+            echo "::error::REPOSITORY_POLICY_DRIFT: birzha-mcp-forecast must remain PUBLIC"
+            exit 21
+          fi
+          if [ "${DEFAULT_BRANCH}" != "main" ]; then
+            echo "::error::REPOSITORY_DRIFT: default branch must be main"
+            exit 22
+          fi
+          echo "PUBLIC_REPOSITORY_POLICY=PASS"
+
+      - name: Checkout complete repository history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch all public branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Scan current tree and reachable history
+        run: python scripts/public_repo_security.py --history

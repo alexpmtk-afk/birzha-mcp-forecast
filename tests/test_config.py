@@ -7,7 +7,7 @@ def _clear(monkeypatch):
     for name in (
         "HOST", "PORT", "MCP_ALLOWED_HOSTS", "MCP_ALLOWED_ORIGINS",
         "BIRZHA_STATE_BACKEND", "YDB_CONNECTION_STRING", "BIRZHA_FORECAST_JOURNAL_PATH",
-        "BIRZHA_REQUIRE_MCP_AUTH", "BIRZHA_MCP_BEARER_TOKEN",
+        "BIRZHA_REQUIRE_MCP_AUTH", "BIRZHA_MCP_BEARER_TOKEN", "BIRZHA_SOURCE_SHA",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -23,6 +23,7 @@ def test_default_settings(monkeypatch):
     assert settings.ydb_connection_string is None
     assert settings.require_mcp_auth is False
     assert settings.mcp_bearer_token is None
+    assert settings.source_sha is None
 
 
 def test_runtime_port(monkeypatch):
@@ -83,3 +84,13 @@ def test_required_mcp_auth_with_token(monkeypatch):
     settings = Settings.from_env()
     assert settings.require_mcp_auth is True
     assert settings.mcp_bearer_token == "test-secret"
+
+
+def test_source_sha_is_validated(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_SOURCE_SHA", "abc")
+    with pytest.raises(ValueError, match="BIRZHA_SOURCE_SHA"):
+        Settings.from_env()
+
+    monkeypatch.setenv("BIRZHA_SOURCE_SHA", "a" * 40)
+    assert Settings.from_env().source_sha == "a" * 40

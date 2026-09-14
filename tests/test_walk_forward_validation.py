@@ -28,7 +28,7 @@ def test_summary_computes_direction_and_forecast_error_metrics():
     metrics = summarize_walk_forward([
         (first, _outcome("a", 3.0, True)),
         (second, _outcome("b", 2.0, False)),
-    ])[0]
+    ], step_sessions=5)[0]
 
     assert metrics.sessions == 5
     assert metrics.observations == 2

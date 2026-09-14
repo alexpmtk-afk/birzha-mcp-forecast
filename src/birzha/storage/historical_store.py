@@ -49,6 +49,14 @@ class HistoricalCandleStore(Protocol):
 
     def stored_sessions(self, symbol: str, from_date: str, till_date: str) -> tuple[str, ...]: ...
 
+    def stored_session_contracts(
+        self, symbol: str, from_date: str, till_date: str
+    ) -> tuple[tuple[str, str], ...]: ...
+
+    def stored_session_secids(self, symbol: str, trade_date: str) -> tuple[str, ...]: ...
+
+    def stored_instrument(self, secid: str) -> Instrument | None: ...
+
     def is_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> bool: ...
 
     def mark_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> None: ...
@@ -199,6 +207,49 @@ class DuckDBHistoricalCandleStore:
                 [symbol, from_date[:10], till_date[:10]],
             ).fetchall()
         return tuple(str(row[0]) for row in rows)
+
+    def stored_session_contracts(
+        self, symbol: str, from_date: str, till_date: str
+    ) -> tuple[tuple[str, str], ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT trade_date, secid FROM historical_sessions WHERE symbol=? AND trade_date>=? AND trade_date<=? ORDER BY trade_date, secid",
+                [symbol, from_date[:10], till_date[:10]],
+            ).fetchall()
+        return tuple((str(row[0]), str(row[1])) for row in rows)
+
+    def stored_session_secids(self, symbol: str, trade_date: str) -> tuple[str, ...]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT DISTINCT secid FROM historical_sessions WHERE symbol=? AND trade_date=? ORDER BY secid",
+                [symbol, trade_date[:10]],
+            ).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def stored_instrument(self, secid: str) -> Instrument | None:
+        with self._lock:
+            row = self._connection.execute(
+                """
+                SELECT symbol, root_symbol, board, engine, market, asset_class, source
+                FROM historical_candles
+                WHERE secid=?
+                ORDER BY begin DESC
+                LIMIT 1
+                """,
+                [secid],
+            ).fetchone()
+        if row is None:
+            return None
+        return Instrument(
+            symbol=str(row[0]),
+            secid=secid,
+            board=str(row[2]),
+            engine=str(row[3]),
+            market=str(row[4]),
+            asset_class=str(row[5]),  # type: ignore[arg-type]
+            root_symbol=str(row[1]) if row[1] is not None else None,
+            source=str(row[6]),
+        )
 
     def is_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> bool:
         with self._lock:

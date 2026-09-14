@@ -14,6 +14,17 @@ from birzha.providers.moex_resolver import MoexDirectInstrumentResolver
 
 
 MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
+MOEX_FUTURES_ROOT_SYMBOLS = frozenset({"SI", "BR", "GOLD"})
+
+
+def is_futures_root_symbol(symbol: str) -> bool:
+    """Return whether BIRZHA treats this symbol as a rolling MOEX futures root.
+
+    This explicit identity is required for ambiguous roots such as GOLD, where
+    MOEX also exposes an exact SECID named GOLD. Research/backfills must follow
+    the liquid quarterly contract chain instead of pinning that exact SECID.
+    """
+    return symbol.strip().upper() in MOEX_FUTURES_ROOT_SYMBOLS
 
 
 @dataclass(slots=True)
@@ -37,12 +48,14 @@ class MarketDataService:
         )
 
     def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
-        """Resolve exact SECID first, otherwise the correct futures root contract.
+        """Resolve a direct MOEX instrument or the correct futures-root contract.
 
-        For historical dates, futures roots are resolved from the MOEX ISS
-        history endpoint for that date. This is mandatory for causal backtests.
+        Configured futures roots are resolved as rolling contract families even
+        if an exact SECID with the same text exists. Historical dates use the
+        causal MOEX ISS history resolver; current dates use the active contract.
         """
-        if self.direct_resolver is not None:
+        is_root = is_futures_root_symbol(symbol)
+        if self.direct_resolver is not None and not is_root:
             direct = self.direct_resolver.resolve(symbol)
             if direct is not None and direct.asset_class != "unknown":
                 return direct

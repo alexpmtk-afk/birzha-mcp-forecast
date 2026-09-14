@@ -2,7 +2,7 @@ name: Real MOEX Validation
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, m22-gold-futures-root]
     paths:
       - "src/**"
       - "scripts/run_live_validation.py"

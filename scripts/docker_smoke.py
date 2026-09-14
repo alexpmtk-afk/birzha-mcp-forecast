@@ -48,11 +48,25 @@ async def check_mcp() -> None:
     async with Client(f"{BASE_URL}/mcp") as client:
         tools = await client.list_tools()
         tool_names = {tool.name for tool in tools.tools}
-        assert "system.version" in tool_names, tool_names
+        required = {
+            "system.version",
+            "workflow.start_core_validation",
+            "workflow.status",
+            "workflow.list",
+            "workflow.approve",
+        }
+        assert required <= tool_names, tool_names
 
         result = await client.call_tool("system.version", {})
         assert not result.is_error, result
         assert result.structured_content == EXPECTED_VERSION, result
+
+        start = await client.call_tool("workflow.start_core_validation", {})
+        assert not start.is_error, start
+        payload = start.structured_content
+        assert payload is not None
+        assert payload["status"] == "ERROR", payload
+        assert payload["reason"] == "SOURCE_IDENTITY_MISSING", payload
 
 
 def main() -> None:
