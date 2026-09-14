@@ -1,9 +1,9 @@
-"""Authenticated client for the BIRZHA Google Apps Script market mirror bridge.
+"""Authenticated Birzha client for the shared Google Apps Script Drive bridge.
 
-The Yandex-hosted runtime never receives Google OAuth credentials. It talks to
-an Apps Script Web App that executes as the Drive owner and is hard-scoped to
-the existing ``Биржа/Архив рыночных данных`` hierarchy. The shared secret is
-injected at runtime from Yandex Lockbox and must never be committed to Git.
+The Yandex-hosted runtime reuses the already deployed owner-executed Apps Script
+Web App used by Marketplaces. Birzha operations are namespaced (``birzha_*``),
+so the existing Marketplace protocol remains backward compatible. The shared
+secret is injected from Yandex Lockbox and never committed to Git.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ class GoogleSheetsBridgeNotConfigured(RuntimeError):
 
 
 class GoogleSheetsBridgeError(RuntimeError):
-    """The Google Apps Script mirror bridge rejected or failed an operation."""
+    """The shared Google Apps Script bridge rejected or failed an operation."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,16 +42,19 @@ class GoogleSheetsBridgeConfig:
 
 
 class GoogleSheetsBridge:
-    """Small fail-closed client for bounded native Google Sheets operations."""
+    """Fail-closed Birzha client for the shared Apps Script Web App."""
 
     _MAX_ATTEMPTS = 3
     _RETRYABLE = {408, 425, 429, 500, 502, 503, 504}
     _ALLOWED_SHEETS = frozenset({"D1", "SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"})
+    _ACTION_PREFIX = "birzha_"
 
     def __init__(self, config: GoogleSheetsBridgeConfig) -> None:
         self.config = config
 
     def _post(self, action: str, **payload: Any) -> dict[str, Any]:
+        if not action.startswith(self._ACTION_PREFIX):
+            raise ValueError("Birzha bridge actions must use the birzha_ namespace")
         body = {"secret": self.config.bridge_secret, "action": action, **payload}
         last_error: Exception | None = None
         for attempt in range(1, self._MAX_ATTEMPTS + 1):
@@ -90,7 +93,7 @@ class GoogleSheetsBridge:
         raise GoogleSheetsBridgeError(f"Google Sheets bridge request failed: {last_error}")
 
     def health(self) -> dict[str, Any]:
-        data = self._post("health")
+        data = self._post("birzha_health")
         if str(data.get("root_id") or "") != self.config.root_folder_id:
             raise GoogleSheetsBridgeError(
                 "Google Sheets bridge root mismatch: "
@@ -102,7 +105,7 @@ class GoogleSheetsBridge:
         symbol = symbol.strip()
         if not symbol:
             raise ValueError("symbol is required")
-        data = self._post("ensure_archive", symbol=symbol)
+        data = self._post("birzha_ensure_archive", symbol=symbol)
         spreadsheet_id = str(data.get("spreadsheet_id") or "").strip()
         folder_id = str(data.get("folder_id") or "").strip()
         if not spreadsheet_id or not folder_id:
@@ -149,7 +152,7 @@ class GoogleSheetsBridge:
             raise ValueError("spreadsheet_id is required")
         normalized = self._validated_sheets(sheets)
         data = self._post(
-            "replace_snapshot",
+            "birzha_replace_snapshot",
             spreadsheet_id=spreadsheet_id,
             sheets=normalized,
         )
@@ -163,4 +166,4 @@ class GoogleSheetsBridge:
         spreadsheet_id = spreadsheet_id.strip()
         if not spreadsheet_id:
             raise ValueError("spreadsheet_id is required")
-        return self._post("summary", spreadsheet_id=spreadsheet_id)
+        return self._post("birzha_summary", spreadsheet_id=spreadsheet_id)
