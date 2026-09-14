@@ -58,41 +58,41 @@ jobs:
           chmod 600 "$RUNNER_TEMP/yandex-iam-token"
           echo 'HISTORICAL_PREPARER_TOKEN=PASS'
 
-      - name: Start exact Birzha TEST YDB when stopped
+      - name: Install Yandex Cloud CLI
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json, os, time, urllib.request
-          from pathlib import Path
-          token=(Path(os.environ['RUNNER_TEMP'])/'yandex-iam-token').read_text().strip()
-          headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}
-          db_id=os.environ['YDB_DATABASE_ID']
-          get_url=f'https://ydb.api.cloud.yandex.net/ydb/v1/databases/{db_id}'
-          def get_db():
-              with urllib.request.urlopen(urllib.request.Request(get_url,headers=headers),timeout=30) as r:
-                  return json.loads(r.read())
-          db=get_db(); status=db.get('status'); name=db.get('name')
-          assert name == 'birzha-mcp-forecast-state', (name,status)
-          print(f'YDB_PRECHECK=PASS status={status}')
-          if status == 'STOPPED':
-              req=urllib.request.Request(f'https://ydb.api.cloud.yandex.net/ydb/v1/databases/{db_id}:start',data=b'{}',headers=headers,method='POST')
-              with urllib.request.urlopen(req,timeout=30) as r:
-                  op=json.loads(r.read() or b'{}')
-              print('YDB_START_REQUEST=ACCEPTED operation_id='+str(op.get('id','')))
-          elif status != 'RUNNING':
-              raise RuntimeError(f'unsafe YDB status: {status}')
-          for _ in range(60):
-              db=get_db(); status=db.get('status')
-              if status == 'RUNNING':
-                  print('YDB_START=PASS status=RUNNING')
-                  break
-              if status not in ('STARTING','STOPPED'):
-                  raise RuntimeError(f'unexpected YDB status: {status}')
-              time.sleep(5)
-          else:
-              raise RuntimeError(f'YDB did not reach RUNNING; final={status}')
-          PY
+          mkdir -p "$RUNNER_TEMP/yc"
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            -o "$RUNNER_TEMP/yc.tgz" \
+            'https://storage.yandexcloud.net/yandexcloud-yc/release/yc_linux_amd64.tar.gz'
+          tar -xzf "$RUNNER_TEMP/yc.tgz" -C "$RUNNER_TEMP/yc"
+          chmod +x "$RUNNER_TEMP/yc/yc"
+          echo "$RUNNER_TEMP/yc" >> "$GITHUB_PATH"
+
+      - name: Start exact Birzha TEST YDB through official CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          IAM_TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
+          DB_JSON="$RUNNER_TEMP/ydb-before.json"
+          yc ydb database get --id "$YDB_DATABASE_ID" --token "$IAM_TOKEN" --format json > "$DB_JSON"
+          test "$(jq -r '.id' "$DB_JSON")" = "$YDB_DATABASE_ID"
+          test "$(jq -r '.name' "$DB_JSON")" = 'birzha-mcp-forecast-state'
+          STATUS="$(jq -r '.status' "$DB_JSON")"
+          echo "YDB_PRECHECK=PASS status=$STATUS"
+          if [[ "$STATUS" == 'STOPPED' ]]; then
+            yc ydb database start --id "$YDB_DATABASE_ID" --token "$IAM_TOKEN" --format json > "$RUNNER_TEMP/ydb-start.json"
+            echo 'YDB_START_REQUEST=PASS'
+          elif [[ "$STATUS" != 'RUNNING' ]]; then
+            echo "Unexpected YDB pre-start status: $STATUS" >&2
+            exit 1
+          fi
+          yc ydb database get --id "$YDB_DATABASE_ID" --token "$IAM_TOKEN" --format json > "$RUNNER_TEMP/ydb-after.json"
+          FINAL="$(jq -r '.status' "$RUNNER_TEMP/ydb-after.json")"
+          echo "YDB_FINAL_STATUS=$FINAL"
+          test "$FINAL" = 'RUNNING'
+          echo 'YDB_START=PASS status=RUNNING'
 
       - name: Checkout exact M25 application source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -164,4 +164,4 @@ jobs:
 
       - name: Cleanup token
         if: always()
-        run: rm -f "$RUNNER_TEMP/yandex-iam-token"
+        run: rm -f "$RUNNER_TEMP/yandex-iam-token" "$RUNNER_TEMP/yc.tgz" "$RUNNER_TEMP/ydb-before.json" "$RUNNER_TEMP/ydb-start.json" "$RUNNER_TEMP/ydb-after.json"
