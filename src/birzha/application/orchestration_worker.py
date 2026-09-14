@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from birzha.application.historical_data import HistoricalDataService, _verification_symbol
 from birzha.application.market_data import is_futures_root_symbol
+from birzha.application.market_mirror_sync import MarketMirrorSyncService
 from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.application.validation_readiness import (
     CORE_VALIDATION_SYMBOLS,
@@ -29,6 +30,8 @@ DEFAULT_WORKER_LEASE_SECONDS = 180
 class OrchestrationWorker:
     orchestrator: WorkflowOrchestrator
     history: HistoricalDataService
+    mirror: MarketMirrorSyncService | None = None
+    require_market_mirror: bool = False
     lease_seconds: int = DEFAULT_WORKER_LEASE_SECONDS
 
     def run_next_active(self, *, worker_id: str) -> dict[str, object]:
@@ -202,7 +205,21 @@ class OrchestrationWorker:
             self.history.store.mark_session_range_verified(
                 session_symbol, from_date, till_date
             )
-        return {
+
+        mirror_evidence: dict[str, object] | None = None
+        if timeframe == "D1":
+            if self.require_market_mirror and self.mirror is None:
+                raise RuntimeError("mandatory Google market mirror is not configured")
+            if self.mirror is not None:
+                mirror_evidence = self.mirror.sync(
+                    symbol=symbol,
+                    from_date=from_date,
+                    till_date=till_date,
+                )
+                if mirror_evidence.get("status") != "MIRROR_SYNC_PASS":
+                    raise RuntimeError("mandatory Google market mirror did not pass parity")
+
+        result: dict[str, object] = {
             "status": "PASS",
             "symbol": symbol,
             "timeframe": timeframe,
@@ -211,3 +228,6 @@ class OrchestrationWorker:
             "verified_chunks": checked,
             "verification_symbol": verification_symbol,
         }
+        if mirror_evidence is not None:
+            result["market_mirror"] = mirror_evidence
+        return result
