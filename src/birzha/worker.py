@@ -1,12 +1,8 @@
 """Private HTTP worker invoked by a cloud scheduler.
 
-This is intentionally separate from the public MCP surface. The worker discovers
-safe runnable workflows from YDB, executes at most one bounded action per tick,
-and persists the result before returning.
-
-Yandex Serverless Container triggers invoke the container with an HTTP POST to
-its invocation address, so ``/`` is the canonical timer entry point. ``/tick``
-is kept as an explicit diagnostic alias.
+This worker keeps YDB as the authoritative store. When the Google market mirror
+is required, every finalized D1 range must also pass stable Bridge Protocol v1
+staging, commit, and post-commit read-back before the orchestration action passes.
 """
 
 from __future__ import annotations
@@ -22,10 +18,12 @@ from starlette.routing import Route
 
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.market_data import MarketDataService
+from birzha.application.market_mirror_sync import MarketMirrorSyncService
 from birzha.application.orchestration_worker import OrchestrationWorker
 from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.config import Settings
+from birzha.storage.google_sheets_bridge import GoogleSheetsBridge, GoogleSheetsBridgeConfig
 from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 from birzha.storage.ydb_runtime_orchestration_store import YdbRuntimeOrchestrationStore
@@ -48,12 +46,40 @@ _control = ProcessUpstreamControlPlane(
     require_distributed_gate=True,
 )
 _market = MarketDataService.default(control_plane=_control)
+_history_store = YdbHistoricalCandleStore(_runtime.pool)
 _history = HistoricalDataService(
     market_data=_market,
-    store=YdbHistoricalCandleStore(_runtime.pool),
+    store=_history_store,
 )
 _orchestrator = WorkflowOrchestrator(YdbRuntimeOrchestrationStore(_runtime.pool))
-_worker = OrchestrationWorker(orchestrator=_orchestrator, history=_history)
+
+_mirror = None
+if settings.market_mirror_bridge_url:
+    if not (
+        settings.market_mirror_bridge_secret
+        and settings.market_mirror_root_folder_id
+    ):
+        raise RuntimeError("Google market mirror Bridge v1 configuration is incomplete")
+    _bridge = GoogleSheetsBridge(
+        GoogleSheetsBridgeConfig(
+            bridge_url=settings.market_mirror_bridge_url,
+            bridge_secret=settings.market_mirror_bridge_secret,
+            root_folder_id=settings.market_mirror_root_folder_id,
+        )
+    )
+    # Startup must fail closed before any scheduled work if the configured
+    # deployment is not the stable isolated Birzha Bridge/root.
+    _bridge.health()
+    _mirror = MarketMirrorSyncService(source=_history_store, bridge=_bridge)
+elif settings.market_mirror_required:
+    raise RuntimeError("mandatory Google market mirror Bridge v1 is not configured")
+
+_worker = OrchestrationWorker(
+    orchestrator=_orchestrator,
+    history=_history,
+    mirror=_mirror,
+    require_market_mirror=settings.market_mirror_required,
+)
 
 
 async def healthz(_: Request) -> JSONResponse:
@@ -64,6 +90,10 @@ async def healthz(_: Request) -> JSONResponse:
             "version": VERSION,
             "state_backend": "ydb",
             "mode": "private-autonomous-worker",
+            "market_mirror_required": settings.market_mirror_required,
+            "market_mirror_configured": _mirror is not None,
+            "market_mirror_protocol": 1 if _mirror is not None else None,
+            "market_mirror_bridge_release": "1.0.0" if _mirror is not None else None,
         }
     )
 
