@@ -8,6 +8,9 @@ def _clear(monkeypatch):
         "HOST", "PORT", "MCP_ALLOWED_HOSTS", "MCP_ALLOWED_ORIGINS",
         "BIRZHA_STATE_BACKEND", "YDB_CONNECTION_STRING", "BIRZHA_FORECAST_JOURNAL_PATH",
         "BIRZHA_REQUIRE_MCP_AUTH", "BIRZHA_MCP_BEARER_TOKEN",
+        "BIRZHA_SOURCE_SHA", "BIRZHA_SOURCE_COMMIT",
+        "BIRZHA_MARKET_MIRROR_REQUIRED", "BIRZHA_MARKET_MIRROR_BRIDGE_URL",
+        "BIRZHA_MARKET_MIRROR_BRIDGE_SECRET", "BIRZHA_MARKET_MIRROR_ROOT_FOLDER_ID",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -23,6 +26,7 @@ def test_default_settings(monkeypatch):
     assert settings.ydb_connection_string is None
     assert settings.require_mcp_auth is False
     assert settings.mcp_bearer_token is None
+    assert settings.market_mirror_required is False
 
 
 def test_runtime_port(monkeypatch):
@@ -83,3 +87,28 @@ def test_required_mcp_auth_with_token(monkeypatch):
     settings = Settings.from_env()
     assert settings.require_mcp_auth is True
     assert settings.mcp_bearer_token == "test-secret"
+
+
+def test_source_commit_alias_populates_source_sha(monkeypatch):
+    _clear(monkeypatch)
+    sha = "a" * 40
+    monkeypatch.setenv("BIRZHA_SOURCE_COMMIT", sha)
+    assert Settings.from_env().source_sha == sha
+
+
+def test_required_market_mirror_without_bridge_config_fails_closed(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_REQUIRED", "true")
+    with pytest.raises(ValueError, match="market mirror"):
+        Settings.from_env()
+
+
+def test_required_market_mirror_with_complete_config(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_REQUIRED", "true")
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_BRIDGE_URL", "https://script.google.com/macros/s/test/exec")
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_BRIDGE_SECRET", "secret")
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_ROOT_FOLDER_ID", "root")
+    settings = Settings.from_env()
+    assert settings.market_mirror_required is True
+    assert settings.market_mirror_bridge_url.endswith("/exec")
