@@ -22,8 +22,10 @@ from birzha.application.orchestration_worker import OrchestrationWorker
 from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.config import Settings
-from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_runtime_storage import (
+    YdbRuntimeHistoricalCandleStore,
+    YdbRuntimeSlotPacingGate,
+)
 from birzha.storage.ydb_runtime_orchestration_store import YdbRuntimeOrchestrationStore
 from birzha.storage.ydb_state import YdbRuntime
 from birzha.version import SERVICE_NAME, VERSION
@@ -37,17 +39,31 @@ if (os.getenv("BIRZHA_ORCHESTRATOR_WORKER") or "").strip().lower() != "true":
 
 _runtime = YdbRuntime.connect(settings.ydb_connection_string)
 _control = ProcessUpstreamControlPlane(
-    gate_factory=lambda provider_key: YdbSlotPacingGate(_runtime.pool, provider_key=provider_key),
+    gate_factory=lambda provider_key: YdbRuntimeSlotPacingGate(
+        _runtime.pool,
+        provider_key=provider_key,
+    ),
     require_distributed_gate=True,
 )
 _market = MarketDataService.default(control_plane=_control)
-_history = HistoricalDataService(market_data=_market, store=YdbHistoricalCandleStore(_runtime.pool))
+_history = HistoricalDataService(
+    market_data=_market,
+    store=YdbRuntimeHistoricalCandleStore(_runtime.pool),
+)
 _orchestrator = WorkflowOrchestrator(YdbRuntimeOrchestrationStore(_runtime.pool))
 _worker = OrchestrationWorker(orchestrator=_orchestrator, history=_history)
 
 
 async def healthz(_: Request) -> JSONResponse:
-    return JSONResponse({"status": "ok", "service": f"{SERVICE_NAME}-orchestrator-worker", "version": VERSION, "state_backend": "ydb", "mode": "private-autonomous-worker"})
+    return JSONResponse(
+        {
+            "status": "ok",
+            "service": f"{SERVICE_NAME}-orchestrator-worker",
+            "version": VERSION,
+            "state_backend": "ydb",
+            "mode": "private-autonomous-worker",
+        }
+    )
 
 
 async def tick(_: Request) -> JSONResponse:
@@ -56,7 +72,14 @@ async def tick(_: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
-app = Starlette(debug=False, routes=[Route("/", tick, methods=["POST"]), Route("/healthz", healthz, methods=["GET"]), Route("/tick", tick, methods=["POST"])])
+app = Starlette(
+    debug=False,
+    routes=[
+        Route("/", tick, methods=["POST"]),
+        Route("/healthz", healthz, methods=["GET"]),
+        Route("/tick", tick, methods=["POST"]),
+    ],
+)
 
 
 def main() -> None:
