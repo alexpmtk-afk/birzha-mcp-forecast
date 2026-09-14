@@ -1,0 +1,167 @@
+name: M23 BR Capacity Resume Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m23-br-capacity-resume-once.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  OIDC_AUDIENCE: https://github.com/alexpmtk-afk
+  HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
+  EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
+  YDB_DATABASE_ID: etnes7omhgut11oulsd5
+  YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
+  APP_SHA: 926d9060eac6b8efb77924c77aa4cfee41bc26d3
+
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Mint historical-preparer IAM token through GitHub OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENCODED_AUDIENCE="$(python -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["OIDC_AUDIENCE"], safe=""))')"
+          SEP='?'; [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] && SEP='&'
+          OIDC_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${SEP}audience=${ENCODED_AUDIENCE}")"
+          OIDC_JWT="$(python -c 'import json,sys; print(json.load(sys.stdin).get("value", ""))' <<< "$OIDC_RESPONSE")"
+          test -n "$OIDC_JWT"
+          echo "::add-mask::$OIDC_JWT"
+          python - "$OIDC_JWT" <<'PY'
+          import base64, json, os, sys
+          payload=sys.argv[1].split('.')[1]; payload += '=' * (-len(payload) % 4)
+          claims=json.loads(base64.urlsafe_b64decode(payload))
+          assert claims.get('sub') == os.environ['EXPECTED_OIDC_SUBJECT'], claims.get('sub')
+          assert claims.get('aud') == os.environ['OIDC_AUDIENCE'], claims.get('aud')
+          print('OIDC_CLAIMS=PASS')
+          PY
+          TOKEN_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -X POST 'https://auth.yandex.cloud/oauth/token' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+            --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
+            --data-urlencode "audience=${HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID}" \
+            --data-urlencode "subject_token=${OIDC_JWT}" \
+            --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
+          IAM_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("access_token", ""))' <<< "$TOKEN_RESPONSE")"
+          test -n "$IAM_TOKEN"
+          echo "::add-mask::$IAM_TOKEN"
+          printf '%s' "$IAM_TOKEN" > "$RUNNER_TEMP/yandex-iam-token"
+          chmod 600 "$RUNNER_TEMP/yandex-iam-token"
+          echo 'HISTORICAL_PREPARER_TOKEN=PASS'
+
+      - name: Start exact Birzha TEST YDB when stopped
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, time, urllib.request
+          from pathlib import Path
+          token=(Path(os.environ['RUNNER_TEMP'])/'yandex-iam-token').read_text().strip()
+          headers={'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+          db_id=os.environ['YDB_DATABASE_ID']
+          get_url=f'https://ydb.api.cloud.yandex.net/ydb/v1/databases/{db_id}'
+          def get_db():
+              with urllib.request.urlopen(urllib.request.Request(get_url,headers=headers),timeout=30) as r:
+                  return json.loads(r.read())
+          db=get_db(); status=db.get('status'); name=db.get('name')
+          assert name == 'birzha-mcp-forecast-state', (name,status)
+          print(f'YDB_PRECHECK=PASS status={status}')
+          if status == 'STOPPED':
+              req=urllib.request.Request(f'https://ydb.api.cloud.yandex.net/ydb/v1/databases/{db_id}:start',data=b'{}',headers=headers,method='POST')
+              with urllib.request.urlopen(req,timeout=30) as r:
+                  op=json.loads(r.read() or b'{}')
+              print('YDB_START_REQUEST=ACCEPTED operation_id='+str(op.get('id','')))
+          elif status != 'RUNNING':
+              raise RuntimeError(f'unsafe YDB status: {status}')
+          for _ in range(60):
+              db=get_db(); status=db.get('status')
+              if status == 'RUNNING':
+                  print('YDB_START=PASS status=RUNNING')
+                  break
+              if status not in ('STARTING','STOPPED'):
+                  raise RuntimeError(f'unexpected YDB status: {status}')
+              time.sleep(5)
+          else:
+              raise RuntimeError(f'YDB did not reach RUNNING; final={status}')
+          PY
+
+      - name: Checkout exact M25 application source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: alexpmtk-afk/birzha-mcp-forecast
+          ref: ${{ env.APP_SHA }}
+          path: app
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install exact application source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C app rev-parse HEAD)" = "$APP_SHA"
+          python -m pip install --disable-pip-version-check -e ./app
+
+      - name: Run read-only BR capacity audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/app/src"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import ydb
+          from birzha.application.historical_data import HistoricalDataService
+          from birzha.application.market_data import MarketDataService
+          from birzha.application.validation_capacity_plan import plan_contiguous_equal_windows
+          from birzha.storage.ydb_runtime_storage import YdbRuntimeHistoricalCandleStore
+
+          token=(Path(os.environ['RUNNER_TEMP'])/'yandex-iam-token').read_text().strip()
+          driver=ydb.Driver(connection_string=os.environ['YDB_CONNECTION_STRING'],credentials=ydb.AccessTokenCredentials(token))
+          driver.wait(timeout=20,fail_fast=True)
+          pool=ydb.QuerySessionPool(driver)
+          try:
+              history=HistoricalDataService(market_data=MarketDataService.default(),store=YdbRuntimeHistoricalCandleStore(pool))
+              checks={start:history.is_range_verified('BR',timeframe='D1',from_date=start,till_date='2024-12-31') for start in ('2013-01-01','2012-01-01','2011-01-01','2010-01-01','2009-01-01')}
+              verified=pool.execute_with_retries("SELECT symbol,timeframe,from_date,till_date FROM `historical_candles_verified_ranges` WHERE symbol='BR' ORDER BY from_date,till_date;",retry_settings=ydb.RetrySettings(idempotent=True))
+              vr=[]
+              for rs in verified:
+                  for row in getattr(rs,'rows',[]) or []:
+                      vr.append({k:(row[k].decode() if isinstance(row[k],bytes) else row[k]) for k in row.keys()})
+              session=pool.execute_with_retries("SELECT symbol,from_date,till_date FROM `historical_candles_session_verified_ranges` WHERE symbol='BR' ORDER BY from_date,till_date;",retry_settings=ydb.RetrySettings(idempotent=True))
+              sr=[]
+              for rs in session:
+                  for row in getattr(rs,'rows',[]) or []:
+                      sr.append({k:(row[k].decode() if isinstance(row[k],bytes) else row[k]) for k in row.keys()})
+              plans={}
+              if checks['2013-01-01']:
+                  plans['6y']=plan_contiguous_equal_windows(history,'BR',available_from='2013-01-01',holdout_end='2024-12-31',minimum_observations=20,minimum_window_years=6,maximum_window_years=6,step_sessions=5,max_points=400).to_dict()
+              if checks['2011-01-01']:
+                  plans['7y']=plan_contiguous_equal_windows(history,'BR',available_from='2011-01-01',holdout_end='2024-12-31',minimum_observations=20,minimum_window_years=7,maximum_window_years=7,step_sessions=5,max_points=400).to_dict()
+              payload={'schema':'BIRZHA_M23_BR_CAPACITY_RESUME_V1','verified_through_2024':checks,'verified_ranges':vr,'session_verified_ranges':sr,'plans':plans,'model_status':'NOT_EVALUATED','holdout_evaluated':False,'holdout_sealed':True}
+              Path(os.environ['RUNNER_TEMP'],'br-capacity-resume.json').write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True,default=str)+'\n')
+              print('BR_CAPACITY_RESUME='+json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str))
+          finally:
+              pool.stop(); driver.stop(timeout=5)
+          PY
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: birzha-m23-br-capacity-resume
+          path: ${{ runner.temp }}/br-capacity-resume.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Cleanup token
+        if: always()
+        run: rm -f "$RUNNER_TEMP/yandex-iam-token"
