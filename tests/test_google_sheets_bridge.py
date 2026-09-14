@@ -29,15 +29,26 @@ def test_validated_sheets_rejects_non_rectangular_rows() -> None:
         GoogleSheetsBridge._validated_sheets({"D1": [["a", "b"], [1]]})
 
 
-def test_health_fails_on_root_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generic_action_is_rejected_before_network() -> None:
     bridge = _bridge()
-    monkeypatch.setattr(
-        bridge,
-        "_post",
-        lambda action, **payload: {"ok": True, "root_id": "wrong-root"},
-    )
+    with pytest.raises(ValueError, match="birzha_ namespace"):
+        bridge._post("health")
+
+
+def test_health_uses_namespaced_action_and_fails_on_root_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = _bridge()
+    captured = {}
+
+    def fake_post(action: str, **payload):
+        captured["action"] = action
+        return {"ok": True, "root_id": "wrong-root"}
+
+    monkeypatch.setattr(bridge, "_post", fake_post)
     with pytest.raises(GoogleSheetsBridgeError, match="root mismatch"):
         bridge.health()
+    assert captured["action"] == "birzha_health"
 
 
 def test_ensure_archive_requires_complete_target(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -62,13 +73,13 @@ def test_ensure_archive_resolves_by_symbol(monkeypatch: pytest.MonkeyPatch) -> N
             "ok": True,
             "spreadsheet_id": "sheet-id",
             "folder_id": "br-folder",
-            "spreadsheet_name": "MOEX_HISTDATA_BR_MCP_CANONICAL",
+            "spreadsheet_name": "BIRZHA — BR — Market Data Mirror",
         }
 
     monkeypatch.setattr(bridge, "_post", fake_post)
     result = bridge.ensure_archive(symbol="BR")
     assert result["spreadsheet_id"] == "sheet-id"
-    assert captured == {"action": "ensure_archive", "symbol": "BR"}
+    assert captured == {"action": "birzha_ensure_archive", "symbol": "BR"}
 
 
 def test_replace_snapshot_requires_bridge_parity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -97,5 +108,19 @@ def test_replace_snapshot_accepts_verified_bridge_response(monkeypatch: pytest.M
         sheets={"D1": [["a", "b"], [1, 2]]},
     )
     assert result["parity"] is True
-    assert captured["action"] == "replace_snapshot"
+    assert captured["action"] == "birzha_replace_snapshot"
     assert captured["spreadsheet_id"] == "sheet-id"
+
+
+def test_summary_uses_namespaced_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = _bridge()
+    captured = {}
+
+    def fake_post(action: str, **payload):
+        captured["action"] = action
+        captured.update(payload)
+        return {"ok": True, "sheets": {}}
+
+    monkeypatch.setattr(bridge, "_post", fake_post)
+    bridge.summary(spreadsheet_id="sheet-id")
+    assert captured == {"action": "birzha_summary", "spreadsheet_id": "sheet-id"}
