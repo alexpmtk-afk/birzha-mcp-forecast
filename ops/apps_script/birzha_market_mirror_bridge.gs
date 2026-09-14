@@ -1,19 +1,57 @@
 /**
- * BIRZHA MCP -> Google Sheets market-data mirror bridge v1.
+ * BIRZHA MCP -> Google Sheets market-data mirror bridge v2.
  *
  * Deploy as a Google Apps Script Web App that executes as the Drive owner.
  * The shared secret lives ONLY in Script Properties under
- * BIRZHA_MARKET_MIRROR_SECRET.  This bridge is hard-scoped to the existing
- * "Биржа/Архив рыночных данных" folder and refuses spreadsheets outside it.
+ * BIRZHA_MARKET_MIRROR_SECRET. This bridge is hard-scoped to the existing
+ * "Биржа/Архив рыночных данных" hierarchy and refuses targets outside it.
  */
 const BIRZHA_MARKET_ROOT_ID = '1A7IzjXYSCWReZXdtrPZgZgLTnFIifsT2';
 const BIRZHA_MARKET_ROOT_NAME = 'Архив рыночных данных';
 const SECRET_PROPERTY = 'BIRZHA_MARKET_MIRROR_SECRET';
-const BRIDGE_VERSION = 1;
+const BRIDGE_VERSION = 2;
 const ALLOWED_SHEETS = ['D1', 'SESSIONS', 'VERIFIED_RANGES', 'SYNC_STATUS'];
 const MAX_ROWS_PER_SHEET = 25000;
 const MAX_COLUMNS = 40;
 const MAX_TOTAL_CELLS = 500000;
+
+const INSTRUMENT_TARGETS = {
+  'SI': {
+    folderId: '1c_WRQl2pPfsDSnwcR1l2dGyr0jwQVoNF',
+    folderName: 'Si — Доллар-рубль',
+    archiveCode: 'Si'
+  },
+  'BR': {
+    folderId: '1X9BbkWE-OeISlXKuPQ1SW6uT593pHwot',
+    folderName: 'BR — Brent',
+    archiveCode: 'BR'
+  },
+  'GOLD': {
+    folderId: '1mpXF423F5Y7oiSKSSGf5YmmbFZMcXohx',
+    folderName: 'GOLD — Золото',
+    archiveCode: 'GOLD'
+  },
+  'IMOEX': {
+    folderId: '1gDvLdbPe1vdrpP5hFUTNNetmxhkzIJYF',
+    folderName: 'MIX_MX — Индекс МосБиржи',
+    archiveCode: 'MIX_MX'
+  },
+  'RTSI': {
+    folderId: '1v0ZYWbxp5vuH8WIuQtTcg6qBfX1b69Ez',
+    folderName: 'RTS — Индекс РТС',
+    archiveCode: 'RTS'
+  },
+  'SBER': {
+    folderId: '14WYHet60gDRUtxlLAJ-BX_8_dyKiPjh0',
+    folderName: 'SBER — Сбербанк',
+    archiveCode: 'SBER'
+  },
+  'TATN': {
+    folderId: '1LPKvOALglvRInQuTKmJhVmbF-dAxpI61',
+    folderName: 'TATN — Татнефть',
+    archiveCode: 'TATN'
+  }
+};
 
 function json_(payload) {
   return ContentService
@@ -78,6 +116,59 @@ function isFolderWithinRoot_(folder, depth) {
     if (isFolderWithinRoot_(parents.next(), depth + 1)) return true;
   }
   return false;
+}
+
+function normalizeSymbol_(symbol) {
+  const value = String(symbol || '').trim().toUpperCase();
+  if (!value) throw new Error('symbol is required');
+  return value;
+}
+
+function targetForSymbol_(symbol) {
+  const key = normalizeSymbol_(symbol);
+  const target = INSTRUMENT_TARGETS[key];
+  if (!target) throw new Error('unsupported market archive symbol: ' + key);
+  const folder = DriveApp.getFolderById(target.folderId);
+  if (folder.getName() !== target.folderName) {
+    throw new Error('instrument folder name mismatch for ' + key);
+  }
+  if (!isFolderWithinRoot_(folder, 0)) {
+    throw new Error('instrument folder is outside BIRZHA market-data root');
+  }
+  return {key: key, target: target, folder: folder};
+}
+
+function ensureArchive_(body) {
+  const resolved = targetForSymbol_(body.symbol);
+  const title = 'MOEX_HISTDATA_' + resolved.target.archiveCode + '_MCP_CANONICAL';
+  const files = resolved.folder.getFilesByName(title);
+  let file = null;
+  while (files.hasNext()) {
+    const candidate = files.next();
+    if (candidate.getMimeType() !== MimeType.GOOGLE_SHEETS) continue;
+    if (file !== null) throw new Error('duplicate canonical market archive: ' + title);
+    file = candidate;
+  }
+
+  let created = false;
+  if (file === null) {
+    const spreadsheet = SpreadsheetApp.create(title);
+    file = DriveApp.getFileById(spreadsheet.getId());
+    file.moveTo(resolved.folder);
+    created = true;
+  }
+  assertSpreadsheetWithinRoot_(file.getId());
+  return {
+    ok: true,
+    action: 'ensure_archive',
+    symbol: resolved.key,
+    archive_code: resolved.target.archiveCode,
+    folder_id: resolved.folder.getId(),
+    folder_name: resolved.folder.getName(),
+    spreadsheet_id: file.getId(),
+    spreadsheet_name: file.getName(),
+    created: created
+  };
 }
 
 function assertSpreadsheetWithinRoot_(spreadsheetId) {
@@ -203,6 +294,7 @@ function doPost(e) {
     }
     const action = String(body.action || '');
     if (action === 'health') return json_(rootHealth_());
+    if (action === 'ensure_archive') return json_(ensureArchive_(body));
     if (action === 'replace_snapshot') return json_(replaceSnapshot_(body));
     if (action === 'summary') return json_(summary_(body));
     return json_({ok: false, error: 'unsupported action'});
