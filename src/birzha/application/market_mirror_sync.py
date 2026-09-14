@@ -56,6 +56,20 @@ class MarketMirrorSyncService:
         if len(last_data) < 2 or str(last_data[1])[:10] != snapshot.till_date:
             raise RuntimeError("Google mirror last-date parity failed")
 
+        # Only after the independent read-back checks pass may the human-facing
+        # SYNC_STATUS sheet claim PASS. A failed write/readback therefore never
+        # leaves a false successful status in Google Sheets.
+        final_sync_status = [list(row) for row in snapshot.sheets["SYNC_STATUS"]]
+        _set_sync_value(final_sync_status, "status", "MIRROR_SYNC_PASS")
+        _set_sync_value(final_sync_status, "bridge_version", health.get("version"))
+        _set_sync_value(final_sync_status, "readback_row_count", d1.get("data_rows"))
+        final_status_result = self.bridge.replace_snapshot(
+            spreadsheet_id=spreadsheet_id,
+            sheets={"SYNC_STATUS": final_sync_status},
+        )
+        if final_status_result.get("parity") is not True:
+            raise RuntimeError("Google mirror final status write did not pass parity")
+
         return {
             "status": "MIRROR_SYNC_PASS",
             "symbol": snapshot.symbol,
@@ -72,3 +86,11 @@ class MarketMirrorSyncService:
             "bridge_parity": True,
             "readback_row_count": d1.get("data_rows"),
         }
+
+
+def _set_sync_value(rows: list[list[object]], key: str, value: object) -> None:
+    for row in rows[1:]:
+        if len(row) >= 2 and str(row[0]) == key:
+            row[1] = value
+            return
+    rows.append([key, value])
