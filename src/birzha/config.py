@@ -52,6 +52,8 @@ class Settings:
     market_mirror_bridge_url: str | None = None
     market_mirror_bridge_secret: str | None = None
     market_mirror_root_folder_id: str | None = None
+    market_mirror_project_id: str = "birzha"
+    market_mirror_chunk_rows: int = 500
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -88,6 +90,20 @@ class Settings:
         market_mirror_root_folder_id = (
             os.getenv("BIRZHA_MARKET_MIRROR_ROOT_FOLDER_ID") or ""
         ).strip() or None
+        market_mirror_project_id = (
+            os.getenv("BIRZHA_MARKET_MIRROR_PROJECT_ID") or "birzha"
+        ).strip()
+        if market_mirror_project_id != "birzha":
+            raise ValueError("BIRZHA_MARKET_MIRROR_PROJECT_ID must be 'birzha'")
+        try:
+            market_mirror_chunk_rows = int(
+                (os.getenv("BIRZHA_MARKET_MIRROR_CHUNK_ROWS") or "500").strip()
+            )
+        except ValueError as exc:
+            raise ValueError("BIRZHA_MARKET_MIRROR_CHUNK_ROWS must be an integer") from exc
+        if market_mirror_chunk_rows < 1 or market_mirror_chunk_rows > 1000:
+            raise ValueError("BIRZHA_MARKET_MIRROR_CHUNK_ROWS must be 1..1000")
+
         if market_mirror_required and not all(
             (
                 market_mirror_bridge_url,
@@ -96,7 +112,7 @@ class Settings:
             )
         ):
             raise ValueError(
-                "BIRZHA market mirror is required but bridge URL/secret/root folder id is incomplete"
+                "BIRZHA market mirror is required but Bridge v1 URL/secret/root folder id is incomplete"
             )
 
         return cls(
@@ -115,4 +131,6 @@ class Settings:
             market_mirror_bridge_url=market_mirror_bridge_url,
             market_mirror_bridge_secret=market_mirror_bridge_secret,
             market_mirror_root_folder_id=market_mirror_root_folder_id,
+            market_mirror_project_id=market_mirror_project_id,
+            market_mirror_chunk_rows=market_mirror_chunk_rows,
         )
