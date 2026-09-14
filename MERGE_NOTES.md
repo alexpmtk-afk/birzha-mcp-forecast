@@ -1,0 +1,1 @@
+M25 unifies governed M23 market-data corrections, M24 autonomous orchestration, and the market-data mirror layer. This file is temporary merge evidence and may be removed after regression.
