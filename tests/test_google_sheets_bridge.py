@@ -40,6 +40,37 @@ def test_health_fails_on_root_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
         bridge.health()
 
 
+def test_ensure_archive_requires_complete_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = _bridge()
+    monkeypatch.setattr(
+        bridge,
+        "_post",
+        lambda action, **payload: {"ok": True, "spreadsheet_id": "sheet-only"},
+    )
+    with pytest.raises(GoogleSheetsBridgeError, match="incomplete archive target"):
+        bridge.ensure_archive(symbol="BR")
+
+
+def test_ensure_archive_resolves_by_symbol(monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge = _bridge()
+    captured = {}
+
+    def fake_post(action: str, **payload):
+        captured["action"] = action
+        captured.update(payload)
+        return {
+            "ok": True,
+            "spreadsheet_id": "sheet-id",
+            "folder_id": "br-folder",
+            "spreadsheet_name": "MOEX_HISTDATA_BR_MCP_CANONICAL",
+        }
+
+    monkeypatch.setattr(bridge, "_post", fake_post)
+    result = bridge.ensure_archive(symbol="BR")
+    assert result["spreadsheet_id"] == "sheet-id"
+    assert captured == {"action": "ensure_archive", "symbol": "BR"}
+
+
 def test_replace_snapshot_requires_bridge_parity(monkeypatch: pytest.MonkeyPatch) -> None:
     bridge = _bridge()
     monkeypatch.setattr(
