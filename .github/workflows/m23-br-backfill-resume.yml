@@ -1,0 +1,184 @@
+name: M23 BR Backfill Resume
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '37 * * * *'
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m23-br-backfill-resume.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: m23-br-backfill-resume
+  cancel-in-progress: false
+
+env:
+  OIDC_AUDIENCE: https://github.com/alexpmtk-afk
+  HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
+  EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
+  YDB_DATABASE_ID: etnes7omhgut11oulsd5
+  YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
+  APP_SHA: 926d9060eac6b8efb77924c77aa4cfee41bc26d3
+  DELTA_FROM: '2011-01-01'
+  DELTA_TILL: '2012-12-31'
+  BASE_FROM: '2013-01-01'
+  FULL_TILL: '2024-12-31'
+
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Mint historical-preparer IAM token through GitHub OIDC
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENCODED_AUDIENCE="$(python -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["OIDC_AUDIENCE"], safe=""))')"
+          SEP='?'; [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] && SEP='&'
+          OIDC_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}${SEP}audience=${ENCODED_AUDIENCE}")"
+          OIDC_JWT="$(python -c 'import json,sys; print(json.load(sys.stdin).get("value", ""))' <<< "$OIDC_RESPONSE")"
+          test -n "$OIDC_JWT"
+          echo "::add-mask::$OIDC_JWT"
+          python - "$OIDC_JWT" <<'PY'
+          import base64, json, os, sys
+          payload=sys.argv[1].split('.')[1]; payload += '=' * (-len(payload) % 4)
+          claims=json.loads(base64.urlsafe_b64decode(payload))
+          assert claims.get('sub') == os.environ['EXPECTED_OIDC_SUBJECT'], claims.get('sub')
+          assert claims.get('aud') == os.environ['OIDC_AUDIENCE'], claims.get('aud')
+          print('OIDC_CLAIMS=PASS')
+          PY
+          TOKEN_RESPONSE="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -X POST 'https://auth.yandex.cloud/oauth/token' \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' \
+            --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' \
+            --data-urlencode "audience=${HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID}" \
+            --data-urlencode "subject_token=${OIDC_JWT}" \
+            --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
+          IAM_TOKEN="$(python -c 'import json,sys; print(json.load(sys.stdin).get("access_token", ""))' <<< "$TOKEN_RESPONSE")"
+          test -n "$IAM_TOKEN"
+          echo "::add-mask::$IAM_TOKEN"
+          printf '%s' "$IAM_TOKEN" > "$RUNNER_TEMP/yandex-iam-token"
+          chmod 600 "$RUNNER_TEMP/yandex-iam-token"
+          echo 'HISTORICAL_PREPARER_TOKEN=PASS'
+
+      - name: Check YDB readiness without mutating infrastructure
+        id: ydb
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "https://ydb.api.cloud.yandex.net/ydb/v1/databases/${YDB_DATABASE_ID}" \
+            -o "$RUNNER_TEMP/ydb-state.json"
+          test "$(jq -r '.id' "$RUNNER_TEMP/ydb-state.json")" = "$YDB_DATABASE_ID"
+          test "$(jq -r '.name' "$RUNNER_TEMP/ydb-state.json")" = 'birzha-mcp-forecast-state'
+          STATUS="$(jq -r '.status' "$RUNNER_TEMP/ydb-state.json")"
+          echo "YDB_READINESS status=$STATUS"
+          [[ "$STATUS" == 'RUNNING' ]] && echo 'ready=true' >> "$GITHUB_OUTPUT" || echo 'ready=false' >> "$GITHUB_OUTPUT"
+
+      - name: Record deferred state while infrastructure self-heal owns recovery
+        if: steps.ydb.outputs.ready != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS="$(jq -r '.status' "$RUNNER_TEMP/ydb-state.json")"
+          cat > "$RUNNER_TEMP/br-backfill-resume.json" <<EOF
+          {
+            "schema": "BIRZHA_M23_BR_BACKFILL_RESUME_V1",
+            "status": "DEFERRED_TO_INFRA_SELF_HEAL",
+            "ydb_status": "$STATUS",
+            "requested_delta": "$DELTA_FROM..$DELTA_TILL",
+            "holdout_evaluated": false,
+            "holdout_sealed": true
+          }
+          EOF
+          echo "BR_BACKFILL_RESUME=DEFERRED_TO_INFRA_SELF_HEAL ydb_status=$STATUS"
+
+      - name: Checkout exact historical implementation
+        if: steps.ydb.outputs.ready == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: alexpmtk-afk/birzha-mcp-forecast
+          ref: ${{ env.APP_SHA }}
+          path: app
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install exact historical implementation
+        if: steps.ydb.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C app rev-parse HEAD)" = "$APP_SHA"
+          python -m pip install --disable-pip-version-check -e ./app
+
+      - name: Backfill only missing BR D1 delta and certify contiguous range
+        if: steps.ydb.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONPATH="$GITHUB_WORKSPACE/app/src"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import ydb
+          from birzha.application.historical_data import HistoricalDataService, _verification_symbol
+          from birzha.application.market_data import MarketDataService, is_futures_root_symbol
+          from birzha.storage.ydb_runtime_storage import YdbRuntimeHistoricalCandleStore
+
+          token=(Path(os.environ['RUNNER_TEMP'])/'yandex-iam-token').read_text().strip()
+          driver=ydb.Driver(connection_string=os.environ['YDB_CONNECTION_STRING'],credentials=ydb.AccessTokenCredentials(token))
+          driver.wait(timeout=20,fail_fast=True)
+          pool=ydb.QuerySessionPool(driver)
+          output=Path(os.environ['RUNNER_TEMP'])/'br-backfill-resume.json'
+          try:
+              store=YdbRuntimeHistoricalCandleStore(pool)
+              history=HistoricalDataService(market_data=MarketDataService.default(),store=store)
+              full_from=os.environ['DELTA_FROM']; delta_till=os.environ['DELTA_TILL']; base_from=os.environ['BASE_FROM']; full_till=os.environ['FULL_TILL']
+              full_ready=history.is_range_verified('BR',timeframe='D1',from_date=full_from,till_date=full_till)
+              base_ready=history.is_range_verified('BR',timeframe='D1',from_date=base_from,till_date=full_till)
+              if full_ready:
+                  payload={'schema':'BIRZHA_M23_BR_BACKFILL_RESUME_V1','status':'NOOP_ALREADY_READY','full_range':f'{full_from}..{full_till}','fetched_candles':0,'holdout_evaluated':False,'holdout_sealed':True}
+              elif not base_ready:
+                  payload={'schema':'BIRZHA_M23_BR_BACKFILL_RESUME_V1','status':'BLOCKED_BASELINE_NOT_VERIFIED','required_baseline':f'{base_from}..{full_till}','holdout_evaluated':False,'holdout_sealed':True}
+                  output.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True)+'\n')
+                  print('BR_BACKFILL_RESUME='+json.dumps(payload,sort_keys=True))
+                  raise SystemExit(2)
+              else:
+                  delta=history.sync('BR',timeframe='D1',from_date=full_from,till_date=delta_till)
+                  delta_ready=history.is_range_verified('BR',timeframe='D1',from_date=full_from,till_date=delta_till)
+                  if not delta_ready:
+                      raise RuntimeError('delta sync completed but verification marker is absent')
+                  verification_symbol=_verification_symbol('BR','D1',is_root=is_futures_root_symbol('BR'))
+                  store.mark_verified(verification_symbol,'D1',full_from,full_till)
+                  store.mark_session_range_verified(verification_symbol,full_from,full_till)
+                  if not history.is_range_verified('BR',timeframe='D1',from_date=full_from,till_date=full_till):
+                      raise RuntimeError('contiguous full-range certification failed')
+                  payload={'schema':'BIRZHA_M23_BR_BACKFILL_RESUME_V1','status':'BACKFILL_COMPLETE','delta':delta.to_dict(),'full_range':f'{full_from}..{full_till}','fetched_candles':delta.fetched_candles,'stored_candles':delta.stored_candles,'holdout_evaluated':False,'holdout_sealed':True}
+              output.write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True,default=str)+'\n')
+              print('BR_BACKFILL_RESUME='+json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str))
+          finally:
+              pool.stop(); driver.stop(timeout=5)
+          PY
+
+      - name: Upload durable backfill evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: birzha-m23-br-backfill-resume
+          path: ${{ runner.temp }}/br-backfill-resume.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Cleanup token and state
+        if: always()
+        run: rm -f "$RUNNER_TEMP/yandex-iam-token" "$RUNNER_TEMP/ydb-state.json"
