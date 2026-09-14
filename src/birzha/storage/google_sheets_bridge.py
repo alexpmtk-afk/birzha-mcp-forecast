@@ -1,9 +1,9 @@
 """Authenticated client for the BIRZHA Google Apps Script market mirror bridge.
 
-The Yandex-hosted runtime never receives Google OAuth credentials.  It talks to
+The Yandex-hosted runtime never receives Google OAuth credentials. It talks to
 an Apps Script Web App that executes as the Drive owner and is hard-scoped to
-the ``Архив рыночных данных`` folder.  The shared secret is injected at runtime
-from Yandex Lockbox and must never be committed to Git.
+the existing ``Биржа/Архив рыночных данных`` hierarchy. The shared secret is
+injected at runtime from Yandex Lockbox and must never be committed to Git.
 """
 
 from __future__ import annotations
@@ -95,6 +95,19 @@ class GoogleSheetsBridge:
             raise GoogleSheetsBridgeError(
                 "Google Sheets bridge root mismatch: "
                 f"{data.get('root_id')!r} != {self.config.root_folder_id!r}"
+            )
+        return data
+
+    def ensure_archive(self, *, symbol: str) -> dict[str, Any]:
+        symbol = symbol.strip()
+        if not symbol:
+            raise ValueError("symbol is required")
+        data = self._post("ensure_archive", symbol=symbol)
+        spreadsheet_id = str(data.get("spreadsheet_id") or "").strip()
+        folder_id = str(data.get("folder_id") or "").strip()
+        if not spreadsheet_id or not folder_id:
+            raise GoogleSheetsBridgeError(
+                f"Google Sheets bridge returned incomplete archive target: {str(data)[:500]}"
             )
         return data
 
