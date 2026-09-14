@@ -74,21 +74,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          IAM_TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
+          export YC_IAM_TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
           DB_JSON="$RUNNER_TEMP/ydb-before.json"
-          yc ydb database get --id "$YDB_DATABASE_ID" --token "$IAM_TOKEN" --format json > "$DB_JSON"
+          yc ydb database get --id "$YDB_DATABASE_ID" --format json > "$DB_JSON"
           test "$(jq -r '.id' "$DB_JSON")" = "$YDB_DATABASE_ID"
           test "$(jq -r '.name' "$DB_JSON")" = 'birzha-mcp-forecast-state'
           STATUS="$(jq -r '.status' "$DB_JSON")"
           echo "YDB_PRECHECK=PASS status=$STATUS"
           if [[ "$STATUS" == 'STOPPED' ]]; then
-            yc ydb database start --id "$YDB_DATABASE_ID" --token "$IAM_TOKEN" --format json > "$RUNNER_TEMP/ydb-start.json"
+            yc ydb database start --id "$YDB_DATABASE_ID" --format json > "$RUNNER_TEMP/ydb-start.json"
             echo 'YDB_START_REQUEST=PASS'
           elif [[ "$STATUS" != 'RUNNING' ]]; then
             echo "Unexpected YDB pre-start status: $STATUS" >&2
             exit 1
           fi
-          yc ydb database get --id "$YDB_DATABASE_ID" --token "$IAM_TOKEN" --format json > "$RUNNER_TEMP/ydb-after.json"
+          yc ydb database get --id "$YDB_DATABASE_ID" --format json > "$RUNNER_TEMP/ydb-after.json"
           FINAL="$(jq -r '.status' "$RUNNER_TEMP/ydb-after.json")"
           echo "YDB_FINAL_STATUS=$FINAL"
           test "$FINAL" = 'RUNNING'
