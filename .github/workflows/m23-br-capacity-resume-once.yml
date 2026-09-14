@@ -1,6 +1,9 @@
-name: M23 BR Capacity Resume Once
+name: M23 BR Capacity Resume
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: '27 * * * *'
   push:
     branches: [main]
     paths:
@@ -9,6 +12,10 @@ on:
 permissions:
   contents: read
   id-token: write
+
+concurrency:
+  group: m23-br-capacity-resume
+  cancel-in-progress: false
 
 env:
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
@@ -58,43 +65,46 @@ jobs:
           chmod 600 "$RUNNER_TEMP/yandex-iam-token"
           echo 'HISTORICAL_PREPARER_TOKEN=PASS'
 
-      - name: Install Yandex Cloud CLI
+      - name: Check YDB readiness without mutating infrastructure
+        id: ydb
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/yc"
-          curl --fail --silent --show-error --retry 5 --retry-all-errors \
-            -o "$RUNNER_TEMP/yc.tgz" \
-            'https://storage.yandexcloud.net/yandexcloud-yc/release/yc_linux_amd64.tar.gz'
-          tar -xzf "$RUNNER_TEMP/yc.tgz" -C "$RUNNER_TEMP/yc"
-          chmod +x "$RUNNER_TEMP/yc/yc"
-          echo "$RUNNER_TEMP/yc" >> "$GITHUB_PATH"
-
-      - name: Start exact Birzha TEST YDB through official CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          export YC_IAM_TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
-          DB_JSON="$RUNNER_TEMP/ydb-before.json"
-          yc ydb database get --id "$YDB_DATABASE_ID" --format json > "$DB_JSON"
-          test "$(jq -r '.id' "$DB_JSON")" = "$YDB_DATABASE_ID"
-          test "$(jq -r '.name' "$DB_JSON")" = 'birzha-mcp-forecast-state'
-          STATUS="$(jq -r '.status' "$DB_JSON")"
-          echo "YDB_PRECHECK=PASS status=$STATUS"
-          if [[ "$STATUS" == 'STOPPED' ]]; then
-            yc ydb database start --id "$YDB_DATABASE_ID" --format json > "$RUNNER_TEMP/ydb-start.json"
-            echo 'YDB_START_REQUEST=PASS'
-          elif [[ "$STATUS" != 'RUNNING' ]]; then
-            echo "Unexpected YDB pre-start status: $STATUS" >&2
-            exit 1
+          TOKEN="$(cat "$RUNNER_TEMP/yandex-iam-token")"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "https://ydb.api.cloud.yandex.net/ydb/v1/databases/${YDB_DATABASE_ID}" \
+            -o "$RUNNER_TEMP/ydb-state.json"
+          test "$(jq -r '.id' "$RUNNER_TEMP/ydb-state.json")" = "$YDB_DATABASE_ID"
+          test "$(jq -r '.name' "$RUNNER_TEMP/ydb-state.json")" = 'birzha-mcp-forecast-state'
+          STATUS="$(jq -r '.status' "$RUNNER_TEMP/ydb-state.json")"
+          echo "YDB_READINESS status=$STATUS"
+          if [[ "$STATUS" == 'RUNNING' ]]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
           fi
-          yc ydb database get --id "$YDB_DATABASE_ID" --format json > "$RUNNER_TEMP/ydb-after.json"
-          FINAL="$(jq -r '.status' "$RUNNER_TEMP/ydb-after.json")"
-          echo "YDB_FINAL_STATUS=$FINAL"
-          test "$FINAL" = 'RUNNING'
-          echo 'YDB_START=PASS status=RUNNING'
+
+      - name: Record deferred state while infrastructure self-heal owns recovery
+        if: steps.ydb.outputs.ready != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATUS="$(jq -r '.status' "$RUNNER_TEMP/ydb-state.json")"
+          cat > "$RUNNER_TEMP/br-capacity-resume.json" <<EOF
+          {
+            "schema": "BIRZHA_M23_BR_CAPACITY_RESUME_V2",
+            "status": "DEFERRED_TO_INFRA_SELF_HEAL",
+            "ydb_status": "$STATUS",
+            "model_status": "NOT_EVALUATED",
+            "holdout_evaluated": false,
+            "holdout_sealed": true
+          }
+          EOF
+          echo "BR_CAPACITY_RESUME=DEFERRED_TO_INFRA_SELF_HEAL ydb_status=$STATUS"
 
       - name: Checkout exact M25 application source
+        if: steps.ydb.outputs.ready == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: alexpmtk-afk/birzha-mcp-forecast
@@ -104,6 +114,7 @@ jobs:
           persist-credentials: false
 
       - name: Install exact application source
+        if: steps.ydb.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -111,6 +122,7 @@ jobs:
           python -m pip install --disable-pip-version-check -e ./app
 
       - name: Run read-only BR capacity audit
+        if: steps.ydb.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -146,22 +158,22 @@ jobs:
                   plans['6y']=plan_contiguous_equal_windows(history,'BR',available_from='2013-01-01',holdout_end='2024-12-31',minimum_observations=20,minimum_window_years=6,maximum_window_years=6,step_sessions=5,max_points=400).to_dict()
               if checks['2011-01-01']:
                   plans['7y']=plan_contiguous_equal_windows(history,'BR',available_from='2011-01-01',holdout_end='2024-12-31',minimum_observations=20,minimum_window_years=7,maximum_window_years=7,step_sessions=5,max_points=400).to_dict()
-              payload={'schema':'BIRZHA_M23_BR_CAPACITY_RESUME_V1','verified_through_2024':checks,'verified_ranges':vr,'session_verified_ranges':sr,'plans':plans,'model_status':'NOT_EVALUATED','holdout_evaluated':False,'holdout_sealed':True}
+              payload={'schema':'BIRZHA_M23_BR_CAPACITY_RESUME_V2','status':'AUDIT_COMPLETE','verified_through_2024':checks,'verified_ranges':vr,'session_verified_ranges':sr,'plans':plans,'model_status':'NOT_EVALUATED','holdout_evaluated':False,'holdout_sealed':True}
               Path(os.environ['RUNNER_TEMP'],'br-capacity-resume.json').write_text(json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True,default=str)+'\n')
               print('BR_CAPACITY_RESUME='+json.dumps(payload,ensure_ascii=False,sort_keys=True,default=str))
           finally:
               pool.stop(); driver.stop(timeout=5)
           PY
 
-      - name: Upload evidence
+      - name: Upload durable resume evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: birzha-m23-br-capacity-resume
           path: ${{ runner.temp }}/br-capacity-resume.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
-      - name: Cleanup token
+      - name: Cleanup token and state
         if: always()
-        run: rm -f "$RUNNER_TEMP/yandex-iam-token" "$RUNNER_TEMP/yc.tgz" "$RUNNER_TEMP/ydb-before.json" "$RUNNER_TEMP/ydb-start.json" "$RUNNER_TEMP/ydb-after.json"
+        run: rm -f "$RUNNER_TEMP/yandex-iam-token" "$RUNNER_TEMP/ydb-state.json"
