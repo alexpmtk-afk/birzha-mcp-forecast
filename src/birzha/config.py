@@ -48,6 +48,10 @@ class Settings:
     require_mcp_auth: bool = False
     mcp_bearer_token: str | None = None
     source_sha: str | None = None
+    market_mirror_required: bool = False
+    market_mirror_bridge_url: str | None = None
+    market_mirror_bridge_secret: str | None = None
+    market_mirror_root_folder_id: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -70,6 +74,20 @@ class Settings:
         ):
             raise ValueError("BIRZHA_SOURCE_SHA must be a full 40-character Git commit SHA")
 
+        mirror_required = _bool_env("BIRZHA_MARKET_MIRROR_REQUIRED", False)
+        mirror_url = (os.getenv("BIRZHA_MARKET_MIRROR_BRIDGE_URL") or "").strip() or None
+        mirror_secret = (os.getenv("BIRZHA_MARKET_MIRROR_BRIDGE_SECRET") or "").strip() or None
+        mirror_root = (os.getenv("BIRZHA_MARKET_MIRROR_ROOT_FOLDER_ID") or "").strip() or None
+        mirror_values = (mirror_url, mirror_secret, mirror_root)
+        if any(mirror_values) and not all(mirror_values):
+            raise ValueError(
+                "BIRZHA market mirror requires URL, secret, and root folder id together"
+            )
+        if mirror_required and not all(mirror_values):
+            raise ValueError(
+                "BIRZHA_MARKET_MIRROR_REQUIRED=true requires complete Bridge v1 configuration"
+            )
+
         return cls(
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8080")),
@@ -82,4 +100,8 @@ class Settings:
             require_mcp_auth=require_auth,
             mcp_bearer_token=bearer_token,
             source_sha=source_sha,
+            market_mirror_required=mirror_required,
+            market_mirror_bridge_url=mirror_url,
+            market_mirror_bridge_secret=mirror_secret,
+            market_mirror_root_folder_id=mirror_root,
         )
