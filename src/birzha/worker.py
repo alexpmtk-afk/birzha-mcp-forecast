@@ -61,15 +61,21 @@ if settings.market_mirror_bridge_url:
         settings.market_mirror_bridge_secret
         and settings.market_mirror_root_folder_id
     ):
-        raise RuntimeError("Google market mirror bridge configuration is incomplete")
+        raise RuntimeError("Google market mirror Bridge v1 configuration is incomplete")
     _bridge = GoogleSheetsBridge(
         GoogleSheetsBridgeConfig(
             bridge_url=settings.market_mirror_bridge_url,
             bridge_secret=settings.market_mirror_bridge_secret,
             root_folder_id=settings.market_mirror_root_folder_id,
+            project_id=settings.market_mirror_project_id,
+            chunk_rows=settings.market_mirror_chunk_rows,
         )
     )
-    _mirror = MarketMirrorSyncService(source=_history_store, bridge=_bridge)
+    _mirror = MarketMirrorSyncService(
+        source=_history_store,
+        bridge=_bridge,
+        chunk_rows=settings.market_mirror_chunk_rows,
+    )
 
 _worker = OrchestrationWorker(
     orchestrator=_orchestrator,
@@ -89,6 +95,10 @@ async def healthz(_: Request) -> JSONResponse:
             "mode": "private-autonomous-worker",
             "market_mirror_required": settings.market_mirror_required,
             "market_mirror_configured": _mirror is not None,
+            "market_mirror_protocol_version": 1 if _mirror is not None else None,
+            "market_mirror_project_id": (
+                settings.market_mirror_project_id if _mirror is not None else None
+            ),
         }
     )
 
