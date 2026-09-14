@@ -48,6 +48,10 @@ class Settings:
     require_mcp_auth: bool = False
     mcp_bearer_token: str | None = None
     source_sha: str | None = None
+    market_mirror_required: bool = False
+    market_mirror_bridge_url: str | None = None
+    market_mirror_bridge_secret: str | None = None
+    market_mirror_root_folder_id: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -63,12 +67,37 @@ class Settings:
         if require_auth and not bearer_token:
             raise ValueError("BIRZHA_MCP_BEARER_TOKEN is required when BIRZHA_REQUIRE_MCP_AUTH=true")
 
-        source_sha = (os.getenv("BIRZHA_SOURCE_SHA") or "").strip() or None
+        source_sha = (
+            os.getenv("BIRZHA_SOURCE_SHA")
+            or os.getenv("BIRZHA_SOURCE_COMMIT")
+            or ""
+        ).strip() or None
         if source_sha is not None and (
             len(source_sha) != 40
             or any(char not in "0123456789abcdefABCDEF" for char in source_sha)
         ):
-            raise ValueError("BIRZHA_SOURCE_SHA must be a full 40-character Git commit SHA")
+            raise ValueError("BIRZHA source SHA must be a full 40-character Git commit SHA")
+
+        market_mirror_required = _bool_env("BIRZHA_MARKET_MIRROR_REQUIRED", False)
+        market_mirror_bridge_url = (
+            os.getenv("BIRZHA_MARKET_MIRROR_BRIDGE_URL") or ""
+        ).strip() or None
+        market_mirror_bridge_secret = (
+            os.getenv("BIRZHA_MARKET_MIRROR_BRIDGE_SECRET") or ""
+        ).strip() or None
+        market_mirror_root_folder_id = (
+            os.getenv("BIRZHA_MARKET_MIRROR_ROOT_FOLDER_ID") or ""
+        ).strip() or None
+        if market_mirror_required and not all(
+            (
+                market_mirror_bridge_url,
+                market_mirror_bridge_secret,
+                market_mirror_root_folder_id,
+            )
+        ):
+            raise ValueError(
+                "BIRZHA market mirror is required but bridge URL/secret/root folder id is incomplete"
+            )
 
         return cls(
             host=os.getenv("HOST", "0.0.0.0"),
@@ -82,4 +111,8 @@ class Settings:
             require_mcp_auth=require_auth,
             mcp_bearer_token=bearer_token,
             source_sha=source_sha,
+            market_mirror_required=market_mirror_required,
+            market_mirror_bridge_url=market_mirror_bridge_url,
+            market_mirror_bridge_secret=market_mirror_bridge_secret,
+            market_mirror_root_folder_id=market_mirror_root_folder_id,
         )
