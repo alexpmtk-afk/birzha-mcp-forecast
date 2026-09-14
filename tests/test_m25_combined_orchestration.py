@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from birzha.application.orchestration_plan import build_core_validation_actions
 from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.domain.orchestration import ActionStatus, WorkflowStage, WorkflowStatus
 from birzha.storage.orchestration_store import MemoryOrchestrationStore
@@ -25,6 +26,26 @@ def test_m23_m24_m25_combined_orchestration_starts_fail_closed() -> None:
     assert state["storage_scope"] == "process-local"
     assert state["next_action"]["kind"] == "HISTORY_SYNC_CHUNK"
     assert state["requires_approval"] is False
+
+
+def test_autonomous_persistent_history_plan_is_d1_only() -> None:
+    actions = build_core_validation_actions(
+        "wf",
+        "2021-01-01",
+        "2022-12-31",
+        "2024-12-31",
+        SOURCE_SHA,
+    )
+    history = [
+        action
+        for action in actions
+        if action.kind in {"HISTORY_SYNC_CHUNK", "HISTORY_FINALIZE_RANGE"}
+    ]
+    assert history
+    assert {str(action.payload["timeframe"]) for action in history} == {"D1"}
+    readiness = next(action for action in actions if action.kind == "READINESS_AUDIT")
+    assert readiness.payload["persistent_timeframes"] == ["D1"]
+    assert readiness.payload["intraday_mode"] == "H1/M15_ON_DEMAND_NOT_PERSISTED"
 
 
 def test_claim_is_leased_and_not_double_claimed() -> None:
