@@ -11,6 +11,7 @@ def _clear(monkeypatch):
         "BIRZHA_SOURCE_SHA", "BIRZHA_SOURCE_COMMIT",
         "BIRZHA_MARKET_MIRROR_REQUIRED", "BIRZHA_MARKET_MIRROR_BRIDGE_URL",
         "BIRZHA_MARKET_MIRROR_BRIDGE_SECRET", "BIRZHA_MARKET_MIRROR_ROOT_FOLDER_ID",
+        "BIRZHA_MARKET_MIRROR_PROJECT_ID", "BIRZHA_MARKET_MIRROR_CHUNK_ROWS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -27,6 +28,8 @@ def test_default_settings(monkeypatch):
     assert settings.require_mcp_auth is False
     assert settings.mcp_bearer_token is None
     assert settings.market_mirror_required is False
+    assert settings.market_mirror_project_id == "birzha"
+    assert settings.market_mirror_chunk_rows == 500
 
 
 def test_runtime_port(monkeypatch):
@@ -103,12 +106,31 @@ def test_required_market_mirror_without_bridge_config_fails_closed(monkeypatch):
         Settings.from_env()
 
 
-def test_required_market_mirror_with_complete_config(monkeypatch):
+def test_required_market_mirror_with_complete_v1_config(monkeypatch):
     _clear(monkeypatch)
     monkeypatch.setenv("BIRZHA_MARKET_MIRROR_REQUIRED", "true")
     monkeypatch.setenv("BIRZHA_MARKET_MIRROR_BRIDGE_URL", "https://script.google.com/macros/s/test/exec")
     monkeypatch.setenv("BIRZHA_MARKET_MIRROR_BRIDGE_SECRET", "secret")
     monkeypatch.setenv("BIRZHA_MARKET_MIRROR_ROOT_FOLDER_ID", "root")
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_PROJECT_ID", "birzha")
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_CHUNK_ROWS", "250")
     settings = Settings.from_env()
     assert settings.market_mirror_required is True
     assert settings.market_mirror_bridge_url.endswith("/exec")
+    assert settings.market_mirror_project_id == "birzha"
+    assert settings.market_mirror_chunk_rows == 250
+
+
+def test_market_mirror_rejects_foreign_project_id(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_PROJECT_ID", "marketplaces")
+    with pytest.raises(ValueError, match="PROJECT_ID"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize("value", ["0", "1001", "nope"])
+def test_market_mirror_rejects_invalid_chunk_rows(monkeypatch, value):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_MARKET_MIRROR_CHUNK_ROWS", value)
+    with pytest.raises(ValueError, match="CHUNK_ROWS"):
+        Settings.from_env()
