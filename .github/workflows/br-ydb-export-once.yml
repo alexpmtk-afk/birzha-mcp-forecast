@@ -84,7 +84,7 @@ jobs:
           set -euo pipefail
           export PYTHONPATH="$GITHUB_WORKSPACE/app/src"
           python - <<'PY'
-          import base64, gzip, json, os
+          import json, os
           from pathlib import Path
           import ydb
           from birzha.storage.ydb_historical_store import _rows, _row_value, _utf8
@@ -166,22 +166,35 @@ jobs:
                       source,
                   ])
               out.sort(key=lambda r:(r[1],r[8],r[4]))
-              payload={'columns':['record_key','calendar_date','trade_session_date','session_id','bar_start_time','bar_end_time','available_at','available_at_confidence','contract_code','open','high','low','close','volume','number_of_trades','turnover','is_complete','source_interval','source_candles','source_id'], 'rows':out, 'symbols':sorted(symbols), 'secids':sorted(br_secids)}
-              raw=json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode('utf-8')
-              packed=base64.b64encode(gzip.compress(raw,compresslevel=9)).decode('ascii')
-              print(f'BR_EXPORT_COUNT={len(out)}')
-              print(f'BR_EXPORT_FIRST={out[0][1] if out else ""}')
-              print(f'BR_EXPORT_LAST={out[-1][1] if out else ""}')
-              print('BR_EXPORT_SYMBOL_KEYS=' + ','.join(sorted(symbols)))
-              print('BR_EXPORT_B64_BEGIN')
-              for i in range(0,len(packed),12000):
-                  print(f'BR_EXPORT_B64_{i//12000:03d}={packed[i:i+12000]}')
-              print('BR_EXPORT_B64_END')
               assert out, 'No BR D1 rows found in YDB'
+              export={
+                  'columns':['record_key','calendar_date','trade_session_date','session_id','bar_start_time','bar_end_time','available_at','available_at_confidence','contract_code','open','high','low','close','volume','number_of_trades','turnover','is_complete','source_interval','source_candles','source_id'],
+                  'rows':out,
+                  'symbols':sorted(symbols),
+                  'secids':sorted(br_secids),
+                  'from_date':out[0][1],
+                  'till_date':out[-1][1],
+                  'row_count':len(out),
+              }
+              target=Path(os.environ['GITHUB_WORKSPACE']) / 'br_ydb_d1_export.json'
+              target.write_text(json.dumps(export, ensure_ascii=False, indent=2), encoding='utf-8')
+              print(f'BR_EXPORT_COUNT={len(out)}')
+              print(f'BR_EXPORT_FIRST={out[0][1]}')
+              print(f'BR_EXPORT_LAST={out[-1][1]}')
+              print('BR_EXPORT_SYMBOL_KEYS=' + ','.join(sorted(symbols)))
+              print(f'BR_EXPORT_FILE={target}')
           finally:
               pool.stop()
               driver.stop()
           PY
+
+      - name: Upload BR export artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: br-ydb-d1-export
+          path: br_ydb_d1_export.json
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Cleanup ephemeral token
         if: always()
