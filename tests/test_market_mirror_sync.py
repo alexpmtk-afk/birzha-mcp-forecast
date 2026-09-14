@@ -37,26 +37,29 @@ class Source:
 
 
 class Bridge:
-    def __init__(self, *, rows: int = 1) -> None:
+    def __init__(self, *, rows: int = 1, fail_final_status: bool = False) -> None:
         self.rows = rows
-        self.written = None
+        self.fail_final_status = fail_final_status
+        self.writes = []
 
     def health(self):
-        return {"ok": True, "version": 2, "root_id": "root"}
+        return {"ok": True, "version": 3, "root_id": "root"}
 
     def ensure_archive(self, *, symbol: str):
         assert symbol == "BR"
         return {
             "spreadsheet_id": "sheet-br",
-            "spreadsheet_name": "MOEX_HISTDATA_BR_MCP_CANONICAL",
+            "spreadsheet_name": "BIRZHA — BR — Market Data Mirror",
             "folder_id": "br-folder",
             "folder_name": "BR — Brent",
-            "created": True,
+            "created": False,
         }
 
     def replace_snapshot(self, *, spreadsheet_id: str, sheets):
         assert spreadsheet_id == "sheet-br"
-        self.written = sheets
+        self.writes.append(sheets)
+        if self.fail_final_status and len(self.writes) == 2:
+            return {"ok": True, "parity": False}
         return {"ok": True, "parity": True}
 
     def summary(self, *, spreadsheet_id: str):
@@ -72,7 +75,11 @@ class Bridge:
         }
 
 
-def test_sync_resolves_archive_and_verifies_readback() -> None:
+def _sync_status_value(rows, key: str):
+    return next(row[1] for row in rows[1:] if row[0] == key)
+
+
+def test_sync_resolves_archive_verifies_readback_and_then_marks_pass() -> None:
     bridge = Bridge()
     result = MarketMirrorSyncService(source=Source(), bridge=bridge).sync(
         symbol="BR", from_date="2024-03-01", till_date="2024-03-01"
@@ -81,11 +88,27 @@ def test_sync_resolves_archive_and_verifies_readback() -> None:
     assert result["folder_name"] == "BR — Brent"
     assert result["spreadsheet_id"] == "sheet-br"
     assert result["data_rows"] == 1
-    assert bridge.written is not None
+    assert len(bridge.writes) == 2
+    assert set(bridge.writes[0]) == {"D1", "SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}
+    assert set(bridge.writes[1]) == {"SYNC_STATUS"}
+    final_status = bridge.writes[1]["SYNC_STATUS"]
+    assert _sync_status_value(final_status, "status") == "MIRROR_SYNC_PASS"
+    assert _sync_status_value(final_status, "bridge_version") == 3
+    assert _sync_status_value(final_status, "readback_row_count") == 1
 
 
 def test_sync_fails_closed_on_readback_row_mismatch() -> None:
+    bridge = Bridge(rows=0)
     with pytest.raises(RuntimeError, match="row-count parity failed"):
-        MarketMirrorSyncService(source=Source(), bridge=Bridge(rows=0)).sync(
+        MarketMirrorSyncService(source=Source(), bridge=bridge).sync(
+            symbol="BR", from_date="2024-03-01", till_date="2024-03-01"
+        )
+    assert len(bridge.writes) == 1
+
+
+def test_sync_fails_closed_when_final_status_cannot_be_persisted() -> None:
+    bridge = Bridge(fail_final_status=True)
+    with pytest.raises(RuntimeError, match="final status write"):
+        MarketMirrorSyncService(source=Source(), bridge=bridge).sync(
             symbol="BR", from_date="2024-03-01", till_date="2024-03-01"
         )
