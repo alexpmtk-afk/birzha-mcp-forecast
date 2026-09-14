@@ -1,16 +1,19 @@
-"""Authenticated Birzha client for the shared Google Apps Script Drive bridge.
+"""Synchronous Google Drive Bridge v1 client for the BIRZHA market mirror.
 
-The Yandex-hosted runtime reuses the already deployed owner-executed Apps Script
-Web App used by Marketplaces. Birzha operations are namespaced (``birzha_*``),
-so the existing Marketplace protocol remains backward compatible. The shared
-secret is injected from Yandex Lockbox and never committed to Git.
+Business/archive semantics stay in Birzha. This module implements only the
+versioned transport/security contract defined by the shared Google Drive Bridge
+v1 standard.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import random
 import time
+import uuid
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Sequence
 
 import httpx
 
@@ -20,7 +23,13 @@ class GoogleSheetsBridgeNotConfigured(RuntimeError):
 
 
 class GoogleSheetsBridgeError(RuntimeError):
-    """The shared Google Apps Script bridge rejected or failed an operation."""
+    """Bridge v1 rejected or failed an operation."""
+
+    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+        self.retryable = bool(retryable)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,38 +37,88 @@ class GoogleSheetsBridgeConfig:
     bridge_url: str
     bridge_secret: str
     root_folder_id: str
+    project_id: str = "birzha"
     timeout_seconds: float = 120.0
+    max_attempts: int = 3
+    chunk_rows: int = 500
 
     def __post_init__(self) -> None:
         if not self.bridge_url.startswith("https://script.google.com/macros/s/"):
             raise GoogleSheetsBridgeNotConfigured("Google Sheets bridge URL is invalid")
         if not self.bridge_secret.strip():
             raise GoogleSheetsBridgeNotConfigured("Google Sheets bridge secret is empty")
+        if self.project_id != "birzha":
+            raise GoogleSheetsBridgeNotConfigured("BIRZHA Bridge v1 project_id must be 'birzha'")
         if not self.root_folder_id.strip():
             raise GoogleSheetsBridgeNotConfigured("Google Sheets archive root id is empty")
         if self.timeout_seconds <= 0:
             raise GoogleSheetsBridgeNotConfigured("Google Sheets bridge timeout must be positive")
+        if self.max_attempts < 1 or self.max_attempts > 6:
+            raise GoogleSheetsBridgeNotConfigured("Google Sheets bridge max_attempts must be 1..6")
+        if self.chunk_rows < 1 or self.chunk_rows > 1000:
+            raise GoogleSheetsBridgeNotConfigured("Google Sheets bridge chunk_rows must be 1..1000")
 
 
 class GoogleSheetsBridge:
-    """Fail-closed Birzha client for the shared Apps Script Web App."""
+    """Fail-closed synchronous client for a dedicated Birzha Bridge v1 deployment."""
 
-    _MAX_ATTEMPTS = 3
-    _RETRYABLE = {408, 425, 429, 500, 502, 503, 504}
-    _ALLOWED_SHEETS = frozenset({"D1", "SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"})
-    _ACTION_PREFIX = "birzha_"
+    _RETRYABLE_HTTP = {408, 425, 429, 500, 502, 503, 504}
+    _MUTATIONS = frozenset(
+        {
+            "sheet_ensure",
+            "sheet_stage_begin",
+            "sheet_write_chunk",
+            "sheet_commit",
+            "sheet_abort",
+        }
+    )
 
     def __init__(self, config: GoogleSheetsBridgeConfig) -> None:
         self.config = config
 
-    def _post(self, action: str, **payload: Any) -> dict[str, Any]:
-        if not action.startswith(self._ACTION_PREFIX):
-            raise ValueError("Birzha bridge actions must use the birzha_ namespace")
-        body = {"secret": self.config.bridge_secret, "action": action, **payload}
-        last_error: Exception | None = None
-        for attempt in range(1, self._MAX_ATTEMPTS + 1):
+    @staticmethod
+    def new_request_id() -> str:
+        return str(uuid.uuid4())
+
+    @staticmethod
+    def new_idempotency_key(prefix: str = "mutation") -> str:
+        return f"{prefix}:{uuid.uuid4()}"
+
+    def _post(
+        self,
+        action: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        request_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        action = action.strip().lower()
+        if not action:
+            raise ValueError("bridge action is required")
+        if action in self._MUTATIONS and not str(idempotency_key or "").strip():
+            raise ValueError(f"idempotency_key is required for mutating action {action}")
+
+        req_id = str(request_id or self.new_request_id()).strip()
+        if not req_id:
+            raise ValueError("request_id is required")
+        body: dict[str, Any] = {
+            "secret": self.config.bridge_secret,
+            "project_id": self.config.project_id,
+            "request_id": req_id,
+            "action": action,
+            "payload": payload or {},
+        }
+        if idempotency_key:
+            body["idempotency_key"] = str(idempotency_key)
+
+        # Retries replay this exact logical envelope, including request/idempotency IDs.
+        last_error: BaseException | None = None
+        for attempt in range(1, self.config.max_attempts + 1):
             try:
-                with httpx.Client(timeout=self.config.timeout_seconds, follow_redirects=True) as client:
+                with httpx.Client(
+                    timeout=self.config.timeout_seconds,
+                    follow_redirects=True,
+                ) as client:
                     response = client.post(
                         self.config.bridge_url,
                         json=body,
@@ -67,103 +126,203 @@ class GoogleSheetsBridge:
                     )
             except httpx.HTTPError as exc:
                 last_error = exc
-                if attempt < self._MAX_ATTEMPTS:
-                    time.sleep(0.5 * attempt)
+                if attempt < self.config.max_attempts:
+                    self._backoff(attempt)
                     continue
                 raise GoogleSheetsBridgeError(
-                    f"Google Sheets bridge request failed after {attempt} attempts: {exc}"
+                    "TRANSPORT_ERROR", type(exc).__name__, retryable=True
                 ) from exc
 
-            if not response.is_success:
-                if response.status_code in self._RETRYABLE and attempt < self._MAX_ATTEMPTS:
-                    time.sleep(0.5 * attempt)
-                    continue
+            if response.status_code in self._RETRYABLE_HTTP and attempt < self.config.max_attempts:
+                self._backoff(attempt)
+                continue
+            try:
+                response.raise_for_status()
+            except httpx.HTTPError as exc:
                 raise GoogleSheetsBridgeError(
-                    f"Google Sheets bridge HTTP {response.status_code}: {response.text[:500]}"
-                )
+                    "HTTP_ERROR", f"bridge HTTP {response.status_code}", retryable=False
+                ) from exc
+
             try:
                 data = response.json()
             except ValueError as exc:
-                raise GoogleSheetsBridgeError("Google Sheets bridge returned non-JSON") from exc
-            if not isinstance(data, dict) or data.get("ok") is not True:
                 raise GoogleSheetsBridgeError(
-                    f"Google Sheets bridge rejected {action}: {str(data)[:500]}"
+                    "NON_JSON_RESPONSE", "bridge returned non-JSON", retryable=False
+                ) from exc
+            if not isinstance(data, dict):
+                raise GoogleSheetsBridgeError(
+                    "INVALID_RESPONSE", "bridge response is not an object", retryable=False
                 )
-            return data
-        raise GoogleSheetsBridgeError(f"Google Sheets bridge request failed: {last_error}")
+            if str(data.get("request_id") or "") != req_id:
+                raise GoogleSheetsBridgeError(
+                    "REQUEST_ID_MISMATCH", "bridge echoed a different request_id", retryable=False
+                )
+            if int(data.get("protocol_version") or 0) != 1:
+                raise GoogleSheetsBridgeError(
+                    "PROTOCOL_MISMATCH", "expected protocol_version=1", retryable=False
+                )
+            if str(data.get("project_id") or "") != self.config.project_id:
+                raise GoogleSheetsBridgeError(
+                    "PROJECT_MISMATCH", "bridge responded for a different project", retryable=False
+                )
+
+            if data.get("ok") is not True:
+                err = data.get("error") if isinstance(data.get("error"), dict) else {}
+                bridge_error = GoogleSheetsBridgeError(
+                    str(err.get("code") or "BRIDGE_REJECTED"),
+                    str(err.get("message") or "bridge rejected request"),
+                    retryable=bool(err.get("retryable")),
+                )
+                if bridge_error.retryable and attempt < self.config.max_attempts:
+                    self._backoff(attempt)
+                    continue
+                raise bridge_error
+
+            result = data.get("result")
+            if not isinstance(result, dict):
+                raise GoogleSheetsBridgeError(
+                    "INVALID_RESPONSE", "bridge result is not an object", retryable=False
+                )
+            return dict(result)
+
+        raise GoogleSheetsBridgeError(
+            "TRANSPORT_ERROR",
+            type(last_error).__name__ if last_error else "unknown",
+            retryable=True,
+        )
+
+    @staticmethod
+    def _backoff(attempt: int) -> None:
+        base = min(8.0, 0.75 * (2 ** (attempt - 1)))
+        time.sleep(base + random.uniform(0.0, base * 0.25))
 
     def health(self) -> dict[str, Any]:
-        data = self._post("birzha_health")
-        if str(data.get("root_id") or "") != self.config.root_folder_id:
-            raise GoogleSheetsBridgeError(
-                "Google Sheets bridge root mismatch: "
-                f"{data.get('root_id')!r} != {self.config.root_folder_id!r}"
-            )
-        return data
-
-    def ensure_archive(self, *, symbol: str) -> dict[str, Any]:
-        symbol = symbol.strip()
-        if not symbol:
-            raise ValueError("symbol is required")
-        data = self._post("birzha_ensure_archive", symbol=symbol)
-        spreadsheet_id = str(data.get("spreadsheet_id") or "").strip()
-        folder_id = str(data.get("folder_id") or "").strip()
-        if not spreadsheet_id or not folder_id:
-            raise GoogleSheetsBridgeError(
-                f"Google Sheets bridge returned incomplete archive target: {str(data)[:500]}"
-            )
-        return data
-
-    @classmethod
-    def _validated_sheets(
-        cls, sheets: Mapping[str, Sequence[Sequence[Any]]]
-    ) -> dict[str, list[list[Any]]]:
-        if not sheets:
-            raise ValueError("mirror snapshot must contain at least one sheet")
-        result: dict[str, list[list[Any]]] = {}
-        total_cells = 0
-        for name, raw_rows in sheets.items():
-            if name not in cls._ALLOWED_SHEETS:
-                raise ValueError(f"unsupported mirror sheet: {name}")
-            rows = [list(row) for row in raw_rows]
-            if not rows:
-                raise ValueError(f"mirror sheet {name} must contain a header row")
-            width = len(rows[0])
-            if width <= 0 or width > 40:
-                raise ValueError(f"mirror sheet {name} has invalid width {width}")
-            if len(rows) > 25000:
-                raise ValueError(f"mirror sheet {name} exceeds the 25000 row safety limit")
-            if any(len(row) != width for row in rows):
-                raise ValueError(f"mirror sheet {name} is not rectangular")
-            total_cells += len(rows) * width
-            result[name] = rows
-        if total_cells > 500000:
-            raise ValueError("mirror snapshot exceeds the 500000 cell safety limit")
+        result = self._post("health")
+        if str(result.get("project_id") or "") != self.config.project_id:
+            raise GoogleSheetsBridgeError("PROJECT_MISMATCH", "deep health project mismatch")
+        if int(result.get("protocol_version") or 0) != 1:
+            raise GoogleSheetsBridgeError("PROTOCOL_MISMATCH", "deep health protocol mismatch")
+        if str(result.get("root_id") or "") != self.config.root_folder_id:
+            raise GoogleSheetsBridgeError("ROOT_MISMATCH", "deep health root mismatch")
+        caps = result.get("capabilities") if isinstance(result.get("capabilities"), dict) else {}
+        required = {
+            "google_sheets_chunked": True,
+            "fixed_root_file_id_guard": True,
+            "idempotent_mutations": True,
+            "global_script_lock": False,
+        }
+        for key, expected in required.items():
+            if caps.get(key) is not expected:
+                raise GoogleSheetsBridgeError(
+                    "CAPABILITY_MISMATCH", f"deep health capability {key} != {expected!r}"
+                )
         return result
 
-    def replace_snapshot(
+    def sheet_ensure(
+        self,
+        *,
+        path: str = "",
+        filename: str = "",
+        spreadsheet_id: str = "",
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self._post(
+            "sheet_ensure",
+            {"path": path, "filename": filename, "spreadsheet_id": spreadsheet_id},
+            idempotency_key=idempotency_key,
+        )
+
+    def sheet_stage_begin(
         self,
         *,
         spreadsheet_id: str,
-        sheets: Mapping[str, Sequence[Sequence[Any]]],
+        sheet_title: str,
+        idempotency_key: str,
     ) -> dict[str, Any]:
-        spreadsheet_id = spreadsheet_id.strip()
-        if not spreadsheet_id:
-            raise ValueError("spreadsheet_id is required")
-        normalized = self._validated_sheets(sheets)
-        data = self._post(
-            "birzha_replace_snapshot",
-            spreadsheet_id=spreadsheet_id,
-            sheets=normalized,
+        return self._post(
+            "sheet_stage_begin",
+            {"spreadsheet_id": spreadsheet_id, "sheet_title": sheet_title},
+            idempotency_key=idempotency_key,
         )
-        if data.get("parity") is not True:
-            raise GoogleSheetsBridgeError(
-                f"Google Sheets bridge read-back parity failed: {str(data)[:500]}"
-            )
-        return data
 
-    def summary(self, *, spreadsheet_id: str) -> dict[str, Any]:
-        spreadsheet_id = spreadsheet_id.strip()
-        if not spreadsheet_id:
-            raise ValueError("spreadsheet_id is required")
-        return self._post("birzha_summary", spreadsheet_id=spreadsheet_id)
+    def sheet_write_chunk(
+        self,
+        *,
+        spreadsheet_id: str,
+        stage_sheet_title: str,
+        start_row: int,
+        start_col: int,
+        values: Sequence[Sequence[Any]],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        normalized = [list(row) for row in values]
+        if not normalized or not normalized[0]:
+            raise ValueError("sheet chunk must be a non-empty 2D array")
+        width = len(normalized[0])
+        if any(len(row) != width for row in normalized):
+            raise ValueError("sheet chunk must be rectangular")
+        if len(normalized) > self.config.chunk_rows:
+            raise ValueError("sheet chunk exceeds configured chunk_rows")
+        raw = json.dumps(normalized, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        chunk_sha = hashlib.sha256(raw).hexdigest()
+        return self._post(
+            "sheet_write_chunk",
+            {
+                "spreadsheet_id": spreadsheet_id,
+                "stage_sheet_title": stage_sheet_title,
+                "start_row": int(start_row),
+                "start_col": int(start_col),
+                "values": normalized,
+                "chunk_sha256": chunk_sha,
+            },
+            idempotency_key=idempotency_key,
+        )
+
+    def sheet_verify(
+        self,
+        *,
+        spreadsheet_id: str,
+        stage_sheet_title: str,
+        date_column: int = 0,
+    ) -> dict[str, Any]:
+        return self._post(
+            "sheet_verify",
+            {
+                "spreadsheet_id": spreadsheet_id,
+                "stage_sheet_title": stage_sheet_title,
+                "date_column": int(date_column),
+            },
+        )
+
+    def sheet_commit(
+        self,
+        *,
+        spreadsheet_id: str,
+        stage_sheet_title: str,
+        target_sheet_title: str,
+        expected_digest: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self._post(
+            "sheet_commit",
+            {
+                "spreadsheet_id": spreadsheet_id,
+                "stage_sheet_title": stage_sheet_title,
+                "target_sheet_title": target_sheet_title,
+                "expected_digest": expected_digest,
+            },
+            idempotency_key=idempotency_key,
+        )
+
+    def sheet_abort(
+        self,
+        *,
+        spreadsheet_id: str,
+        stage_sheet_title: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        return self._post(
+            "sheet_abort",
+            {"spreadsheet_id": spreadsheet_id, "stage_sheet_title": stage_sheet_title},
+            idempotency_key=idempotency_key,
+        )
