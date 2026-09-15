@@ -1,4 +1,9 @@
-"""Fail-closed data-readiness gate for statistical forecast validation."""
+"""Fail-closed readiness gate for durable D1 validation history.
+
+H1 and M15 are deliberately excluded from durable readiness. They are fetched
+on demand for each historical/current analysis window and are never required to
+exist in the shared historical candle database.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +11,11 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from birzha.application.historical_data import HistoricalDataService
+from birzha.application.history_policy import PERSISTENT_PRICE_TIMEFRAMES
 
 
 CORE_VALIDATION_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
-PRICE_LOOKBACK_DAYS = (("D1", 300), ("H1", 90), ("M15", 30))
+PRICE_LOOKBACK_DAYS = (("D1", 300),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +52,8 @@ class ValidationDataReadinessReport:
             "validation_start": self.validation_start,
             "validation_end": self.validation_end,
             "status": self.status,
+            "persistent_timeframes": list(PERSISTENT_PRICE_TIMEFRAMES),
+            "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
             "required": len(self.requirements),
             "verified": len(self.requirements) - len(self.missing),
             "missing_count": len(self.missing),
