@@ -1,4 +1,5 @@
 # one-shot: guarded first real SBER forecast direct through production code + YDB
+# triggered 2026-09-15 after SBER D1 YDB↔Google MIRROR_SYNC_PASS
 name: M26.1 Runtime Evidence Readonly Once
 
 on:
@@ -103,7 +104,6 @@ jobs:
 
               record=build_forecast_from_snapshot(snapshot)
               assert record.validation_status=='UNVALIDATED_BASELINE'
-              # Existing production table only; intentionally no DDL/schema operation in this one-shot path.
               store=object.__new__(YdbForecastJournal)
               store._pool=pool
               store._table='forecast_records'
