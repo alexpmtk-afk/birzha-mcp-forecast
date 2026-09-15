@@ -76,8 +76,6 @@ if settings.market_mirror_bridge_url:
             root_folder_id=settings.market_mirror_root_folder_id,
         )
     )
-    # Startup must fail closed before any scheduled work if the configured
-    # deployment is not the stable isolated Birzha Bridge/root.
     _bridge.health()
     _mirror = MarketMirrorSyncService(source=_history_store, bridge=_bridge)
 elif settings.market_mirror_required:
@@ -89,6 +87,56 @@ _worker = OrchestrationWorker(
     mirror=_mirror,
     require_market_mirror=settings.market_mirror_required,
 )
+
+
+def _run_archive_step(workflow_id: str, *, worker_id: str) -> dict[str, object]:
+    """Skip already-proven chunks cheaply, then do at most one real work item.
+
+    Replaying a new daily workflow must not spend one scheduler minute on every
+    historical chunk that YDB has already verified. Store-only checks are safe
+    to fast-forward; the first chunk that may require MOEX access is executed
+    once and this request returns. A finalizer/mirror is also executed alone.
+    """
+    fast_forwarded = 0
+    for _ in range(64):
+        state = _orchestrator.status(workflow_id)
+        if state.get("status") != WorkflowStatus.RUNNING.value:
+            return {
+                "worker_status": "IDLE",
+                "fast_forwarded_verified_chunks": fast_forwarded,
+                "workflow": state,
+            }
+        next_action = state.get("next_action")
+        if not isinstance(next_action, dict):
+            break
+        if str(next_action.get("kind") or "") != "HISTORY_SYNC_CHUNK":
+            break
+        payload = next_action.get("payload")
+        if not isinstance(payload, dict):
+            break
+        timeframe = str(payload.get("timeframe") or "").strip().upper()
+        if timeframe != "D1":
+            break
+        if not _history.is_range_verified(
+            str(payload.get("symbol") or ""),
+            timeframe="D1",
+            from_date=str(payload.get("from_date") or ""),
+            till_date=str(payload.get("till_date") or ""),
+        ):
+            break
+        result = _worker.run_once(workflow_id, worker_id=worker_id)
+        if result.get("worker_status") != "ACTION_PASS":
+            return {
+                **result,
+                "fast_forwarded_verified_chunks": fast_forwarded,
+            }
+        fast_forwarded += 1
+
+    result = _worker.run_once(workflow_id, worker_id=worker_id)
+    return {
+        **result,
+        "fast_forwarded_verified_chunks": fast_forwarded,
+    }
 
 
 async def healthz(_: Request) -> JSONResponse:
@@ -130,7 +178,7 @@ async def tick(_: Request) -> JSONResponse:
             }
         )
     if archive_run.status == WorkflowStatus.RUNNING:
-        result = _worker.run_once(archive_run.workflow_id, worker_id=worker_id)
+        result = _run_archive_step(archive_run.workflow_id, worker_id=worker_id)
         return JSONResponse(
             {
                 "archive_created": created,
@@ -139,9 +187,6 @@ async def tick(_: Request) -> JSONResponse:
             }
         )
 
-    # Today's archive is already complete. Only then may the autonomous worker
-    # continue any older safe workflow. Protected stages remain blocked by the
-    # orchestration worker as before.
     result = _worker.run_next_active(worker_id=worker_id)
     return JSONResponse(
         {
