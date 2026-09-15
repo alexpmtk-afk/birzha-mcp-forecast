@@ -30,8 +30,8 @@ def test_archive_upper_bound_moves_with_current_time_not_end_of_2025() -> None:
         datetime(2026, 9, 15, 18, 0, tzinfo=UTC)
     ) == "2026-09-14"
 
-    # After the conservative end-of-session boundary, the same calendar day
-    # becomes eligible. The MOEX calendar still decides whether it is a session.
+    # 20:56 UTC == 23:56 MSK, after the conservative close boundary.
+    # The MOEX calendar still decides whether the date is an actual session.
     assert latest_safe_d1_calendar_date(
-        datetime(2026, 9, 15, 21, 0, tzinfo=UTC)
+        datetime(2026, 9, 15, 20, 56, tzinfo=UTC)
     ) == "2026-09-15"
