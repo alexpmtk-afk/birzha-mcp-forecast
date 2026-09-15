@@ -97,7 +97,8 @@ def test_workflow_advances_automatically_but_stops_at_protected_gates() -> None:
     state = service.status(workflow_id)
     assert state["stage"] == WorkflowStage.HISTORY_PREPARATION.value
     assert state["status"] == WorkflowStatus.RUNNING.value
-    assert state["current_stage_total"] > 300
+    # Six markets, D1 only: 16 quarterly-ish chunks + one finalizer each.
+    assert state["current_stage_total"] == 102
 
     state = _pass_stage(service, workflow_id, WorkflowStage.HISTORY_PREPARATION)
     assert state["stage"] == WorkflowStage.READINESS_AUDIT.value
