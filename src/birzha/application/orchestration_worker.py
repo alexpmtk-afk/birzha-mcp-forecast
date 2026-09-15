@@ -24,7 +24,11 @@ from birzha.domain.orchestration import WorkflowAction, WorkflowStatus
 SAFE_UNATTENDED_KINDS = frozenset(
     {"D1_ARCHIVE_SYNC", "HISTORY_SYNC_CHUNK", "HISTORY_FINALIZE_RANGE", "READINESS_AUDIT"}
 )
-DEFAULT_WORKER_LEASE_SECONDS = 180
+# The production Serverless Container is allowed up to six minutes for a full
+# Google mirror commit/read-back. Keep the durable lease longer than that so a
+# later timer tick can never reclaim the same action while the first call is
+# still legitimately running.
+DEFAULT_WORKER_LEASE_SECONDS = 420
 
 
 @dataclass(slots=True)
