@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from birzha.application.orchestration_plan import CORE_SYMBOLS
+from datetime import date
+
+from birzha.application.orchestration_plan import CORE_SYMBOLS, D1_ARCHIVE_CHUNK_DAYS
 from birzha.application.orchestrator import (
     D1_ARCHIVE_REFRESH_WORKFLOW,
     WorkflowOrchestrator,
@@ -9,7 +11,7 @@ from birzha.domain.orchestration import WorkflowStage, WorkflowStatus
 from birzha.storage.orchestration_store import MemoryOrchestrationStore
 
 
-def test_d1_archive_refresh_is_idempotent_and_contains_only_six_d1_actions() -> None:
+def test_d1_archive_refresh_is_idempotent_and_chunked_per_symbol() -> None:
     store = MemoryOrchestrationStore()
     service = WorkflowOrchestrator(store)
 
@@ -30,11 +32,25 @@ def test_d1_archive_refresh_is_idempotent_and_contains_only_six_d1_actions() -> 
     assert first.kind == D1_ARCHIVE_REFRESH_WORKFLOW
 
     actions = store.list_actions(first.workflow_id)
-    assert len(actions) == len(CORE_SYMBOLS) == 6
-    assert {action.kind for action in actions} == {"D1_ARCHIVE_SYNC"}
-    assert {action.payload["timeframe"] for action in actions} == {"D1"}
-    assert {action.payload["from_date"] for action in actions} == {"2021-01-01"}
-    assert {action.payload["till_date"] for action in actions} == {"2026-09-14"}
+    for symbol in CORE_SYMBOLS:
+        symbol_actions = [a for a in actions if a.payload.get("symbol") == symbol]
+        chunks = [a for a in symbol_actions if a.kind == "HISTORY_SYNC_CHUNK"]
+        finalizers = [a for a in symbol_actions if a.kind == "HISTORY_FINALIZE_RANGE"]
+
+        assert len(chunks) > 1
+        assert len(finalizers) == 1
+        assert {a.payload["timeframe"] for a in symbol_actions} == {"D1"}
+        assert finalizers[0].payload["from_date"] == "2021-01-01"
+        assert finalizers[0].payload["till_date"] == "2026-09-14"
+
+        expected_left = date(2021, 1, 1)
+        for chunk in chunks:
+            left = date.fromisoformat(str(chunk.payload["from_date"]))
+            right = date.fromisoformat(str(chunk.payload["till_date"]))
+            assert left == expected_left
+            assert 1 <= (right - left).days + 1 <= D1_ARCHIVE_CHUNK_DAYS
+            expected_left = right.fromordinal(right.toordinal() + 1)
+        assert expected_left.fromordinal(expected_left.toordinal() - 1) == date(2026, 9, 14)
 
 
 def test_d1_archive_refresh_completes_without_entering_validation_or_holdout() -> None:
