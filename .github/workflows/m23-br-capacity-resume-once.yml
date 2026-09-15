@@ -2,8 +2,6 @@ name: M23 BR Capacity Resume
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '37 * * * *'
 
 permissions:
   contents: read
@@ -163,7 +161,7 @@ jobs:
 
       - name: Upload durable resume evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: birzha-m23-br-capacity-resume
           path: ${{ runner.temp }}/br-capacity-resume.json
