@@ -16,6 +16,7 @@ from birzha.domain.orchestration import WorkflowAction, WorkflowStage
 CORE_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
 CORE_TIMEFRAMES = PERSISTENT_PRICE_TIMEFRAMES
 HISTORY_CHUNK_DAYS = 92
+D1_ARCHIVE_CHUNK_DAYS = 366
 
 
 def build_d1_archive_refresh_actions(
@@ -24,11 +25,13 @@ def build_d1_archive_refresh_actions(
     archive_end: str,
     source_sha: str,
 ) -> tuple[WorkflowAction, ...]:
-    """One bounded durable D1 refresh per core market.
+    """Build bounded D1 archive work and one full mirror commit per market.
 
-    HistoricalDataService remains responsible for store-first gap detection, so
-    an existing 2021+ archive does not get re-downloaded. Every action is later
-    mirrored to Google Sheets with Bridge-v1 parity before it can PASS.
+    A whole 2021+ history is deliberately not fetched in one serverless action.
+    Each market is prepared in bounded D1 chunks, then a finalizer verifies all
+    chunks, marks the full range and publishes one complete Google mirror. This
+    keeps retries small without ever replacing the Google archive with a partial
+    chunk.
     """
     start = date.fromisoformat(archive_start[:10])
     finish = date.fromisoformat(archive_end[:10])
@@ -37,22 +40,48 @@ def build_d1_archive_refresh_actions(
     if not source_sha.strip():
         raise ValueError("source_sha must be non-empty")
 
+    chunks = _date_chunks(start.isoformat(), finish.isoformat(), D1_ARCHIVE_CHUNK_DAYS)
+    specs: list[tuple[WorkflowStage, str, dict[str, object]]] = []
+    for symbol in CORE_SYMBOLS:
+        for left, right in chunks:
+            specs.append(
+                (
+                    WorkflowStage.HISTORY_PREPARATION,
+                    "HISTORY_SYNC_CHUNK",
+                    {
+                        "symbol": symbol,
+                        "timeframe": "D1",
+                        "from_date": left,
+                        "till_date": right,
+                        "source_sha": source_sha,
+                    },
+                )
+            )
+        specs.append(
+            (
+                WorkflowStage.HISTORY_PREPARATION,
+                "HISTORY_FINALIZE_RANGE",
+                {
+                    "symbol": symbol,
+                    "timeframe": "D1",
+                    "from_date": start.isoformat(),
+                    "till_date": finish.isoformat(),
+                    "chunks": [[left, right] for left, right in chunks],
+                    "source_sha": source_sha,
+                },
+            )
+        )
+
     return tuple(
         WorkflowAction(
-            action_id=f"{workflow_id}:{index:04d}:{WorkflowStage.HISTORY_PREPARATION.value}",
+            action_id=f"{workflow_id}:{index:04d}:{stage.value}",
             workflow_id=workflow_id,
-            stage=WorkflowStage.HISTORY_PREPARATION,
-            kind="D1_ARCHIVE_SYNC",
+            stage=stage,
+            kind=kind,
             sequence=index,
-            payload={
-                "symbol": symbol,
-                "timeframe": "D1",
-                "from_date": start.isoformat(),
-                "till_date": finish.isoformat(),
-                "source_sha": source_sha,
-            },
+            payload=payload,
         )
-        for index, symbol in enumerate(CORE_SYMBOLS, start=1)
+        for index, (stage, kind, payload) in enumerate(specs, start=1)
     )
 
 
