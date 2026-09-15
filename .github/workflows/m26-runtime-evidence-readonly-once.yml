@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_SHA: bca9de131e806b1a77253a1c1249bd60e634b741
+  APP_SHA: 301f4880f555b4d6fd7cbdc509fa8e99af19ff33
   PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
@@ -102,7 +102,6 @@ jobs:
               LIMIT 5;
           """))
           print('M26_D1_WORKFLOW_COUNT=' + str(len(runs)))
-          latest=None
           if runs:
               latest=runs[0]
               safe={k:str(val(latest,k) or '') for k in ('workflow_id','kind','stage','status','created_at','updated_at','last_error')}
@@ -115,8 +114,7 @@ jobs:
                   ORDER BY sequence, action_id;
               """))
               for row in acts:
-                  payload={}
-                  evidence={}
+                  payload={}; evidence={}
                   try: payload=json.loads(str(val(row,'payload_json') or '{}'))
                   except Exception: pass
                   try: evidence=json.loads(str(val(row,'evidence_json') or '{}'))
@@ -135,8 +133,7 @@ jobs:
                       'evidence_status':str(evidence.get('status') or ''),
                   }
                   mm=evidence.get('market_mirror') if isinstance(evidence,dict) else None
-                  if isinstance(mm,dict):
-                      item['mirror_status']=str(mm.get('status') or '')
+                  if isinstance(mm,dict): item['mirror_status']=str(mm.get('status') or '')
                   print('M26_D1_ACTION=' + json.dumps(item,sort_keys=True,ensure_ascii=False))
 
           syms=('SBER','Si','BR','GOLD','IMOEX','RTSI')
@@ -156,8 +153,7 @@ jobs:
                   'rows':int(val(r,'cnt') or 0) if r else 0,
               },sort_keys=True))
 
-          pool.stop()
-          driver.stop(timeout=5)
+          pool.stop(); driver.stop(timeout=5)
           print('M26_RUNTIME_READONLY_EVIDENCE=PASS')
           PY
 
