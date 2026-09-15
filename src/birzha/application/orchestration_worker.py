@@ -2,7 +2,7 @@
 
 Only handlers proven safe for unattended execution are enabled here. Protected
 or not-yet-integrated stages are reported as BLOCKED and are never claimed.
-D1 finalization may additionally require the independent Google Sheets mirror.
+Persistent market-price work is D1-only and requires Google Bridge-v1 parity.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from birzha.application.historical_data import HistoricalDataService, _verification_symbol
+from birzha.application.history_policy import require_persistent_price_timeframe
 from birzha.application.market_data import is_futures_root_symbol
 from birzha.application.market_mirror_sync import MarketMirrorSyncService
 from birzha.application.orchestrator import WorkflowOrchestrator
@@ -21,7 +22,7 @@ from birzha.domain.orchestration import WorkflowAction, WorkflowStatus
 
 
 SAFE_UNATTENDED_KINDS = frozenset(
-    {"HISTORY_SYNC_CHUNK", "HISTORY_FINALIZE_RANGE", "READINESS_AUDIT"}
+    {"D1_ARCHIVE_SYNC", "HISTORY_SYNC_CHUNK", "HISTORY_FINALIZE_RANGE", "READINESS_AUDIT"}
 )
 DEFAULT_WORKER_LEASE_SECONDS = 180
 
@@ -43,8 +44,7 @@ class OrchestrationWorker:
             next_action = state.get("next_action")
             if not isinstance(next_action, dict):
                 continue
-            kind = str(next_action.get("kind") or "")
-            if kind not in SAFE_UNATTENDED_KINDS:
+            if not _is_safe_unattended(next_action):
                 continue
             return self.run_once(run.workflow_id, worker_id=worker_id)
         return {
@@ -59,11 +59,10 @@ class OrchestrationWorker:
         next_action = state.get("next_action")
         if not isinstance(next_action, dict):
             return {"worker_status": "IDLE", "workflow": state}
-        kind = str(next_action.get("kind") or "")
-        if kind not in SAFE_UNATTENDED_KINDS:
+        if not _is_safe_unattended(next_action):
             return {
                 "worker_status": "BLOCKED_NO_SAFE_HANDLER",
-                "blocked_kind": kind,
+                "blocked_kind": str(next_action.get("kind") or ""),
                 "workflow": state,
             }
 
@@ -129,10 +128,13 @@ class OrchestrationWorker:
 
     def _execute(self, action: WorkflowAction) -> dict[str, object]:
         payload = action.payload
+        if action.kind == "D1_ARCHIVE_SYNC":
+            return self._sync_d1_archive(payload)
         if action.kind == "HISTORY_SYNC_CHUNK":
+            timeframe = require_persistent_price_timeframe(str(payload["timeframe"]))
             result = self.history.sync(
                 str(payload["symbol"]),
-                timeframe=str(payload["timeframe"]),
+                timeframe=timeframe,
                 from_date=str(payload["from_date"]),
                 till_date=str(payload["till_date"]),
             )
@@ -159,9 +161,42 @@ class OrchestrationWorker:
             return {"status": "PASS", "readiness": result.to_dict()}
         raise RuntimeError(f"unsupported unattended action: {action.kind}")
 
+    def _sync_d1_archive(self, payload: dict[str, object]) -> dict[str, object]:
+        symbol = str(payload["symbol"])
+        timeframe = require_persistent_price_timeframe(str(payload.get("timeframe") or "D1"))
+        from_date = str(payload["from_date"])[:10]
+        till_date = str(payload["till_date"])[:10]
+
+        result = self.history.sync(
+            symbol,
+            timeframe=timeframe,
+            from_date=from_date,
+            till_date=till_date,
+        )
+        if self.mirror is None:
+            raise RuntimeError("D1 archive refresh requires Google Bridge v1 mirror")
+        mirror_evidence = self.mirror.sync(
+            symbol=symbol,
+            from_date=from_date,
+            till_date=till_date,
+        )
+        if mirror_evidence.get("status") != "MIRROR_SYNC_PASS":
+            raise RuntimeError("mandatory Google market mirror did not pass parity")
+        return {
+            "status": "PASS",
+            "symbol": result.symbol,
+            "timeframe": result.timeframe,
+            "from_date": result.requested_from,
+            "till_date": result.requested_till,
+            "fetched_candles": result.fetched_candles,
+            "stored_candles": result.stored_candles,
+            "reused_verified_range": result.reused_verified_range,
+            "market_mirror": mirror_evidence,
+        }
+
     def _finalize_history_range(self, payload: dict[str, object]) -> dict[str, object]:
         symbol = str(payload["symbol"])
-        timeframe = str(payload["timeframe"]).upper()
+        timeframe = require_persistent_price_timeframe(str(payload["timeframe"]))
         from_date = str(payload["from_date"])[:10]
         till_date = str(payload["till_date"])[:10]
         chunks_raw = payload.get("chunks")
@@ -175,7 +210,7 @@ class OrchestrationWorker:
             if resolver_known
             else symbol
         )
-        session_symbol = verification_symbol if resolver_known and timeframe == "D1" else symbol
+        session_symbol = verification_symbol if resolver_known else symbol
 
         checked = 0
         for item in chunks_raw:
@@ -188,7 +223,7 @@ class OrchestrationWorker:
                 raise RuntimeError(
                     f"chunk verification missing for {verification_symbol} {timeframe} {left}..{right}"
                 )
-            if timeframe == "D1" and not self.history.store.is_session_range_verified(
+            if not self.history.store.is_session_range_verified(
                 session_symbol, left, right
             ):
                 raise RuntimeError(
@@ -201,23 +236,21 @@ class OrchestrationWorker:
             self.history.store.mark_verified(
                 verification_symbol, timeframe, from_date, till_date
             )
-        if timeframe == "D1":
-            self.history.store.mark_session_range_verified(
-                session_symbol, from_date, till_date
-            )
+        self.history.store.mark_session_range_verified(
+            session_symbol, from_date, till_date
+        )
 
+        if self.require_market_mirror and self.mirror is None:
+            raise RuntimeError("mandatory Google market mirror is not configured")
         mirror_evidence: dict[str, object] | None = None
-        if timeframe == "D1":
-            if self.require_market_mirror and self.mirror is None:
-                raise RuntimeError("mandatory Google market mirror is not configured")
-            if self.mirror is not None:
-                mirror_evidence = self.mirror.sync(
-                    symbol=symbol,
-                    from_date=from_date,
-                    till_date=till_date,
-                )
-                if mirror_evidence.get("status") != "MIRROR_SYNC_PASS":
-                    raise RuntimeError("mandatory Google market mirror did not pass parity")
+        if self.mirror is not None:
+            mirror_evidence = self.mirror.sync(
+                symbol=symbol,
+                from_date=from_date,
+                till_date=till_date,
+            )
+            if mirror_evidence.get("status") != "MIRROR_SYNC_PASS":
+                raise RuntimeError("mandatory Google market mirror did not pass parity")
 
         result: dict[str, object] = {
             "status": "PASS",
@@ -231,3 +264,15 @@ class OrchestrationWorker:
         if mirror_evidence is not None:
             result["market_mirror"] = mirror_evidence
         return result
+
+
+def _is_safe_unattended(action: dict[str, object]) -> bool:
+    kind = str(action.get("kind") or "")
+    if kind not in SAFE_UNATTENDED_KINDS:
+        return False
+    if kind in {"D1_ARCHIVE_SYNC", "HISTORY_SYNC_CHUNK", "HISTORY_FINALIZE_RANGE"}:
+        payload = action.get("payload")
+        if not isinstance(payload, dict):
+            return False
+        return str(payload.get("timeframe") or "").strip().upper() == "D1"
+    return True

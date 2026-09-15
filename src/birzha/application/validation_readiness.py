@@ -1,4 +1,10 @@
-"""Fail-closed data-readiness gate for statistical forecast validation."""
+"""Fail-closed readiness gate for durable D1 validation history.
+
+H1 and M15 are deliberately excluded from durable readiness. They are fetched
+on demand for each historical/current analysis window and are never required to
+exist in the shared historical candle database. Durable readiness is also
+clamped to the approved archive floor: it must never trigger pre-2021 backfill.
+"""
 
 from __future__ import annotations
 
@@ -6,10 +12,11 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from birzha.application.historical_data import HistoricalDataService
+from birzha.application.history_policy import D1_ARCHIVE_START, PERSISTENT_PRICE_TIMEFRAMES
 
 
 CORE_VALIDATION_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
-PRICE_LOOKBACK_DAYS = (("D1", 300), ("H1", 90), ("M15", 30))
+PRICE_LOOKBACK_DAYS = (("D1", 300),)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +53,9 @@ class ValidationDataReadinessReport:
             "validation_start": self.validation_start,
             "validation_end": self.validation_end,
             "status": self.status,
+            "archive_floor": D1_ARCHIVE_START,
+            "persistent_timeframes": list(PERSISTENT_PRICE_TIMEFRAMES),
+            "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
             "required": len(self.requirements),
             "verified": len(self.requirements) - len(self.missing),
             "missing_count": len(self.missing),
@@ -58,10 +68,15 @@ def required_price_ranges(
 ) -> tuple[tuple[str, str, str], ...]:
     start = date.fromisoformat(validation_start[:10])
     end = date.fromisoformat(validation_end[:10])
+    archive_floor = date.fromisoformat(D1_ARCHIVE_START)
     if start >= end:
         raise ValueError("validation_start must be before validation_end")
     return tuple(
-        (timeframe, (start - timedelta(days=lookback_days)).isoformat(), end.isoformat())
+        (
+            timeframe,
+            max(archive_floor, start - timedelta(days=lookback_days)).isoformat(),
+            end.isoformat(),
+        )
         for timeframe, lookback_days in PRICE_LOOKBACK_DAYS
     )
 

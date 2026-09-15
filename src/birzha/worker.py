@@ -1,8 +1,9 @@
 """Private HTTP worker invoked by a cloud scheduler.
 
-This worker keeps YDB as the authoritative store. When the Google market mirror
-is required, every finalized D1 range must also pass stable Bridge Protocol v1
-staging, commit, and post-commit read-back before the orchestration action passes.
+YDB is the authoritative machine store. Every persistent D1 archive refresh must
+also pass stable Google Bridge Protocol v1 staging, commit, and read-back parity
+before its action can PASS. Archive maintenance is separate from model
+validation and never opens holdout or promotion gates.
 """
 
 from __future__ import annotations
@@ -17,16 +18,20 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from birzha.application.historical_data import HistoricalDataService
+from birzha.application.history_policy import D1_ARCHIVE_START, latest_safe_d1_calendar_date
 from birzha.application.market_data import MarketDataService
 from birzha.application.market_mirror_sync import MarketMirrorSyncService
 from birzha.application.orchestration_worker import OrchestrationWorker
 from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.config import Settings
+from birzha.domain.orchestration import WorkflowStatus
 from birzha.storage.google_sheets_bridge import GoogleSheetsBridge, GoogleSheetsBridgeConfig
-from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 from birzha.storage.ydb_runtime_orchestration_store import YdbRuntimeOrchestrationStore
+from birzha.storage.ydb_runtime_storage import (
+    YdbRuntimeHistoricalCandleStore,
+    YdbRuntimeSlotPacingGate,
+)
 from birzha.storage.ydb_state import YdbRuntime
 from birzha.version import SERVICE_NAME, VERSION
 
@@ -36,17 +41,21 @@ if settings.state_backend != "ydb" or not settings.ydb_connection_string:
     raise RuntimeError("autonomous worker requires BIRZHA_STATE_BACKEND=ydb")
 if (os.getenv("BIRZHA_ORCHESTRATOR_WORKER") or "").strip().lower() != "true":
     raise RuntimeError("autonomous worker requires BIRZHA_ORCHESTRATOR_WORKER=true")
+if not settings.source_sha:
+    raise RuntimeError(
+        "autonomous worker requires BIRZHA_SOURCE_SHA or BIRZHA_SOURCE_COMMIT"
+    )
 
 _runtime = YdbRuntime.connect(settings.ydb_connection_string)
 _control = ProcessUpstreamControlPlane(
-    gate_factory=lambda provider_key: YdbSlotPacingGate(
+    gate_factory=lambda provider_key: YdbRuntimeSlotPacingGate(
         _runtime.pool,
         provider_key=provider_key,
     ),
     require_distributed_gate=True,
 )
 _market = MarketDataService.default(control_plane=_control)
-_history_store = YdbHistoricalCandleStore(_runtime.pool)
+_history_store = YdbRuntimeHistoricalCandleStore(_runtime.pool)
 _history = HistoricalDataService(
     market_data=_market,
     store=_history_store,
@@ -90,6 +99,10 @@ async def healthz(_: Request) -> JSONResponse:
             "version": VERSION,
             "state_backend": "ydb",
             "mode": "private-autonomous-worker",
+            "source_sha": settings.source_sha,
+            "d1_archive_start": D1_ARCHIVE_START,
+            "d1_archive_policy": "fixed_start_append_forward",
+            "intraday_persistence": "forbidden",
             "market_mirror_required": settings.market_mirror_required,
             "market_mirror_configured": _mirror is not None,
             "market_mirror_protocol": 1 if _mirror is not None else None,
@@ -100,8 +113,44 @@ async def healthz(_: Request) -> JSONResponse:
 
 async def tick(_: Request) -> JSONResponse:
     worker_id = f"timer-{uuid4().hex}"
+    archive_end = latest_safe_d1_calendar_date()
+    archive_run, created = _orchestrator.start_d1_archive_refresh(
+        archive_start=D1_ARCHIVE_START,
+        archive_end=archive_end,
+        source_sha=settings.source_sha or "",
+    )
+
+    if archive_run.status == WorkflowStatus.FAILED:
+        return JSONResponse(
+            {
+                "worker_status": "D1_ARCHIVE_REFRESH_FAILED",
+                "archive_created": created,
+                "archive_end": archive_end,
+                "archive_workflow": _orchestrator.status(archive_run.workflow_id),
+            }
+        )
+    if archive_run.status == WorkflowStatus.RUNNING:
+        result = _worker.run_once(archive_run.workflow_id, worker_id=worker_id)
+        return JSONResponse(
+            {
+                "archive_created": created,
+                "archive_end": archive_end,
+                **result,
+            }
+        )
+
+    # Today's archive is already complete. Only then may the autonomous worker
+    # continue any older safe workflow. Protected stages remain blocked by the
+    # orchestration worker as before.
     result = _worker.run_next_active(worker_id=worker_id)
-    return JSONResponse(result)
+    return JSONResponse(
+        {
+            "archive_created": created,
+            "archive_end": archive_end,
+            "archive_status": archive_run.status.value,
+            **result,
+        }
+    )
 
 
 app = Starlette(

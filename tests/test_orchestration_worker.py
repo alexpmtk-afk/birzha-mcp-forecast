@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from birzha.application.history_policy import IntradayPersistenceForbiddenError
 from birzha.application.orchestration_worker import (
     DEFAULT_WORKER_LEASE_SECONDS,
     OrchestrationWorker,
@@ -62,7 +63,7 @@ def test_default_worker_lease_is_bounded_for_serverless_recovery() -> None:
     assert worker.lease_seconds == DEFAULT_WORKER_LEASE_SECONDS
 
 
-def test_history_chunk_handler_is_bounded_and_idempotent_at_service_boundary() -> None:
+def test_d1_history_chunk_handler_is_bounded_and_idempotent_at_service_boundary() -> None:
     worker, history = _worker()
     action = WorkflowAction(
         action_id="a1",
@@ -72,7 +73,7 @@ def test_history_chunk_handler_is_bounded_and_idempotent_at_service_boundary() -
         sequence=1,
         payload={
             "symbol": "SBER",
-            "timeframe": "M15",
+            "timeframe": "D1",
             "from_date": "2021-01-01",
             "till_date": "2021-04-02",
         },
@@ -80,7 +81,28 @@ def test_history_chunk_handler_is_bounded_and_idempotent_at_service_boundary() -
     evidence = worker._execute(action)
     assert evidence["status"] == "PASS"
     assert evidence["fetched_candles"] == 12
-    assert history.calls == [("SBER", "M15", "2021-01-01", "2021-04-02")]
+    assert history.calls == [("SBER", "D1", "2021-01-01", "2021-04-02")]
+
+
+@pytest.mark.parametrize("timeframe", ["H1", "M15"])
+def test_durable_history_chunk_rejects_intraday(timeframe: str) -> None:
+    worker, history = _worker()
+    action = WorkflowAction(
+        action_id="a1",
+        workflow_id="w1",
+        stage=WorkflowStage.HISTORY_PREPARATION,
+        kind="HISTORY_SYNC_CHUNK",
+        sequence=1,
+        payload={
+            "symbol": "SBER",
+            "timeframe": timeframe,
+            "from_date": "2021-01-01",
+            "till_date": "2021-04-02",
+        },
+    )
+    with pytest.raises(IntradayPersistenceForbiddenError, match="D1-only"):
+        worker._execute(action)
+    assert history.calls == []
 
 
 def test_finalizer_requires_every_chunk_before_marking_full_range() -> None:

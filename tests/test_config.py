@@ -8,6 +8,7 @@ def _clear(monkeypatch):
         "HOST", "PORT", "MCP_ALLOWED_HOSTS", "MCP_ALLOWED_ORIGINS",
         "BIRZHA_STATE_BACKEND", "YDB_CONNECTION_STRING", "BIRZHA_FORECAST_JOURNAL_PATH",
         "BIRZHA_REQUIRE_MCP_AUTH", "BIRZHA_MCP_BEARER_TOKEN", "BIRZHA_SOURCE_SHA",
+        "BIRZHA_SOURCE_COMMIT",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -93,4 +94,17 @@ def test_source_sha_is_validated(monkeypatch):
         Settings.from_env()
 
     monkeypatch.setenv("BIRZHA_SOURCE_SHA", "a" * 40)
+    assert Settings.from_env().source_sha == "a" * 40
+
+
+def test_deployed_source_commit_alias_is_accepted(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_SOURCE_COMMIT", "b" * 40)
+    assert Settings.from_env().source_sha == "b" * 40
+
+
+def test_source_sha_takes_precedence_over_commit_alias(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("BIRZHA_SOURCE_COMMIT", "b" * 40)
     assert Settings.from_env().source_sha == "a" * 40

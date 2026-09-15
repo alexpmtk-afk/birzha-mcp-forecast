@@ -11,7 +11,10 @@ import hashlib
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from birzha.application.orchestration_plan import build_core_validation_actions
+from birzha.application.orchestration_plan import (
+    build_core_validation_actions,
+    build_d1_archive_refresh_actions,
+)
 from birzha.domain.orchestration import (
     ActionStatus,
     WorkflowAction,
@@ -23,6 +26,7 @@ from birzha.storage.orchestration_store import OrchestrationStore
 
 
 CORE_VALIDATION_WORKFLOW = "CORE_VALIDATION_V1"
+D1_ARCHIVE_REFRESH_WORKFLOW = "D1_ARCHIVE_REFRESH_V1"
 PROTECTED_GATES = frozenset(
     {WorkflowStage.HOLDOUT_APPROVAL, WorkflowStage.PROMOTION_APPROVAL}
 )
@@ -47,6 +51,77 @@ class OrchestrationGateError(RuntimeError):
 class WorkflowOrchestrator:
     def __init__(self, store: OrchestrationStore) -> None:
         self.store = store
+
+    def start_d1_archive_refresh(
+        self,
+        *,
+        archive_start: str,
+        archive_end: str,
+        source_sha: str,
+    ) -> tuple[WorkflowRun, bool]:
+        """Ensure one deterministic D1 archive refresh for this date/source.
+
+        Archive refresh is not model validation: it contains no readiness,
+        development, holdout or promotion stage. Once all six market actions
+        pass YDB + Google parity, the workflow becomes COMPLETE directly.
+        """
+        if archive_end[:10] < archive_start[:10]:
+            raise ValueError("archive_end must not be before archive_start")
+        if not source_sha.strip():
+            raise ValueError("source_sha must be non-empty")
+        workflow_id = d1_archive_refresh_workflow_id(
+            archive_start=archive_start,
+            archive_end=archive_end,
+            source_sha=source_sha,
+        )
+        existing = self.store.get_workflow(workflow_id)
+        if existing is not None:
+            _assert_same_archive_identity(
+                existing,
+                archive_start=archive_start,
+                archive_end=archive_end,
+                source_sha=source_sha,
+            )
+            return existing, False
+
+        now = _now()
+        metadata: dict[str, object] = {
+            "archive_start": archive_start[:10],
+            "archive_end": archive_end[:10],
+            "source_sha": source_sha,
+            "persistent_timeframe": "D1",
+            "intraday_mode": "H1/M15_ON_DEMAND_NOT_PERSISTED",
+            "policy": "YDB primary; Google Bridge v1 parity mandatory before PASS",
+        }
+        run = WorkflowRun(
+            workflow_id=workflow_id,
+            kind=D1_ARCHIVE_REFRESH_WORKFLOW,
+            stage=WorkflowStage.HISTORY_PREPARATION,
+            status=WorkflowStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+            metadata=metadata,
+        )
+        actions = build_d1_archive_refresh_actions(
+            workflow_id,
+            archive_start,
+            archive_end,
+            source_sha,
+        )
+        try:
+            self.store.create_workflow(run, actions)
+        except Exception:
+            winner = self.store.get_workflow(workflow_id)
+            if winner is None:
+                raise
+            _assert_same_archive_identity(
+                winner,
+                archive_start=archive_start,
+                archive_end=archive_end,
+                source_sha=source_sha,
+            )
+            return winner, False
+        return run, True
 
     def start_core_validation(
         self,
@@ -111,10 +186,6 @@ class WorkflowOrchestrator:
         try:
             self.store.create_workflow(run, actions)
         except Exception:
-            # The write may have lost a concurrent race, or the client may have
-            # lost the acknowledgement after the server committed it. Recover
-            # only when the exact deterministic workflow now exists; otherwise
-            # preserve the original failure.
             winner = self.store.get_workflow(workflow_id)
             if winner is None:
                 raise
@@ -309,6 +380,21 @@ class WorkflowOrchestrator:
                 return
             if any(item.status != ActionStatus.PASS for item in stage_actions):
                 return
+
+            if run.kind == D1_ARCHIVE_REFRESH_WORKFLOW:
+                if run.stage != WorkflowStage.HISTORY_PREPARATION:
+                    raise RuntimeError("D1 archive workflow entered an invalid stage")
+                self.store.update_workflow(
+                    replace(
+                        run,
+                        stage=WorkflowStage.COMPLETE,
+                        status=WorkflowStatus.COMPLETE,
+                        updated_at=_now(),
+                        last_error=None,
+                    )
+                )
+                return
+
             next_stage = _next_stage(run.stage)
             next_status = (
                 WorkflowStatus.WAITING_APPROVAL
@@ -336,6 +422,24 @@ class WorkflowOrchestrator:
         return run
 
 
+def d1_archive_refresh_workflow_id(
+    *,
+    archive_start: str,
+    archive_end: str,
+    source_sha: str,
+) -> str:
+    canonical = "|".join(
+        (
+            D1_ARCHIVE_REFRESH_WORKFLOW,
+            archive_start[:10],
+            archive_end[:10],
+            source_sha.strip().lower(),
+        )
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"d1-archive-refresh-{digest}"
+
+
 def core_validation_workflow_id(
     *,
     development_start: str,
@@ -354,6 +458,24 @@ def core_validation_workflow_id(
     )
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"core-validation-{digest}"
+
+
+def _assert_same_archive_identity(
+    run: WorkflowRun,
+    *,
+    archive_start: str,
+    archive_end: str,
+    source_sha: str,
+) -> None:
+    expected = {
+        "archive_start": archive_start[:10],
+        "archive_end": archive_end[:10],
+        "source_sha": source_sha,
+    }
+    if run.kind != D1_ARCHIVE_REFRESH_WORKFLOW or any(
+        run.metadata.get(key) != value for key, value in expected.items()
+    ):
+        raise RuntimeError("deterministic D1 archive workflow identity collision")
 
 
 def _assert_same_core_identity(
