@@ -1,4 +1,4 @@
-# probe: 3
+# probe: 4
 name: M26.1 Runtime Evidence Readonly Once
 
 on:
@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_SHA: 432792078c0369b2b85769e9130816fbe2253442
+  APP_SHA: 28996668fb35f05cacf08bceea276e58e697c6d5
   PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
@@ -102,7 +102,7 @@ jobs:
               x=rows(pool.execute_with_retries(q,{'$s':(sym,ydb.PrimitiveType.Utf8)})); z=x[0] if x else None
               print('REAL_COVERAGE='+json.dumps({'symbol':sym,'first_date':str(val(z,'first_date') or '') if z else '', 'last_date':str(val(z,'last_date') or '') if z else '', 'rows':int(val(z,'cnt') or 0) if z else 0},sort_keys=True))
           pool.stop(); driver.stop(timeout=5)
-          print('M26_1_REAL_PROGRESS_READONLY=PASS')
+          print('M26_2_REAL_PROGRESS_READONLY=PASS')
           PY
       - name: Cleanup
         if: always()
