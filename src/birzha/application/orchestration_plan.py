@@ -1,20 +1,59 @@
-"""Deterministic action plan for autonomous core validation.
+"""Deterministic action plans for autonomous BIRZHA workflows.
 
-Historical preparation is deliberately split into bounded calendar chunks so a
-worker can checkpoint progress after every successful unit. A container restart
-therefore repeats at most one idempotent chunk instead of a multi-hour run.
+Persistent market-price history is D1-only. Model validation may later stage
+H1/M15 on demand, but durable history preparation must never persist intraday
+bars. The daily archive refresh is deliberately separate from model validation.
 """
 
 from __future__ import annotations
 
 from datetime import date, timedelta
 
+from birzha.application.history_policy import PERSISTENT_PRICE_TIMEFRAMES
 from birzha.domain.orchestration import WorkflowAction, WorkflowStage
 
 
 CORE_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
-CORE_TIMEFRAMES = ("D1", "H1", "M15")
+CORE_TIMEFRAMES = PERSISTENT_PRICE_TIMEFRAMES
 HISTORY_CHUNK_DAYS = 92
+
+
+def build_d1_archive_refresh_actions(
+    workflow_id: str,
+    archive_start: str,
+    archive_end: str,
+    source_sha: str,
+) -> tuple[WorkflowAction, ...]:
+    """One bounded durable D1 refresh per core market.
+
+    HistoricalDataService remains responsible for store-first gap detection, so
+    an existing 2021+ archive does not get re-downloaded. Every action is later
+    mirrored to Google Sheets with Bridge-v1 parity before it can PASS.
+    """
+    start = date.fromisoformat(archive_start[:10])
+    finish = date.fromisoformat(archive_end[:10])
+    if finish < start:
+        raise ValueError("archive_end must not be before archive_start")
+    if not source_sha.strip():
+        raise ValueError("source_sha must be non-empty")
+
+    return tuple(
+        WorkflowAction(
+            action_id=f"{workflow_id}:{index:04d}:{WorkflowStage.HISTORY_PREPARATION.value}",
+            workflow_id=workflow_id,
+            stage=WorkflowStage.HISTORY_PREPARATION,
+            kind="D1_ARCHIVE_SYNC",
+            sequence=index,
+            payload={
+                "symbol": symbol,
+                "timeframe": "D1",
+                "from_date": start.isoformat(),
+                "till_date": finish.isoformat(),
+                "source_sha": source_sha,
+            },
+        )
+        for index, symbol in enumerate(CORE_SYMBOLS, start=1)
+    )
 
 
 def build_core_validation_actions(
@@ -24,6 +63,11 @@ def build_core_validation_actions(
     holdout_end: str,
     source_sha: str,
 ) -> tuple[WorkflowAction, ...]:
+    """Build the sealed model-validation workflow.
+
+    Only D1 is prepared durably here. H1/M15 belong to the on-demand validation
+    layer and are intentionally absent from durable historical actions.
+    """
     chunks = _date_chunks(development_start, holdout_end, HISTORY_CHUNK_DAYS)
     specs: list[tuple[WorkflowStage, str, dict[str, object]]] = []
 
