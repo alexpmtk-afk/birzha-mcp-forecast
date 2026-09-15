@@ -1,0 +1,108 @@
+name: M26.1 Runtime Evidence Readonly Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m26-1-runtime-evidence-readonly-once.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: birzha-m26-1-runtime-evidence-readonly-once
+  cancel-in-progress: false
+
+env:
+  APP_SHA: 432792078c0369b2b85769e9130816fbe2253442
+  PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
+  OIDC_AUDIENCE: https://github.com/alexpmtk-afk
+  EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
+  YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.APP_SHA }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install client
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Mint read-only token
+        shell: bash
+        run: |
+          set -euo pipefail
+          A="$(python -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["OIDC_AUDIENCE"], safe=""))')"
+          S='?'; [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] && S='&'
+          R="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${S}audience=${A}")"
+          J="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$R")"
+          echo "::add-mask::$J"
+          X="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -X POST 'https://auth.yandex.cloud/oauth/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' --data-urlencode "audience=${PUBLISHER_SERVICE_ACCOUNT_ID}" --data-urlencode "subject_token=${J}" --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
+          T="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$X")"
+          test -n "$T"; echo "::add-mask::$T"; printf '%s' "$T" > "$RUNNER_TEMP/ydb-token"
+      - name: Inspect real progress
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import ydb
+          token=(Path(os.environ['RUNNER_TEMP'])/'ydb-token').read_text()
+          driver=ydb.Driver(connection_string=os.environ['YDB_CONNECTION_STRING'],credentials=ydb.AccessTokenCredentials(token))
+          driver.wait(timeout=10, fail_fast=True)
+          pool=ydb.QuerySessionPool(driver)
+          def rows(result):
+              out=[]
+              for rs in result or []:
+                  out.extend(getattr(rs,'rows',[]) or [])
+              return out
+          def val(row,key):
+              if isinstance(row,dict): return row.get(key)
+              try: return row[key]
+              except Exception: return getattr(row,key,None)
+          rr=rows(pool.execute_with_retries("""
+            SELECT workflow_id, stage, status, created_at, updated_at, last_error
+            FROM `orchestration_runs`
+            WHERE kind='D1_ARCHIVE_REFRESH_V1'
+            ORDER BY created_at DESC LIMIT 1;
+          """))
+          assert rr, 'no D1 archive workflow'
+          r=rr[0]; wid=str(val(r,'workflow_id'))
+          print('REAL_WORKFLOW='+json.dumps({k:str(val(r,k) or '') for k in ('workflow_id','stage','status','created_at','updated_at','last_error')},sort_keys=True))
+          safe_wid=wid.replace("'","''")
+          aa=rows(pool.execute_with_retries(f"""
+            SELECT sequence, kind, status, attempt, payload_json, evidence_json, last_error
+            FROM `orchestration_actions` WHERE workflow_id='{safe_wid}' ORDER BY sequence;
+          """))
+          counts={}
+          first_pending=None
+          passed_ranges=[]
+          for a in aa:
+              kind=str(val(a,'kind') or ''); status=str(val(a,'status') or '')
+              counts[(kind,status)]=counts.get((kind,status),0)+1
+              p=json.loads(str(val(a,'payload_json') or '{}'))
+              if status=='PASS' and kind=='HISTORY_SYNC_CHUNK':
+                  passed_ranges.append((str(p.get('symbol')),str(p.get('from_date')),str(p.get('till_date'))))
+              if first_pending is None and status in ('PENDING','RUNNING'):
+                  first_pending={'sequence':int(val(a,'sequence') or 0),'kind':kind,'status':status,'symbol':str(p.get('symbol') or ''),'from_date':str(p.get('from_date') or ''),'till_date':str(p.get('till_date') or ''),'attempt':int(val(a,'attempt') or 0),'last_error':str(val(a,'last_error') or '')}
+          print('REAL_ACTION_COUNTS='+json.dumps({f'{k[0]}:{k[1]}':v for k,v in counts.items()},sort_keys=True))
+          print('REAL_PASSED_CHUNKS='+json.dumps(passed_ranges,ensure_ascii=False))
+          print('REAL_NEXT='+json.dumps(first_pending or {},sort_keys=True,ensure_ascii=False))
+          for sym in ('SBER','Si','BR','GOLD','IMOEX','RTSI'):
+              q="""DECLARE $s AS Utf8; SELECT MIN(trade_date) AS first_date,MAX(trade_date) AS last_date,COUNT(*) AS cnt FROM `historical_candles_sessions` WHERE symbol=$s;"""
+              x=rows(pool.execute_with_retries(q,{'$s':(sym,ydb.PrimitiveType.Utf8)})); z=x[0] if x else None
+              print('REAL_COVERAGE='+json.dumps({'symbol':sym,'first_date':str(val(z,'first_date') or '') if z else '', 'last_date':str(val(z,'last_date') or '') if z else '', 'rows':int(val(z,'cnt') or 0) if z else 0},sort_keys=True))
+          pool.stop(); driver.stop(timeout=5)
+          print('M26_1_REAL_PROGRESS_READONLY=PASS')
+          PY
+      - name: Cleanup
+        if: always()
+        run: rm -f "$RUNNER_TEMP/ydb-token"
