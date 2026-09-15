@@ -1,0 +1,140 @@
+name: M26.6 Publish Worker Image Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/m26-6-publish-worker-image-once.yml"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: birzha-m26-6-worker-image-once
+  cancel-in-progress: false
+
+env:
+  APP_SHA: 301f4880f555b4d6fd7cbdc509fa8e99af19ff33
+  REGISTRY_ID: crpk5qvf4p7kcqil2u3v
+  PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
+  OIDC_AUDIENCE: https://github.com/alexpmtk-afk
+  EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
+  IMAGE_NAME: birzha-mcp-forecast
+  REGISTRY_API: https://container-registry.api.cloud.yandex.net/container-registry/v1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Guard exact publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_EVENT_NAME" == "push" ]]
+          [[ "$GITHUB_REF" == "refs/heads/main" ]]
+          [[ "$APP_SHA" =~ ^[0-9a-f]{40}$ ]]
+      - name: Checkout exact verified source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.APP_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Assert exact source and bounded futures policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$APP_SHA" ]]
+          grep -Fq 'D1_ARCHIVE_START = "2021-01-01"' src/birzha/application/history_policy.py
+          grep -Fq 'D1_ARCHIVE_CHUNK_DAYS = 366' src/birzha/application/orchestration_plan.py
+          grep -Fq 'D1_FUTURES_ARCHIVE_CHUNK_DAYS = 92' src/birzha/application/orchestration_plan.py
+          grep -Fq 'DEFAULT_WORKER_LEASE_SECONDS = 420' src/birzha/application/orchestration_worker.py
+          grep -Fq 'BRIDGE_PROTOCOL_VERSION = 1' src/birzha/storage/google_sheets_bridge.py
+          TARGET_TAG="m26-6-futures-chunks-git-${APP_SHA}"
+          TARGET_REPOSITORY="${REGISTRY_ID}/${IMAGE_NAME}"
+          echo "TARGET_TAG=$TARGET_TAG" >> "$GITHUB_ENV"
+          echo "TARGET_REPOSITORY=$TARGET_REPOSITORY" >> "$GITHUB_ENV"
+          echo "TARGET_IMAGE=cr.yandex/${TARGET_REPOSITORY}:${TARGET_TAG}" >> "$GITHUB_ENV"
+          echo "LOCAL_IMAGE=birzha-m26-6-worker:source-${APP_SHA}" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Full regression
+        run: |
+          python -m pip install --disable-pip-version-check -e '.[dev]'
+          python -m pytest -q
+          python -m compileall -q src tests scripts
+      - name: Build exact immutable image
+        run: docker build --pull --label "org.opencontainers.image.revision=${APP_SHA}" -t "$LOCAL_IMAGE" .
+      - name: Exchange GitHub OIDC for Yandex token
+        shell: bash
+        run: |
+          set -euo pipefail
+          A="$(python -c 'import urllib.parse,os; print(urllib.parse.quote(os.environ["OIDC_AUDIENCE"], safe=""))')"
+          S='?'; [[ "$ACTIONS_ID_TOKEN_REQUEST_URL" == *'?'* ]] && S='&'
+          R="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${S}audience=${A}")"
+          J="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$R")"
+          echo "::add-mask::$J"
+          python - "$J" <<'PY'
+          import base64,json,os,sys
+          p=sys.argv[1].split('.')[1]; p += '='*(-len(p)%4)
+          c=json.loads(base64.urlsafe_b64decode(p))
+          assert c.get('sub')==os.environ['EXPECTED_OIDC_SUBJECT']
+          assert c.get('aud')==os.environ['OIDC_AUDIENCE']
+          assert c.get('ref')=='refs/heads/main'
+          PY
+          X="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -X POST 'https://auth.yandex.cloud/oauth/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' --data-urlencode "audience=${PUBLISHER_SERVICE_ACCOUNT_ID}" --data-urlencode "subject_token=${J}" --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
+          T="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$X")"
+          test -n "$T"; echo "::add-mask::$T"; printf '%s' "$T" > "$RUNNER_TEMP/yandex-iam-token"
+      - name: Assert immutable tag absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          T="$(cat "$RUNNER_TEMP/yandex-iam-token")"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -H "Authorization: Bearer ${T}" "${REGISTRY_API}/images?registryId=${REGISTRY_ID}&pageSize=1000" -o "$RUNNER_TEMP/before.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads((Path(os.environ['RUNNER_TEMP'])/'before.json').read_text())
+          assert not d.get('nextPageToken')
+          assert not [x for x in d.get('images',[]) if os.environ['TARGET_TAG'] in (x.get('tags') or [])]
+          PY
+      - name: Push immutable worker image
+        shell: bash
+        run: |
+          set -euo pipefail
+          T="$(cat "$RUNNER_TEMP/yandex-iam-token")"
+          D="$RUNNER_TEMP/docker-config"; mkdir -p "$D"; chmod 0700 "$D"
+          printf '%s' "$T" | docker --config "$D" login --username iam --password-stdin cr.yandex >/dev/null
+          docker tag "$LOCAL_IMAGE" "$TARGET_IMAGE"
+          docker --config "$D" push "$TARGET_IMAGE"
+      - name: Verify digest and write evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          T="$(cat "$RUNNER_TEMP/yandex-iam-token")"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -H "Authorization: Bearer ${T}" "${REGISTRY_API}/images?registryId=${REGISTRY_ID}&pageSize=1000" -o "$RUNNER_TEMP/after.json"
+          mkdir -p artifacts
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          d=json.loads((Path(os.environ['RUNNER_TEMP'])/'after.json').read_text())
+          m=[x for x in d.get('images',[]) if x.get('name')==os.environ['TARGET_REPOSITORY'] and os.environ['TARGET_TAG'] in (x.get('tags') or [])]
+          assert len(m)==1
+          digest=m[0].get('digest','')
+          assert digest.startswith('sha256:') and len(digest)==71
+          e={'source_sha':os.environ['APP_SHA'],'tag':os.environ['TARGET_IMAGE'],'digest':digest,'immutable_url':f"cr.yandex/{os.environ['TARGET_REPOSITORY']}@{digest}"}
+          Path('artifacts/m26_6_worker_image.json').write_text(json.dumps(e,indent=2,sort_keys=True)+'\n')
+          print('M26_6_WORKER_IMAGE='+json.dumps(e,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: birzha-m26-6-worker-image
+          path: artifacts/m26_6_worker_image.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/yandex-iam-token" "$RUNNER_TEMP/docker-config" "$RUNNER_TEMP/before.json" "$RUNNER_TEMP/after.json"
