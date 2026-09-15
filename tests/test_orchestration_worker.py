@@ -57,9 +57,9 @@ def _worker() -> tuple[OrchestrationWorker, FakeHistory]:
     return OrchestrationWorker(orchestrator=orchestrator, history=history), history  # type: ignore[arg-type]
 
 
-def test_default_worker_lease_is_bounded_for_serverless_recovery() -> None:
+def test_default_worker_lease_is_longer_than_production_mirror_timeout() -> None:
     worker, _ = _worker()
-    assert DEFAULT_WORKER_LEASE_SECONDS == 180
+    assert DEFAULT_WORKER_LEASE_SECONDS == 420
     assert worker.lease_seconds == DEFAULT_WORKER_LEASE_SECONDS
 
 
