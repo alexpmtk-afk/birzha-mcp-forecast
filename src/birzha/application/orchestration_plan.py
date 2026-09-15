@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from birzha.application.history_policy import PERSISTENT_PRICE_TIMEFRAMES
+from birzha.application.market_data import is_futures_root_symbol
 from birzha.domain.orchestration import WorkflowAction, WorkflowStage
 
 
@@ -17,6 +18,7 @@ CORE_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
 CORE_TIMEFRAMES = PERSISTENT_PRICE_TIMEFRAMES
 HISTORY_CHUNK_DAYS = 92
 D1_ARCHIVE_CHUNK_DAYS = 366
+D1_FUTURES_ARCHIVE_CHUNK_DAYS = 92
 
 
 def build_d1_archive_refresh_actions(
@@ -27,11 +29,14 @@ def build_d1_archive_refresh_actions(
 ) -> tuple[WorkflowAction, ...]:
     """Build bounded D1 archive work and one full mirror commit per market.
 
-    A whole 2021+ history is deliberately not fetched in one serverless action.
-    Each market is prepared in bounded D1 chunks, then a finalizer verifies all
-    chunks, marks the full range and publishes one complete Google mirror. This
-    keeps retries small without ever replacing the Google archive with a partial
-    chunk.
+    Direct instruments use annual chunks. Rolling futures roots are deliberately
+    smaller because each historical range may span several real contracts and
+    contract/session resolution is materially more expensive.  The 92-day
+    futures bound is the already-used historical preparation bound and keeps one
+    serverless action below the production execution/lease window.
+
+    Each market is finalized only after every one of its chunks is verified, so
+    Google never receives a partial range.
     """
     start = date.fromisoformat(archive_start[:10])
     finish = date.fromisoformat(archive_end[:10])
@@ -40,9 +45,14 @@ def build_d1_archive_refresh_actions(
     if not source_sha.strip():
         raise ValueError("source_sha must be non-empty")
 
-    chunks = _date_chunks(start.isoformat(), finish.isoformat(), D1_ARCHIVE_CHUNK_DAYS)
     specs: list[tuple[WorkflowStage, str, dict[str, object]]] = []
     for symbol in CORE_SYMBOLS:
+        chunk_days = (
+            D1_FUTURES_ARCHIVE_CHUNK_DAYS
+            if is_futures_root_symbol(symbol)
+            else D1_ARCHIVE_CHUNK_DAYS
+        )
+        chunks = _date_chunks(start.isoformat(), finish.isoformat(), chunk_days)
         for left, right in chunks:
             specs.append(
                 (
