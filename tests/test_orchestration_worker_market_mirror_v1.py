@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from birzha.application.history_policy import IntradayPersistenceForbiddenError
 from birzha.application.orchestration_worker import OrchestrationWorker
 
 
@@ -27,6 +28,19 @@ class FakeHistory:
     def __init__(self):
         self.store = FakeStore()
         self.market_data = object()
+        self.calls = []
+
+    def sync(self, symbol, *, timeframe, from_date, till_date):
+        self.calls.append((symbol, timeframe, from_date, till_date))
+        return SimpleNamespace(
+            symbol=symbol,
+            timeframe=timeframe,
+            requested_from=from_date,
+            requested_till=till_date,
+            fetched_candles=3,
+            stored_candles=3,
+            reused_verified_range=False,
+        )
 
 
 class FakeMirror:
@@ -77,9 +91,37 @@ def test_d1_finalization_fails_if_mirror_does_not_pass():
         worker(mirror=mirror, required=True)._finalize_history_range(payload("D1"))
 
 
-def test_intraday_finalization_does_not_call_google_mirror():
+def test_intraday_durable_finalization_is_forbidden():
     mirror = FakeMirror()
-    result = worker(mirror=mirror, required=True)._finalize_history_range(payload("H1"))
-    assert result["status"] == "PASS"
-    assert "market_mirror" not in result
+    with pytest.raises(IntradayPersistenceForbiddenError, match="D1-only"):
+        worker(mirror=mirror, required=True)._finalize_history_range(payload("H1"))
     assert mirror.calls == []
+
+
+def test_archive_refresh_requires_google_mirror_even_if_generic_flag_is_false():
+    with pytest.raises(RuntimeError, match="requires Google Bridge v1 mirror"):
+        worker(required=False)._sync_d1_archive(
+            {
+                "symbol": "BR",
+                "timeframe": "D1",
+                "from_date": "2021-01-01",
+                "till_date": "2026-09-14",
+            }
+        )
+
+
+def test_archive_refresh_passes_only_after_ydb_and_google_parity():
+    mirror = FakeMirror()
+    instance = worker(mirror=mirror, required=True)
+    result = instance._sync_d1_archive(
+        {
+            "symbol": "BR",
+            "timeframe": "D1",
+            "from_date": "2021-01-01",
+            "till_date": "2026-09-14",
+        }
+    )
+    assert result["status"] == "PASS"
+    assert result["market_mirror"]["status"] == "MIRROR_SYNC_PASS"
+    assert instance.history.calls == [("BR", "D1", "2021-01-01", "2026-09-14")]
+    assert mirror.calls == [("BR", "2021-01-01", "2026-09-14")]
