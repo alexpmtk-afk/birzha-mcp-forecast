@@ -67,12 +67,21 @@ class Settings:
         if require_auth and not bearer_token:
             raise ValueError("BIRZHA_MCP_BEARER_TOKEN is required when BIRZHA_REQUIRE_MCP_AUTH=true")
 
-        source_sha = (os.getenv("BIRZHA_SOURCE_SHA") or "").strip() or None
+        # Infra historically exposed BIRZHA_SOURCE_COMMIT while application
+        # settings used BIRZHA_SOURCE_SHA. Accept both, preferring SOURCE_SHA,
+        # so deterministic durable workflow identity matches the deployed image.
+        source_sha = (
+            (os.getenv("BIRZHA_SOURCE_SHA") or "").strip()
+            or (os.getenv("BIRZHA_SOURCE_COMMIT") or "").strip()
+            or None
+        )
         if source_sha is not None and (
             len(source_sha) != 40
             or any(char not in "0123456789abcdefABCDEF" for char in source_sha)
         ):
-            raise ValueError("BIRZHA_SOURCE_SHA must be a full 40-character Git commit SHA")
+            raise ValueError(
+                "BIRZHA_SOURCE_SHA/BIRZHA_SOURCE_COMMIT must be a full 40-character Git commit SHA"
+            )
 
         mirror_required = _bool_env("BIRZHA_MARKET_MIRROR_REQUIRED", False)
         mirror_url = (os.getenv("BIRZHA_MARKET_MIRROR_BRIDGE_URL") or "").strip() or None
