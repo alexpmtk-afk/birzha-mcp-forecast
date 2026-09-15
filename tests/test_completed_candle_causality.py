@@ -46,6 +46,26 @@ def test_closed_native_candle_remains_completed() -> None:
     assert normalized.completed is True
 
 
+def test_current_day_d1_candle_fails_closed_even_when_exchange_end_is_in_past() -> None:
+    now = datetime(2026, 9, 15, 20, 40, tzinfo=MOSCOW)
+    normalized = _normalize_completion(
+        _candle("2026-09-15 20:37:34"),
+        timeframe="D1",
+        now=now,
+    )
+    assert normalized.completed is False
+
+
+def test_prior_day_d1_candle_is_completed() -> None:
+    now = datetime(2026, 9, 15, 20, 40, tzinfo=MOSCOW)
+    normalized = _normalize_completion(
+        _candle("2026-09-14 23:59:59"),
+        timeframe="D1",
+        now=now,
+    )
+    assert normalized.completed is True
+
+
 def test_unparseable_exchange_end_time_fails_closed() -> None:
     now = datetime(2026, 8, 30, 14, 0, tzinfo=MOSCOW)
     normalized = _normalize_completion(_candle("not-a-time"), now=now)

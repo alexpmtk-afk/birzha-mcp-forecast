@@ -84,7 +84,10 @@ class MarketDataService:
             till_date=till_date,
             completed_only=False,
         )
-        normalized = tuple(_normalize_completion(candle, now=now) for candle in raw.candles)
+        normalized = tuple(
+            _normalize_completion(candle, timeframe=timeframe, now=now)
+            for candle in raw.candles
+        )
         if completed_only:
             normalized = tuple(candle for candle in normalized if candle.completed)
         return CandleSeries(
@@ -134,7 +137,12 @@ class MarketDataService:
         )
 
 
-def _normalize_completion(candle: Candle, *, now: datetime | None = None) -> Candle:
+def _normalize_completion(
+    candle: Candle,
+    *,
+    timeframe: str | None = None,
+    now: datetime | None = None,
+) -> Candle:
     observed_now = now or datetime.now(MOEX_TIMEZONE)
     if observed_now.tzinfo is None:
         observed_now = observed_now.replace(tzinfo=MOEX_TIMEZONE)
@@ -148,5 +156,13 @@ def _normalize_completion(candle: Candle, *, now: datetime | None = None) -> Can
         end = end.replace(tzinfo=MOEX_TIMEZONE)
     else:
         end = end.astimezone(MOEX_TIMEZONE)
+
+    # MOEX updates the current D1 candle during the trading day and its ``end``
+    # timestamp can be earlier than wall-clock ``now``.  It is therefore not a
+    # final daily observation until the exchange date has rolled over.  Fail
+    # closed here rather than leaking a forming D1 candle into an ex-ante T0.
+    if timeframe == "D1" and end.date() >= observed_now.date():
+        return replace(candle, completed=False)
+
     completed = bool(candle.completed and end <= observed_now)
     return replace(candle, completed=completed)
