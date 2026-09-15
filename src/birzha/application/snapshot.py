@@ -37,13 +37,16 @@ class MarketSnapshotService:
     ) -> "MarketSnapshotService":
         shared_control = control_plane or ProcessUpstreamControlPlane()
         market_data = MarketDataService.default(control_plane=shared_control)
-        return cls(
-            market_data=market_data,
-            flow=MarketFlowService(
-                market_data=market_data,
-                analytics=MoexAnalyticsClient(control_plane=shared_control),
-            ),
+        analytics = MoexAnalyticsClient(control_plane=shared_control)
+        # TradeStats is a subscriber dataset.  Without an authenticated
+        # ALGOPACK token, do not fabricate a partial/degraded flow contract:
+        # mark flow as NOT_REQUESTED and keep the price snapshot explicit.
+        flow = (
+            MarketFlowService(market_data=market_data, analytics=analytics)
+            if analytics.authenticated
+            else None
         )
+        return cls(market_data=market_data, flow=flow)
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
         till = date.fromisoformat(as_of_date) if as_of_date else datetime.now(MOEX_TIMEZONE).date()
