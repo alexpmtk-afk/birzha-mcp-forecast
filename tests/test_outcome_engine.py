@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 
 from birzha.application.outcome import OutcomeService
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
@@ -33,6 +34,19 @@ class Market:
             close = 100.0 + index
             candles.append(Candle(close - 0.5, close, close + 1, close - 1, None, 1, begin, end, True))
         return CandleSeries(instrument=instrument, timeframe="D1", candles=tuple(candles))
+
+
+class ForbiddenResolver:
+    def resolve(self, *args, **kwargs):
+        raise AssertionError("stored outcome path must not call live resolver")
+
+
+class StoredOutcomeMarket:
+    direct_resolver = ForbiddenResolver()
+    historical_future_resolver = ForbiddenResolver()
+
+    def stored_instrument(self, secid: str):
+        return INSTRUMENT if secid == "SiU6" else None
 
 
 def record() -> ForecastRecord:
@@ -75,3 +89,19 @@ def test_neutral_direction_is_not_forced_into_binary_hit_metric():
         "fcst_neutral", evaluation_date="2026-09-30"
     )
     assert all(item.direction_hit is None for item in result.outcomes)
+
+
+def test_history_backed_outcome_recovers_exact_contract_without_live_resolution():
+    service = OutcomeService(  # type: ignore[arg-type]
+        StoredOutcomeMarket(),
+        object(),
+        object(),
+    )
+
+    instrument = service._exact_instrument(
+        record(),
+        t0=datetime.fromisoformat("2026-08-28T13:00:00+03:00"),
+    )
+
+    assert instrument is INSTRUMENT
+    assert instrument.secid == "SiU6"

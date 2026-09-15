@@ -110,12 +110,29 @@ class OutcomeService:
     def _exact_instrument(self, forecast: ForecastRecord, *, t0: datetime) -> Instrument:
         """Recover the immutable instrument as it existed at forecast T0.
 
-        Current-security lookup is sufficient for still-listed equities. Expired
-        futures may disappear from the current securities resolver, so they must
-        be reconstructed through the historical futures resolver at the original
-        forecast date. The recovered SECID must exactly match the SECID persisted
-        in the immutable Forecast Record; otherwise evaluation fails closed.
+        A history-backed validation view may expose exact instrument metadata
+        directly from the prepared store. That path is preferred so model
+        evaluation does not re-resolve historical contracts against live MOEX.
+        Outside a stored view, current/historical provider resolution remains the
+        compatibility fallback and must still reproduce the immutable SECID.
         """
+
+        stored_lookup = getattr(self.market_data, "stored_instrument", None)
+        if callable(stored_lookup):
+            instrument = stored_lookup(forecast.secid)
+            if instrument is not None:
+                if instrument.secid != forecast.secid:
+                    raise ValueError(
+                        "stored instrument returned a different SECID than the Forecast Record"
+                    )
+                if instrument.asset_class == "future":
+                    root = (instrument.root_symbol or instrument.symbol).upper()
+                    if root != forecast.symbol.upper():
+                        raise ValueError(
+                            "stored futures root does not match Forecast Record: "
+                            f"stored={root}, forecast={forecast.symbol}"
+                        )
+                return instrument
 
         resolver = self.market_data.direct_resolver
         if resolver is not None:

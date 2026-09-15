@@ -1,0 +1,391 @@
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+from birzha.application.validation import independent_sample_capacity
+
+
+DEFAULT_VALIDATION_START = "2021-01-01"
+DEFAULT_SPLIT_DATE = "2022-12-31"
+DEFAULT_VALIDATION_END = "2024-12-31"
+DEFAULT_MAX_POINTS = 80
+MINIMUM_ACCEPTANCE_OBSERVATIONS = 20
+VALIDATION_PROTOCOL = "M23_HISTORICAL_GOVERNED_V1"
+DEVELOPMENT_READY_STATUS = "DEVELOPMENT_ACCEPTED_HOLDOUT_SEALED"
+
+
+def _run(command: list[str], *, label: str) -> dict[str, object]:
+    completed = subprocess.run(command, check=False)
+    return {
+        "label": label,
+        "returncode": int(completed.returncode),
+        "status": "PASS" if completed.returncode == 0 else "ERROR",
+    }
+
+
+def _write(path: str, payload: dict[str, object]) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _remove_existing(path: str) -> None:
+    target = Path(path)
+    if target.exists():
+        if not target.is_file():
+            raise RuntimeError(f"artifact path exists but is not a file: {path}")
+        target.unlink()
+
+
+def _read(path: str) -> dict[str, object]:
+    target = Path(path)
+    if not target.is_file():
+        raise RuntimeError(f"required artifact was not created: {path}")
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"artifact must contain a JSON object: {path}")
+    return payload
+
+
+def _calendar_capacity_upper_bound(
+    start_date: str,
+    end_date: str,
+    *,
+    step_sessions: int,
+    max_points: int,
+) -> dict[int, int]:
+    start = date.fromisoformat(start_date[:10])
+    end = date.fromisoformat(end_date[:10])
+    if end < start:
+        raise ValueError("capacity period end must not be before start")
+    calendar_days = (end - start).days + 1
+    return independent_sample_capacity(
+        calendar_days,
+        step_sessions=step_sessions,
+        max_points=max_points,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Prepare authorized durable D1 YDB history and run governed six-market validation. "
+            "H1/M15 are fetched on demand per T0; by default holdout remains sealed."
+        )
+    )
+    parser.add_argument("--connection-string", required=True)
+    parser.add_argument("--validation-start", default=DEFAULT_VALIDATION_START)
+    parser.add_argument("--split-date", default=DEFAULT_SPLIT_DATE)
+    parser.add_argument("--validation-end", default=DEFAULT_VALIDATION_END)
+    parser.add_argument("--step-sessions", type=int, default=5)
+    parser.add_argument("--max-points", type=int, default=DEFAULT_MAX_POINTS)
+    parser.add_argument(
+        "--open-holdout",
+        action="store_true",
+        help="Explicitly spend the governed holdout after sealed development.",
+    )
+    parser.add_argument(
+        "--expected-model-fingerprint",
+        default=None,
+        help="Model fingerprint from the prior sealed development result; required with --open-holdout.",
+    )
+    parser.add_argument(
+        "--expected-data-fingerprint",
+        default=None,
+        help="Durable D1 dataset fingerprint from the prior sealed development result; required with --open-holdout.",
+    )
+    parser.add_argument(
+        "--prepare-artifact",
+        default="artifacts/ydb_validation_data_preparation.json",
+    )
+    parser.add_argument(
+        "--validation-artifact",
+        default="artifacts/ydb_model_validation.json",
+    )
+    parser.add_argument(
+        "--pipeline-artifact",
+        default="artifacts/ydb_model_pipeline.json",
+    )
+    args = parser.parse_args()
+
+    if not args.validation_start < args.split_date < args.validation_end:
+        raise ValueError("expected validation_start < split_date < validation_end")
+    if args.step_sessions <= 0 or args.step_sessions > 50:
+        raise ValueError("step_sessions must be between 1 and 50")
+    if args.max_points <= 0 or args.max_points > 240:
+        raise ValueError("max_points must be between 1 and 240")
+    if args.open_holdout and (
+        not args.expected_model_fingerprint or not args.expected_data_fingerprint
+    ):
+        raise ValueError(
+            "--expected-model-fingerprint and --expected-data-fingerprint are required when --open-holdout is used"
+        )
+    if not args.open_holdout and (
+        args.expected_model_fingerprint or args.expected_data_fingerprint
+    ):
+        raise ValueError(
+            "expected fingerprints are only valid together with --open-holdout"
+        )
+
+    holdout_start = (
+        date.fromisoformat(args.split_date[:10]) + timedelta(days=1)
+    ).isoformat()
+    development_upper = _calendar_capacity_upper_bound(
+        args.validation_start,
+        args.split_date,
+        step_sessions=args.step_sessions,
+        max_points=args.max_points,
+    )
+    holdout_upper = _calendar_capacity_upper_bound(
+        holdout_start,
+        args.validation_end,
+        step_sessions=args.step_sessions,
+        max_points=args.max_points,
+    )
+    capacity_upper_bound = {
+        "development": {str(k): v for k, v in development_upper.items()},
+        "holdout": {str(k): v for k, v in holdout_upper.items()},
+    }
+    impossible = {
+        period: {
+            horizon: count
+            for horizon, count in values.items()
+            if count < MINIMUM_ACCEPTANCE_OBSERVATIONS
+        }
+        for period, values in capacity_upper_bound.items()
+    }
+    impossible = {period: values for period, values in impossible.items() if values}
+
+    artifact: dict[str, object] = {
+        "validation_protocol": VALIDATION_PROTOCOL,
+        "validation_start": args.validation_start,
+        "split_date": args.split_date,
+        "validation_end": args.validation_end,
+        "step_sessions": args.step_sessions,
+        "max_points": args.max_points,
+        "minimum_acceptance_observations": MINIMUM_ACCEPTANCE_OBSERVATIONS,
+        "calendar_capacity_upper_bound": capacity_upper_bound,
+        "persistent_price_timeframes": ["D1"],
+        "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
+        "m15_source": "M1_ON_DEMAND_AGGREGATION",
+        "prepare_artifact": args.prepare_artifact,
+        "validation_artifact": args.validation_artifact,
+        "holdout_open_requested": bool(args.open_holdout),
+    }
+    if impossible:
+        artifact["status"] = "INSUFFICIENT_DATA"
+        artifact["model_status"] = "INSUFFICIENT_DATA"
+        artifact["capacity_shortfall_upper_bound"] = impossible
+        artifact["prepare"] = {"status": "NOT_RUN"}
+        artifact["validation"] = {"status": "NOT_RUN"}
+        artifact["holdout_evaluated"] = False
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 0
+
+    python = sys.executable
+    scripts_dir = Path(__file__).resolve().parent
+
+    if args.open_holdout:
+        prepare = {
+            "label": "prepare",
+            "returncode": 0,
+            "status": "SKIPPED_FROZEN_DATA",
+        }
+        artifact["prepare"] = prepare
+    else:
+        _remove_existing(args.prepare_artifact)
+        prepare = _run(
+            [
+                python,
+                str(scripts_dir / "run_authorized_ydb_prepare_validation_runtime.py"),
+                "--connection-string",
+                args.connection_string,
+                "--validation-start",
+                args.validation_start,
+                "--split-date",
+                args.split_date,
+                "--validation-end",
+                args.validation_end,
+                "--step-sessions",
+                str(args.step_sessions),
+                "--max-points",
+                str(args.max_points),
+                "--artifact",
+                args.prepare_artifact,
+            ],
+            label="prepare",
+        )
+        artifact["prepare"] = prepare
+
+        try:
+            prepare_evidence = _read(args.prepare_artifact)
+        except Exception as exc:
+            artifact["status"] = (
+                "PREPARE_FAILED"
+                if prepare["status"] != "PASS"
+                else "PREPARE_EVIDENCE_INVALID"
+            )
+            artifact["prepare_evidence_error"] = f"{type(exc).__name__}:{exc}"
+            artifact["validation"] = {"status": "NOT_RUN"}
+            _write(args.pipeline_artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 2
+
+        prepare_evidence_status = prepare_evidence.get("status")
+        artifact["prepare_evidence_status"] = prepare_evidence_status
+        artifact["price_operation_failures"] = prepare_evidence.get(
+            "price_operation_failures"
+        )
+        artifact["optional_flow_status"] = prepare_evidence.get(
+            "optional_flow_status"
+        )
+        artifact["persistent_price_timeframes"] = prepare_evidence.get(
+            "persistent_price_timeframes", ["D1"]
+        )
+        artifact["intraday_mode"] = prepare_evidence.get(
+            "intraday_mode", "ON_DEMAND_NOT_PERSISTED"
+        )
+
+        readiness = prepare_evidence.get("readiness")
+        readiness_status = (
+            readiness.get("status") if isinstance(readiness, dict) else None
+        )
+        artifact["readiness_status"] = readiness_status
+        if readiness_status != "READY":
+            artifact["status"] = (
+                str(prepare_evidence_status)
+                if isinstance(prepare_evidence_status, str)
+                else "PREPARE_NOT_READY"
+            )
+            artifact["validation"] = {"status": "NOT_RUN"}
+            _write(args.pipeline_artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 2
+
+        if prepare["status"] != "PASS":
+            artifact["status"] = "PREPARE_FAILED"
+            artifact["validation"] = {"status": "NOT_RUN"}
+            _write(args.pipeline_artifact, artifact)
+            print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+            return 2
+
+    _remove_existing(args.validation_artifact)
+    validation_command = [
+        python,
+        str(scripts_dir / "run_authorized_ydb_validation_runtime.py"),
+        "--connection-string",
+        args.connection_string,
+        "--development-start",
+        args.validation_start,
+        "--split-date",
+        args.split_date,
+        "--holdout-end",
+        args.validation_end,
+        "--step-sessions",
+        str(args.step_sessions),
+        "--max-points",
+        str(args.max_points),
+        "--artifact",
+        args.validation_artifact,
+    ]
+    if args.open_holdout:
+        validation_command.extend(
+            [
+                "--open-holdout",
+                "--expected-model-fingerprint",
+                str(args.expected_model_fingerprint),
+                "--expected-data-fingerprint",
+                str(args.expected_data_fingerprint),
+            ]
+        )
+    validation = _run(validation_command, label="validate")
+    artifact["validation"] = validation
+
+    try:
+        validation_evidence = _read(args.validation_artifact)
+    except Exception as exc:
+        artifact["status"] = (
+            "VALIDATION_FAILED"
+            if validation["status"] != "PASS"
+            else "VALIDATION_EVIDENCE_INVALID"
+        )
+        artifact["validation_evidence_error"] = f"{type(exc).__name__}:{exc}"
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 3
+
+    run_status = validation_evidence.get("run_status")
+    model_status = validation_evidence.get("model_status")
+    artifact["validation_run_status"] = run_status
+    artifact["model_status"] = model_status
+    artifact["selected_parameters"] = validation_evidence.get("selected_parameters")
+    artifact["selected_model_fingerprint"] = validation_evidence.get(
+        "selected_model_fingerprint"
+    )
+    artifact["selected_data_fingerprint"] = validation_evidence.get(
+        "selected_data_fingerprint"
+    )
+    artifact["dataset_fingerprint"] = validation_evidence.get("dataset_fingerprint")
+    artifact["development_statuses"] = validation_evidence.get(
+        "development_statuses"
+    )
+    artifact["development_capacity"] = validation_evidence.get(
+        "development_capacity"
+    )
+    artifact["holdout_capacity"] = validation_evidence.get("holdout_capacity")
+    artifact["capacity_shortfall"] = validation_evidence.get("capacity_shortfall")
+    artifact["holdout_evaluated"] = validation_evidence.get("holdout_evaluated")
+    artifact["holdout_sealed"] = validation_evidence.get("holdout_sealed")
+    artifact["holdout_statuses"] = validation_evidence.get("holdout_statuses")
+    artifact["holdout_claim"] = validation_evidence.get("holdout_claim")
+    artifact["actual_model_fingerprint"] = validation_evidence.get(
+        "actual_model_fingerprint"
+    )
+    artifact["actual_data_fingerprint"] = validation_evidence.get(
+        "actual_data_fingerprint"
+    )
+
+    if validation["status"] != "PASS":
+        artifact["status"] = (
+            str(run_status) if isinstance(run_status, str) else "VALIDATION_FAILED"
+        )
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 3
+
+    protected_terminal = {
+        "HOLDOUT_ALREADY_CONSUMED",
+        "MODEL_FINGERPRINT_MISMATCH",
+        "DATA_FINGERPRINT_MISMATCH",
+    }
+    if run_status in protected_terminal and model_status == "NOT_EVALUATED":
+        artifact["status"] = run_status
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 0
+
+    if run_status != "COMPUTED" or not isinstance(model_status, str):
+        artifact["status"] = "VALIDATION_EVIDENCE_INVALID"
+        _write(args.pipeline_artifact, artifact)
+        print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+        return 3
+
+    artifact["status"] = (
+        model_status if model_status == DEVELOPMENT_READY_STATUS else "COMPUTED"
+    )
+    _write(args.pipeline_artifact, artifact)
+    print(json.dumps(artifact, ensure_ascii=False, sort_keys=True), flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

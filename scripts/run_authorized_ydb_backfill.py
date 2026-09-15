@@ -8,10 +8,13 @@ import time
 import ydb
 
 from birzha.application.historical_data import HistoricalDataService
+from birzha.application.history_policy import require_persistent_price_timeframes
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
-from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+from birzha.storage.ydb_runtime_storage import (
+    YdbRuntimeHistoricalCandleStore,
+    YdbRuntimeSlotPacingGate,
+)
 
 
 CORE_SYMBOLS = ("SBER", "GOLD", "IMOEX", "RTSI", "Si", "BR")
@@ -33,13 +36,21 @@ def _token() -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Authorized resumable YDB history backfill")
+    parser = argparse.ArgumentParser(
+        description="Authorized resumable D1-only YDB history backfill"
+    )
     parser.add_argument("--connection-string", required=True)
     parser.add_argument("--from-date", required=True)
     parser.add_argument("--till-date", required=True)
     parser.add_argument("--symbols", type=_csv, default=CORE_SYMBOLS)
-    parser.add_argument("--timeframes", type=_csv, default=("D1", "H1", "M15"))
+    parser.add_argument(
+        "--timeframes",
+        type=_csv,
+        default=("D1",),
+        help="Durable history is D1-only; H1/M15 must be fetched on demand.",
+    )
     args = parser.parse_args()
+    timeframes = require_persistent_price_timeframes(args.timeframes)
 
     driver = ydb.Driver(
         connection_string=args.connection_string,
@@ -48,18 +59,20 @@ def main() -> int:
     driver.wait(timeout=15, fail_fast=True)
     pool = ydb.QuerySessionPool(driver)
     control = ProcessUpstreamControlPlane(
-        gate_factory=lambda provider_key: YdbSlotPacingGate(pool, provider_key=provider_key),
+        gate_factory=lambda provider_key: YdbRuntimeSlotPacingGate(
+            pool, provider_key=provider_key
+        ),
         require_distributed_gate=True,
     )
     history = HistoricalDataService(
         market_data=MarketDataService.default(control_plane=control),
-        store=YdbHistoricalCandleStore(pool),
+        store=YdbRuntimeHistoricalCandleStore(pool),
     )
 
     failures: list[dict[str, str]] = []
     try:
         for symbol in args.symbols:
-            for timeframe in args.timeframes:
+            for timeframe in timeframes:
                 for attempt, delay in enumerate(RETRY_DELAYS, start=1):
                     if delay:
                         time.sleep(delay)
@@ -109,7 +122,18 @@ def main() -> int:
             stop()
         driver.stop(timeout=5)
 
-    print(json.dumps({"status": "PASS" if not failures else "PARTIAL", "failures": failures}, ensure_ascii=False, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "status": "PASS" if not failures else "PARTIAL",
+                "persistent_timeframes": list(timeframes),
+                "intraday_mode": "ON_DEMAND_NOT_PERSISTED",
+                "failures": failures,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
     return 0 if not failures else 1
 
 

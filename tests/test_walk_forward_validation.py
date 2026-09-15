@@ -4,8 +4,13 @@ from birzha.domain.outcome import HorizonOutcome
 
 
 def _forecast(fid: str, direction: str, expected: float) -> ForecastRecord:
+    created_at = (
+        "2026-01-10T18:40:00+03:00"
+        if fid == "a"
+        else "2026-01-20T18:40:00+03:00"
+    )
     return ForecastRecord(
-        forecast_id=fid, symbol="SBER", secid="SBER", created_at_t0="2026-01-10T18:40:00+03:00",
+        forecast_id=fid, symbol="SBER", secid="SBER", created_at_t0=created_at,
         engine_version="engine", direction=direction, signal_strength=0.5,
         control="BUYERS" if direction == "UP" else "SELLERS", route="TREND",
         horizons=(HorizonForecast(5, direction, 0.5, expected, 1.0),),
@@ -14,9 +19,14 @@ def _forecast(fid: str, direction: str, expected: float) -> ForecastRecord:
 
 
 def _outcome(fid: str, actual: float, hit: bool) -> HorizonOutcome:
+    target_session_end = (
+        "2026-01-17T18:40:00+03:00"
+        if fid == "a"
+        else "2026-01-27T18:40:00+03:00"
+    )
     return HorizonOutcome(
         outcome_id=f"out_{fid}", forecast_id=fid, symbol="SBER", secid="SBER",
-        horizon_sessions=5, reference_price=100.0, target_session_end="2026-01-17T18:40:00+03:00",
+        horizon_sessions=5, reference_price=100.0, target_session_end=target_session_end,
         target_close=100.0 + actual, actual_return_pct=actual, direction_hit=hit,
         max_favorable_excursion_pct=3.0, max_adverse_excursion_pct=-1.0,
     )
@@ -28,7 +38,7 @@ def test_summary_computes_direction_and_forecast_error_metrics():
     metrics = summarize_walk_forward([
         (first, _outcome("a", 3.0, True)),
         (second, _outcome("b", 2.0, False)),
-    ])[0]
+    ], step_sessions=5)[0]
 
     assert metrics.sessions == 5
     assert metrics.observations == 2

@@ -210,6 +210,74 @@ class YdbHistoricalCandleStore:
         )
         return tuple(sorted({str(_row_value(row, "trade_date")) for row in _rows(result)}))
 
+    def stored_session_contracts(
+        self, symbol: str, from_date: str, till_date: str
+    ) -> tuple[tuple[str, str], ...]:
+        query = f"""
+        DECLARE $symbol AS Utf8;
+        DECLARE $from_date AS Utf8;
+        DECLARE $till_date AS Utf8;
+        SELECT trade_date, secid
+        FROM `{self._sessions_table}`
+        WHERE symbol=$symbol AND trade_date>=$from_date AND trade_date<=$till_date
+        ORDER BY trade_date, secid;
+        """
+        result = self._pool.execute_with_retries(
+            query,
+            {
+                "$symbol": _utf8(symbol),
+                "$from_date": _utf8(from_date[:10]),
+                "$till_date": _utf8(till_date[:10]),
+            },
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+        return tuple(
+            (str(_row_value(row, "trade_date")), str(_row_value(row, "secid")))
+            for row in _rows(result)
+        )
+
+    def stored_session_secids(self, symbol: str, trade_date: str) -> tuple[str, ...]:
+        query = f"""DECLARE $symbol AS Utf8; DECLARE $trade_date AS Utf8; SELECT secid FROM `{self._sessions_table}` WHERE symbol=$symbol AND trade_date=$trade_date ORDER BY secid;"""
+        result = self._pool.execute_with_retries(
+            query,
+            {"$symbol": _utf8(symbol), "$trade_date": _utf8(trade_date[:10])},
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+        return tuple(sorted({str(_row_value(row, "secid")) for row in _rows(result)}))
+
+    def stored_instrument(self, secid: str) -> Instrument | None:
+        query = f"""DECLARE $secid AS Utf8; SELECT payload_json, source FROM `{self._table}` WHERE secid=$secid ORDER BY begin DESC LIMIT 1;"""
+        result = self._pool.execute_with_retries(
+            query,
+            {"$secid": _utf8(secid)},
+            retry_settings=ydb.RetrySettings(idempotent=True),
+        )
+        row = _first_row(result)
+        if row is None:
+            return None
+        payload = json.loads(str(_row_value(row, "payload_json")))
+        data = payload.get("instrument") or {}
+        return Instrument(
+            symbol=str(data.get("symbol") or ""),
+            secid=str(data.get("secid") or secid),
+            board=str(data.get("board") or ""),
+            engine=str(data.get("engine") or ""),
+            market=str(data.get("market") or ""),
+            asset_class=str(data.get("asset_class") or "unknown"),  # type: ignore[arg-type]
+            name=str(data["name"]) if data.get("name") is not None else None,
+            root_symbol=(
+                str(data["root_symbol"])
+                if data.get("root_symbol") is not None
+                else None
+            ),
+            last_trade_date=(
+                str(data["last_trade_date"])
+                if data.get("last_trade_date") is not None
+                else None
+            ),
+            source=str(data.get("source") or _row_value(row, "source")),
+        )
+
     def is_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> bool:
         query = f"""DECLARE $symbol AS Utf8; DECLARE $from_date AS Utf8; DECLARE $till_date AS Utf8; SELECT 1 AS found FROM `{self._session_verified_table}` WHERE symbol=$symbol AND from_date<=$from_date AND till_date>=$till_date LIMIT 1;"""
         result = self._pool.execute_with_retries(

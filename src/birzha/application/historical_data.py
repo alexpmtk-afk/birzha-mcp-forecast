@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.domain.market import CandleSeries, Instrument
@@ -11,7 +11,14 @@ from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCoverage
 
 
-M15_MAX_SESSIONS_PER_FETCH = 3
+INTRADAY_MAX_SESSIONS_PER_FETCH = 3
+D1_SESSION_VERIFICATION_VERSION = "D1_SESSION_V2_ACTIVITY"
+H1_FULL_VERIFICATION_VERSION = "H1_FULL_V2_ACTIVITY"
+M15_FULL_VERIFICATION_VERSION = "M15_FULL_V2_ACTIVITY"
+ROLLING_HISTORY_VERIFICATION_VERSION = "ROLLING_HISTORY_V2_PREWARM"
+CONTRACT_WARMUP_VERIFICATION_VERSION = "CONTRACT_WARMUP_V2_ACTIVITY"
+ROLLING_CONTRACT_WARMUP_DAYS = {"D1": 300, "H1": 90, "M15": 30}
+FULL_SESSION_TIMEFRAMES = frozenset({"H1", "M15"})
 
 
 class HistoricalDataIncompleteError(RuntimeError):
@@ -91,35 +98,135 @@ class HistoricalDataService:
             raise ValueError("till_date must be on or after from_date")
 
         resolver_known = hasattr(self.market_data, "direct_resolver")
-        direct_resolver = getattr(self.market_data, "direct_resolver", None)
         is_root = is_futures_root_symbol(symbol)
-        direct = (
-            direct_resolver.resolve(symbol)
-            if direct_resolver is not None and not is_root
-            else None
+        verification_symbol = (
+            _verification_symbol(symbol, timeframe, is_root=is_root)
+            if resolver_known
+            else symbol
         )
-        is_direct = direct is not None and direct.asset_class != "unknown"
-        # Root futures must re-resolve their historical contract timeline. Older
-        # root-level verified markers cannot prove that every rollover contract
-        # was actually stored, so they are intentionally not trusted here.
-        # Minimal test/custom market-data stubs without resolver capability keep
-        # the legacy verified-range shortcut because they cannot classify roots.
-        trust_verified = (is_direct and not is_root) or not resolver_known
-        if trust_verified:
-            price_verified = self.store.is_verified(symbol, timeframe, from_date[:10], till_date[:10])
-            sessions_verified = timeframe != "D1" or self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10])
-            if price_verified and sessions_verified:
-                return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=(), reused_verified_range=True)
+        session_symbol = (
+            verification_symbol
+            if resolver_known and timeframe == "D1"
+            else symbol
+        )
+
+        # Store-first: a verification marker created by the current semantics
+        # is sufficient to reuse history without any resolver/network call.
+        # Validation timeframes use versioned keys, so legacy markers cannot
+        # accidentally prove readiness after the M23 correctness audit.
+        price_verified = self.store.is_verified(
+            verification_symbol, timeframe, from_date[:10], till_date[:10]
+        )
+        sessions_verified = (
+            timeframe != "D1"
+            or self.store.is_session_range_verified(
+                session_symbol, from_date[:10], till_date[:10]
+            )
+        )
+        if price_verified and sessions_verified:
+            return HistoricalSyncResult(
+                symbol=symbol,
+                timeframe=timeframe,
+                requested_from=from_date,
+                requested_till=till_date,
+                contracts=(),
+                reused_verified_range=True,
+            )
 
         segments = self._segments(symbol, start, finish)
-        results = tuple(
-            self._sync_contract(symbol, instrument, timeframe, left, right)
-            for instrument, left, right in segments
-        )
+        if not segments:
+            raise HistoricalDataIncompleteError(
+                f"historical resolver produced no segments for {symbol} "
+                f"{timeframe} {start.isoformat()}..{finish.isoformat()}"
+            )
+
+        # H1/M15 are certified from complete provider responses for each
+        # expected active session. For rolling futures, every later contract is
+        # also preloaded before its first active segment so a snapshot just
+        # after rollover can still build D1/H1/M15 features from that exact
+        # contract's own causal history.
+        force_full_sessions = timeframe in FULL_SESSION_TIMEFRAMES and resolver_known
+        result_items: list[ContractSyncResult] = []
+        for instrument, left, right in segments:
+            if is_root and left > start:
+                self._sync_contract_warmup(
+                    instrument,
+                    timeframe=timeframe,
+                    active_start=left,
+                )
+            result_items.append(
+                self._sync_contract(
+                    symbol,
+                    instrument,
+                    timeframe,
+                    left,
+                    right,
+                    force_full_sessions=force_full_sessions,
+                    verification_symbol=(
+                        verification_symbol if force_full_sessions else None
+                    ),
+                    session_symbol=(session_symbol if timeframe == "D1" else None),
+                )
+            )
+        results = tuple(result_items)
+        if is_root:
+            empty_contracts = tuple(
+                item.secid for item in results if item.stored_candles == 0
+            )
+            if empty_contracts:
+                raise HistoricalDataIncompleteError(
+                    "rolling futures history contains empty contract segments: "
+                    + ",".join(empty_contracts)
+                )
+
         self.store.mark_verified(symbol, timeframe, from_date[:10], till_date[:10])
+        if verification_symbol != symbol:
+            self.store.mark_verified(
+                verification_symbol, timeframe, from_date[:10], till_date[:10]
+            )
         if timeframe == "D1":
-            self.store.mark_session_range_verified(symbol, from_date[:10], till_date[:10])
-        return HistoricalSyncResult(symbol=symbol, timeframe=timeframe, requested_from=from_date, requested_till=till_date, contracts=results)
+            self.store.mark_session_range_verified(
+                session_symbol, from_date[:10], till_date[:10]
+            )
+        return HistoricalSyncResult(
+            symbol=symbol,
+            timeframe=timeframe,
+            requested_from=from_date,
+            requested_till=till_date,
+            contracts=results,
+        )
+
+    def is_range_verified(
+        self,
+        symbol: str,
+        *,
+        timeframe: str,
+        from_date: str,
+        till_date: str,
+    ) -> bool:
+        """Pure readiness check; never fetch or mutate market history."""
+        timeframe = timeframe.upper()
+        resolver_known = hasattr(self.market_data, "direct_resolver")
+        is_root = is_futures_root_symbol(symbol)
+        verification_symbol = (
+            _verification_symbol(symbol, timeframe, is_root=is_root)
+            if resolver_known
+            else symbol
+        )
+        session_symbol = (
+            verification_symbol
+            if resolver_known and timeframe == "D1"
+            else symbol
+        )
+        if not self.store.is_verified(
+            verification_symbol, timeframe, from_date[:10], till_date[:10]
+        ):
+            return False
+        if timeframe == "D1" and not self.store.is_session_range_verified(
+            session_symbol, from_date[:10], till_date[:10]
+        ):
+            return False
+        return True
 
     def sync_many(
         self, symbols: list[str], timeframes: list[str], *, from_date: str, till_date: str
@@ -130,12 +237,28 @@ class HistoricalDataService:
         for symbol in symbols:
             for timeframe in timeframes:
                 try:
-                    result = self.sync(symbol, timeframe=timeframe, from_date=from_date, till_date=till_date)
+                    result = self.sync(
+                        symbol, timeframe=timeframe, from_date=from_date, till_date=till_date
+                    )
                     items.append({"status": "PASS", **result.to_dict()})
                 except Exception as exc:
-                    items.append({"status": "ERROR", "symbol": symbol, "timeframe": timeframe, "error_type": type(exc).__name__, "error": str(exc)[:1000]})
-        passed=sum(1 for item in items if item["status"] == "PASS")
-        return {"status": "PASS" if passed == len(items) else "PARTIAL", "requested": len(items), "passed": passed, "failed": len(items)-passed, "items": items}
+                    items.append(
+                        {
+                            "status": "ERROR",
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "error_type": type(exc).__name__,
+                            "error": str(exc)[:1000],
+                        }
+                    )
+        passed = sum(1 for item in items if item["status"] == "PASS")
+        return {
+            "status": "PASS" if passed == len(items) else "PARTIAL",
+            "requested": len(items),
+            "passed": passed,
+            "failed": len(items) - passed,
+            "items": items,
+        }
 
     def load_exact(
         self,
@@ -147,10 +270,26 @@ class HistoricalDataService:
     ) -> CandleSeries:
         return self.store.read(instrument, timeframe, from_date, till_date)
 
-    def session_dates(self, symbol: str, *, from_date: str, till_date: str) -> tuple[date, ...]:
-        if not self.store.is_session_range_verified(symbol, from_date[:10], till_date[:10]):
+    def session_dates(
+        self, symbol: str, *, from_date: str, till_date: str
+    ) -> tuple[date, ...]:
+        resolver_known = hasattr(self.market_data, "direct_resolver")
+        is_root = is_futures_root_symbol(symbol)
+        session_symbol = (
+            _verification_symbol(symbol, "D1", is_root=is_root)
+            if resolver_known
+            else symbol
+        )
+        if not self.store.is_session_range_verified(
+            session_symbol, from_date[:10], till_date[:10]
+        ):
             raise RuntimeError("stored session calendar is not verified for requested range")
-        return tuple(date.fromisoformat(item[:10]) for item in self.store.stored_sessions(symbol, from_date, till_date))
+        return tuple(
+            date.fromisoformat(item[:10])
+            for item in self.store.stored_sessions(
+                session_symbol, from_date, till_date
+            )
+        )
 
     def _segments(
         self,
@@ -189,14 +328,28 @@ class HistoricalDataService:
         segments.append((current_instrument, segment_start, segment_end))
         return tuple(segments)
 
-    def _sync_contract(
+    def _sync_contract_warmup(
         self,
-        symbol: str,
         instrument: Instrument,
+        *,
         timeframe: str,
-        start: date,
-        finish: date,
-    ) -> ContractSyncResult:
+        active_start: date,
+    ) -> int:
+        """Store the exact contract's own history before it becomes active.
+
+        Warmup rows are context for causal snapshot features only; they are not
+        logical-root active sessions and therefore never populate the root
+        session calendar or root verification markers. A separate exact-contract
+        generation prevents stale partial intraday days from being trusted.
+        """
+        timeframe = timeframe.upper()
+        days = ROLLING_CONTRACT_WARMUP_DAYS.get(timeframe)
+        if days is None:
+            return 0
+        finish = active_start - timedelta(days=1)
+        start = active_start - timedelta(days=days)
+        if finish < start:
+            return 0
         calendar = MoexTradingCalendar(self.market_data.provider)
         expected = calendar.dates(
             engine=instrument.engine,
@@ -206,15 +359,22 @@ class HistoricalDataService:
             from_date=start,
             till_date=finish,
         )
-        if timeframe.upper() == "D1":
-            self.store.record_sessions(symbol, instrument.secid, tuple(day.isoformat() for day in expected))
-        stored_dates = self.store.stored_trade_dates(
-            instrument.secid,
-            timeframe,
-            start.isoformat(),
-            finish.isoformat(),
+        if not expected:
+            return 0
+        verification_symbol = (
+            f"{instrument.secid}#{CONTRACT_WARMUP_VERIFICATION_VERSION}"
         )
-        missing_ranges = _bounded_missing_ranges(expected, stored_dates, timeframe)
+        source_dates = tuple(
+            day.isoformat()
+            for day in expected
+            if self.store.is_verified(
+                verification_symbol,
+                timeframe,
+                day.isoformat(),
+                day.isoformat(),
+            )
+        )
+        missing_ranges = _bounded_missing_ranges(expected, source_dates, timeframe)
         fetched = 0
         for left, right in missing_ranges:
             series = self.market_data.candles_for_instrument(
@@ -226,6 +386,112 @@ class HistoricalDataService:
             )
             fetched += series.count
             self.store.upsert_series(series)
+            expected_chunk = tuple(day for day in expected if left <= day <= right)
+            response_dates = _series_trade_dates(series)
+            remaining_chunk = _missing_session_ranges(expected_chunk, response_dates)
+            if remaining_chunk:
+                compact = ",".join(
+                    left_day.isoformat()
+                    if left_day == right_day
+                    else f"{left_day.isoformat()}..{right_day.isoformat()}"
+                    for left_day, right_day in remaining_chunk[:10]
+                )
+                raise HistoricalDataIncompleteError(
+                    f"contract warmup provider response incomplete for "
+                    f"{instrument.secid} {timeframe}: {compact}"
+                )
+            self.store.mark_verified(
+                verification_symbol,
+                timeframe,
+                left.isoformat(),
+                right.isoformat(),
+            )
+        return fetched
+
+    def _sync_contract(
+        self,
+        symbol: str,
+        instrument: Instrument,
+        timeframe: str,
+        start: date,
+        finish: date,
+        *,
+        force_full_sessions: bool = False,
+        verification_symbol: str | None = None,
+        session_symbol: str | None = None,
+    ) -> ContractSyncResult:
+        calendar = MoexTradingCalendar(self.market_data.provider)
+        expected = calendar.dates(
+            engine=instrument.engine,
+            market=instrument.market,
+            board=instrument.board,
+            security=instrument.secid,
+            from_date=start,
+            till_date=finish,
+        )
+        if timeframe.upper() == "D1":
+            self.store.record_sessions(
+                session_symbol or symbol,
+                instrument.secid,
+                tuple(day.isoformat() for day in expected),
+            )
+        stored_dates = self.store.stored_trade_dates(
+            instrument.secid,
+            timeframe,
+            start.isoformat(),
+            finish.isoformat(),
+        )
+        if force_full_sessions:
+            if not verification_symbol:
+                raise ValueError("verification_symbol is required for full-session sync")
+            source_dates = tuple(
+                day.isoformat()
+                for day in expected
+                if self.store.is_verified(
+                    verification_symbol,
+                    timeframe,
+                    day.isoformat(),
+                    day.isoformat(),
+                )
+            )
+        else:
+            source_dates = stored_dates
+        missing_ranges = _bounded_missing_ranges(expected, source_dates, timeframe)
+        fetched = 0
+        for left, right in missing_ranges:
+            series = self.market_data.candles_for_instrument(
+                instrument,
+                timeframe=timeframe,
+                from_date=left.isoformat(),
+                till_date=right.isoformat(),
+                completed_only=True,
+            )
+            fetched += series.count
+            self.store.upsert_series(series)
+            if force_full_sessions:
+                assert verification_symbol is not None
+                expected_chunk = tuple(day for day in expected if left <= day <= right)
+                response_dates = _series_trade_dates(series)
+                remaining_chunk = _missing_session_ranges(
+                    expected_chunk, response_dates
+                )
+                if remaining_chunk:
+                    compact = ",".join(
+                        left_day.isoformat()
+                        if left_day == right_day
+                        else f"{left_day.isoformat()}..{right_day.isoformat()}"
+                        for left_day, right_day in remaining_chunk[:10]
+                    )
+                    raise HistoricalDataIncompleteError(
+                        f"full-session provider response incomplete for "
+                        f"{instrument.secid} {timeframe}: {compact}"
+                    )
+                self.store.mark_verified(
+                    verification_symbol,
+                    timeframe,
+                    left.isoformat(),
+                    right.isoformat(),
+                )
 
         stored_dates_after = self.store.stored_trade_dates(
             instrument.secid, timeframe, start.isoformat(), finish.isoformat()
@@ -233,7 +499,9 @@ class HistoricalDataService:
         remaining = _missing_session_ranges(expected, stored_dates_after)
         if remaining:
             compact = ",".join(
-                left.isoformat() if left == right else f"{left.isoformat()}..{right.isoformat()}"
+                left.isoformat()
+                if left == right
+                else f"{left.isoformat()}..{right.isoformat()}"
                 for left, right in remaining[:10]
             )
             raise HistoricalDataIncompleteError(
@@ -251,11 +519,41 @@ class HistoricalDataService:
             secid=instrument.secid,
             from_date=start.isoformat(),
             till_date=finish.isoformat(),
-            fetched_ranges=tuple((left.isoformat(), right.isoformat()) for left, right in missing_ranges),
+            fetched_ranges=tuple(
+                (left.isoformat(), right.isoformat()) for left, right in missing_ranges
+            ),
             fetched_candles=fetched,
             stored_candles=stored.count,
             coverage=coverage,
         )
+
+
+def _verification_symbol(symbol: str, timeframe: str, *, is_root: bool) -> str:
+    tf = timeframe.upper()
+    versions: list[str] = []
+    if is_root:
+        versions.append(ROLLING_HISTORY_VERIFICATION_VERSION)
+    if tf == "D1":
+        versions.append(D1_SESSION_VERIFICATION_VERSION)
+    elif tf == "H1":
+        versions.append(H1_FULL_VERIFICATION_VERSION)
+    elif tf == "M15":
+        versions.append(M15_FULL_VERIFICATION_VERSION)
+    if not versions:
+        return symbol
+    return f"{symbol}#" + "#".join(versions)
+
+
+def _series_trade_dates(series: CandleSeries) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            {
+                candle.begin[:10]
+                for candle in series.candles
+                if len(candle.begin) >= 10
+            }
+        )
+    )
 
 
 def _missing_session_ranges(
@@ -288,13 +586,13 @@ def _bounded_missing_ranges(
     timeframe: str,
 ) -> tuple[tuple[date, date], ...]:
     ranges = _missing_session_ranges(expected_sessions, stored_trade_dates)
-    if timeframe.upper() != "M15":
+    if timeframe.upper() not in FULL_SESSION_TIMEFRAMES:
         return ranges
     bounded: list[tuple[date, date]] = []
     for left, right in ranges:
         missing_days = [day for day in expected_sessions if left <= day <= right]
-        for index in range(0, len(missing_days), M15_MAX_SESSIONS_PER_FETCH):
-            chunk = missing_days[index : index + M15_MAX_SESSIONS_PER_FETCH]
+        for index in range(0, len(missing_days), INTRADAY_MAX_SESSIONS_PER_FETCH):
+            chunk = missing_days[index : index + INTRADAY_MAX_SESSIONS_PER_FETCH]
             if chunk:
                 bounded.append((chunk[0], chunk[-1]))
     return tuple(bounded)

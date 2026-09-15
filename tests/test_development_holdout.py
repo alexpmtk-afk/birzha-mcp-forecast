@@ -1,4 +1,4 @@
-from birzha.application.model_lab import ModelAcceptanceService
+from birzha.application.model_lab import ModelAcceptanceService, holdout_start_date
 from birzha.domain.validation import HorizonValidationMetrics, WalkForwardReport
 
 
@@ -33,28 +33,57 @@ class _Validator:
         return self.reports.pop(0)
 
 
+def test_holdout_start_is_strictly_after_split_day() -> None:
+    assert holdout_start_date("2025-01-01") == "2025-01-02"
+
+
 def test_holdout_requires_both_periods_to_pass() -> None:
     validator = _Validator([
         _report("2024-01-01", "2025-01-01"),
-        _report("2025-01-01", "2026-01-01"),
+        _report("2025-01-02", "2026-01-01"),
     ])
     result = ModelAcceptanceService(validator).assess_development_holdout(
         "SBER", development_start="2024-01-01", split_date="2025-01-01", holdout_end="2026-01-01"
     )
     assert result.status == "ACCEPTED"
     assert result.development.status == "ACCEPTED"
+    assert result.holdout is not None
     assert result.holdout.status == "ACCEPTED"
+    assert result.holdout_start == "2025-01-02"
+    assert validator.calls[0][1]["end_date"] == "2025-01-01"
+    assert validator.calls[1][1]["start_date"] == "2025-01-02"
     assert len(validator.calls) == 2
 
 
 def test_holdout_rejects_model_that_fails_later_period() -> None:
     validator = _Validator([
         _report("2024-01-01", "2025-01-01"),
-        _report("2025-01-01", "2026-01-01", hits=16, directional=30),
+        _report("2025-01-02", "2026-01-01", hits=16, directional=30),
     ])
     result = ModelAcceptanceService(validator).assess_development_holdout(
         "SBER", development_start="2024-01-01", split_date="2025-01-01", holdout_end="2026-01-01"
     )
     assert result.status == "REJECTED"
     assert result.development.status == "ACCEPTED"
+    assert result.holdout is not None
     assert result.holdout.status == "REJECTED"
+    assert validator.calls[1][1]["start_date"] == "2025-01-02"
+
+
+def test_rejected_development_keeps_holdout_unopened() -> None:
+    validator = _Validator([
+        _report("2024-01-01", "2025-01-01", hits=16, directional=30),
+    ])
+
+    result = ModelAcceptanceService(validator).assess_development_holdout(
+        "SBER",
+        development_start="2024-01-01",
+        split_date="2025-01-01",
+        holdout_end="2026-01-01",
+    )
+
+    assert result.status == "REJECTED"
+    assert result.development.status == "REJECTED"
+    assert result.holdout is None
+    assert result.to_dict()["holdout_evaluated"] is False
+    assert len(validator.calls) == 1

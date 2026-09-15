@@ -1,4 +1,4 @@
-"""Causal Market Snapshot builder from real MOEX candles and optional flow data."""
+"""Causal Market Snapshot builder from durable D1 plus on-demand intraday data."""
 
 from __future__ import annotations
 
@@ -22,6 +22,12 @@ from birzha.providers.moex_analytics import MoexAnalyticsClient
 
 
 DATA_QUALITY_CONTRACT_VERSION = "DATA_QUALITY_CONTRACT_V2"
+D1_ANALYSIS_LOOKBACK_DAYS = 300
+D1_ANCHOR_LOOKBACK_CANDLES = 60
+H1_ANCHOR_LOOKBACK_CANDLES = 160
+H1_MIN_CONTEXT_DAYS = 14
+M15_MIN_CONTEXT_DAYS = 5
+M15_MAX_LOOKBACK_DAYS = 10
 
 
 @dataclass(slots=True)
@@ -46,24 +52,74 @@ class MarketSnapshotService:
         )
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
+        """Build the snapshot in three causal stages.
+
+        1. Load completed D1 and identify the current structural leg.
+        2. Load H1 only after D1 selected the leg. If that anchor is very recent,
+           include a small pre-anchor warm-up window so feature calculations can
+           still satisfy the fixed quality contract without persisting H1.
+        3. Build M15 from M1 only for a bounded tactical window ending at T0,
+           likewise allowing a short feature warm-up before a recent H1 anchor.
+
+        The market-data implementation decides where D1 comes from. In MCP/YDB
+        runtime it is the durable D1 store; H1/M15 are always direct on-demand
+        provider reads and never durable-history writes.
+        """
         till = date.fromisoformat(as_of_date) if as_of_date else datetime.now(MOEX_TIMEZONE).date()
         instrument = self.market_data.resolve(symbol, as_of=till)
 
+        # Stage 1: durable completed daily structure first.
         d1 = self.market_data.candles_for_instrument(
             instrument,
             timeframe="D1",
-            from_date=(till - timedelta(days=260)).isoformat(),
+            from_date=(till - timedelta(days=D1_ANALYSIS_LOOKBACK_DAYS)).isoformat(),
             till_date=till.isoformat(),
             completed_only=True,
         )
+        if not d1.candles:
+            raise ValueError("no completed D1 candles available for snapshot")
+        d1_direction = _current_leg_direction(d1)
+        d1_anchor = _structural_anchor(
+            d1,
+            direction=d1_direction,
+            max_candles=D1_ANCHOR_LOOKBACK_CANDLES,
+        )
+
+        # Stage 2: H1 is contextual and requested only after D1 selected the leg.
+        # The analysis anchor stays unchanged; the earlier start is feature warm-up
+        # only and remains an on-demand provider read.
+        d1_anchor_date = date.fromisoformat(d1_anchor)
+        h1_context_floor = till - timedelta(days=H1_MIN_CONTEXT_DAYS)
+        h1_start = min(d1_anchor_date, h1_context_floor).isoformat()
         h1 = self.market_data.candles_for_instrument(
             instrument,
             timeframe="H1",
-            from_date=(till - timedelta(days=60)).isoformat(),
+            from_date=h1_start,
             till_date=till.isoformat(),
             completed_only=True,
         )
-        m15 = _load_m15(self.market_data, instrument, till)
+        h1_leg = _slice_from(h1, d1_anchor)
+        h1_anchor = _structural_anchor(
+            h1_leg,
+            direction=d1_direction,
+            max_candles=H1_ANCHOR_LOOKBACK_CANDLES,
+            fallback=d1_anchor,
+        )
+
+        # Stage 3: M15 is provider-side M1 aggregation for a short tactical
+        # window. Never request months/years of M1 merely to populate storage.
+        tactical_floor = till - timedelta(days=M15_MAX_LOOKBACK_DAYS)
+        m15_context_floor = till - timedelta(days=M15_MIN_CONTEXT_DAYS)
+        h1_anchor_date = date.fromisoformat(h1_anchor)
+        m15_context_start = min(h1_anchor_date, m15_context_floor)
+        m15_start = max(m15_context_start, tactical_floor).isoformat()
+        m15 = self.market_data.candles_for_instrument(
+            instrument,
+            timeframe="M15",
+            from_date=m15_start,
+            till_date=till.isoformat(),
+            completed_only=True,
+        )
 
         last_ends = [series.candles[-1].end for series in (d1, h1, m15) if series.candles]
         if not last_ends:
@@ -121,7 +177,10 @@ class MarketSnapshotService:
             flow_status=flow_status,
             reasons=tuple(warnings),
         )
-        volume_profile = profile_from_candles(h1, bins=24)
+        # Keep the profile tied to the D1-selected structural leg; the H1 rows
+        # before that anchor are warm-up context for feature calculations only.
+        h1_profile = _slice_from(h1, d1_anchor)
+        volume_profile = profile_from_candles(h1_profile, bins=24)
         if volume_profile is not None:
             warnings.append("VOLUME_PROFILE:approximate_candle_proxy")
         source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
@@ -141,24 +200,73 @@ class MarketSnapshotService:
         )
 
 
-def _load_m15(
-    market_data: MarketDataService,
-    instrument: Instrument,
-    till: date,
-) -> CandleSeries:
-    series: CandleSeries | None = None
-    for lookback_days in (7, 20):
-        series = market_data.candles_for_instrument(
-            instrument,
-            timeframe="M15",
-            from_date=(till - timedelta(days=lookback_days)).isoformat(),
-            till_date=till.isoformat(),
-            completed_only=True,
-        )
-        if series.count >= 50:
-            return series
-    assert series is not None
-    return series
+def _current_leg_direction(series: CandleSeries) -> str:
+    """Infer current D1 leg direction from completed closes only."""
+    closes = [float(c.close) for c in series.candles if c.close is not None]
+    if len(closes) < 2:
+        return "UP"
+    recent_span = min(10, len(closes) - 1)
+    reference = closes[-recent_span - 1]
+    if closes[-1] > reference:
+        return "UP"
+    if closes[-1] < reference:
+        return "DOWN"
+    return "UP" if closes[-1] >= sum(closes[-min(20, len(closes)):]) / min(20, len(closes)) else "DOWN"
+
+
+def _structural_anchor(
+    series: CandleSeries,
+    *,
+    direction: str,
+    max_candles: int,
+    fallback: str | None = None,
+) -> str:
+    """Select the most recent local extreme that can anchor the current leg.
+
+    For an upward leg we seek a recent local low; for a downward leg a recent
+    local high. If no local extreme exists, use the relevant extreme of the
+    bounded recent window. The result is a date string suitable for provider
+    window selection; it is not persisted as a new domain field.
+    """
+    usable = [c for c in series.candles if c.close is not None]
+    if not usable:
+        if fallback is not None:
+            return fallback[:10]
+        raise ValueError(f"no usable {series.timeframe} candles for structural anchor")
+    window = usable[-max_candles:]
+    if len(window) == 1:
+        return window[0].begin[:10]
+
+    want_low = direction.upper() != "DOWN"
+
+    def value(candle: Candle) -> float:
+        candidate = candle.low if want_low else candle.high
+        if candidate is None:
+            assert candle.close is not None
+            candidate = candle.close
+        return float(candidate)
+
+    # Prefer the most recent confirmed local extreme, but avoid choosing the
+    # final candle itself because that would not provide any intraday context.
+    local_indices: list[int] = []
+    for index in range(1, len(window) - 1):
+        current = value(window[index])
+        left = value(window[index - 1])
+        right = value(window[index + 1])
+        if want_low and current <= left and current <= right:
+            local_indices.append(index)
+        if not want_low and current >= left and current >= right:
+            local_indices.append(index)
+    if local_indices:
+        return window[local_indices[-1]].begin[:10]
+
+    fallback_window = window[-min(20, len(window)):]
+    selected = (
+        min(fallback_window, key=value)
+        if want_low
+        else max(fallback_window, key=value)
+    )
+    return selected.begin[:10]
 
 
 def _timestamp(value: str) -> datetime:
@@ -175,7 +283,26 @@ def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
         for candle in series.candles
         if candle.completed and _timestamp(candle.end) <= boundary
     )
-    return CandleSeries(instrument=series.instrument, timeframe=series.timeframe, candles=candles)
+    return CandleSeries(
+        instrument=series.instrument,
+        timeframe=series.timeframe,
+        candles=candles,
+        source=series.source,
+    )
+
+
+def _slice_from(series: CandleSeries, from_date: str) -> CandleSeries:
+    """Slice a fetched context series without causing another provider read."""
+    boundary = date.fromisoformat(from_date[:10])
+    candles = tuple(
+        candle for candle in series.candles if date.fromisoformat(candle.begin[:10]) >= boundary
+    )
+    return CandleSeries(
+        instrument=series.instrument,
+        timeframe=series.timeframe,
+        candles=candles,
+        source=series.source,
+    )
 
 
 def _state(series: CandleSeries) -> TimeframeState:

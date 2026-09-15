@@ -120,10 +120,14 @@ class UpstreamRequestGovernor(Generic[TaskT, ResultT]):
     def plan(self, total_logical_requests: int) -> RequestPlan:
         if total_logical_requests < 0:
             raise ValueError("total_logical_requests must be >= 0")
-        max_logical_per_window = max(
-            1,
-            self._policy.soft_requests_per_window // (self._policy.max_retries + 1),
-        )
+
+        # The pacing gate controls every *actual attempt*, including retries.
+        # Reserving max_retries+1 slots for every successful logical request here
+        # would throttle the normal no-retry path a second time. Instead, fill a
+        # nominal window with the allowed attempt count and cap the logical batch
+        # by the executor's worst-case segment budget. If retries occur, the same
+        # gate/backoff stretches the batch beyond the nominal window safely.
+        max_logical_per_window = max(1, self._policy.soft_requests_per_window)
         max_logical_per_batch = min(
             max_logical_per_window,
             self._policy.max_logical_requests_per_segment,
@@ -132,7 +136,15 @@ class UpstreamRequestGovernor(Generic[TaskT, ResultT]):
         for index, start in enumerate(range(0, total_logical_requests, max_logical_per_batch)):
             stop = min(total_logical_requests, start + max_logical_per_batch)
             size = stop - start
-            batches.append(RequestBatch(index, start, stop, size, size * (self._policy.max_retries + 1)))
+            batches.append(
+                RequestBatch(
+                    index,
+                    start,
+                    stop,
+                    size,
+                    size * (self._policy.max_retries + 1),
+                )
+            )
         return RequestPlan(
             total_logical_requests=total_logical_requests,
             target_utilization=self._policy.target_utilization,
