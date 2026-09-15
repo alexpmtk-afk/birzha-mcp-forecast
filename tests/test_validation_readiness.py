@@ -20,6 +20,12 @@ def test_required_price_ranges_include_only_durable_d1_causal_lookback() -> None
     )
 
 
+def test_required_price_ranges_never_cross_approved_2021_archive_floor() -> None:
+    assert required_price_ranges("2021-01-01", "2022-12-31") == (
+        ("D1", "2021-01-01", "2022-12-31"),
+    )
+
+
 def test_readiness_does_not_require_h1_or_m15_persistence() -> None:
     history = _History(missing={("GOLD", "H1"), ("GOLD", "M15")})
     report = ValidationDataReadinessService(history=history).check(  # type: ignore[arg-type]
@@ -35,6 +41,7 @@ def test_readiness_does_not_require_h1_or_m15_persistence() -> None:
         ("GOLD", "D1"),
     ]
     assert report.to_dict()["intraday_mode"] == "ON_DEMAND_NOT_PERSISTED"
+    assert report.to_dict()["archive_floor"] == "2021-01-01"
 
 
 def test_readiness_is_not_ready_if_d1_is_unverified() -> None:
