@@ -1,4 +1,4 @@
-# probe: 4
+# one-shot: guarded first real SBER forecast direct through production code + YDB
 name: M26.1 Runtime Evidence Readonly Once
 
 on:
@@ -12,20 +12,20 @@ permissions:
   id-token: write
 
 concurrency:
-  group: birzha-m26-1-runtime-evidence-readonly-once
+  group: birzha-first-real-sber-forecast-direct
   cancel-in-progress: false
 
 env:
   APP_SHA: 28996668fb35f05cacf08bceea276e58e697c6d5
-  PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
+  HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID: ajeadmjrbl2i9ku929cc
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
   EXPECTED_OIDC_SUBJECT: repo:alexpmtk-afk@309119594/birzha-mcp-forecast@1350648480:ref:refs/heads/main
   YDB_CONNECTION_STRING: grpcs://ydb.serverless.yandexcloud.net:2135/?database=/ru-central1/b1gi4pr9msenirafh2c7/etnes7omhgut11oulsd5
 
 jobs:
-  inspect:
+  first-real-forecast:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -35,9 +35,9 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install client
+      - name: Install exact production package
         run: python -m pip install --disable-pip-version-check -e .
-      - name: Mint read-only token
+      - name: Mint YDB editor token through existing project OIDC
         shell: bash
         run: |
           set -euo pipefail
@@ -46,63 +46,76 @@ jobs:
           R="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}${S}audience=${A}")"
           J="$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$R")"
           echo "::add-mask::$J"
-          X="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -X POST 'https://auth.yandex.cloud/oauth/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' --data-urlencode "audience=${PUBLISHER_SERVICE_ACCOUNT_ID}" --data-urlencode "subject_token=${J}" --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
+          python - "$J" <<'PY'
+          import base64,json,os,sys
+          p=sys.argv[1].split('.')[1]; p += '='*(-len(p)%4)
+          c=json.loads(base64.urlsafe_b64decode(p))
+          assert c.get('sub')==os.environ['EXPECTED_OIDC_SUBJECT']
+          assert c.get('aud')==os.environ['OIDC_AUDIENCE']
+          assert c.get('ref')=='refs/heads/main'
+          PY
+          X="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -X POST 'https://auth.yandex.cloud/oauth/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' --data-urlencode "audience=${HISTORICAL_PREPARER_SERVICE_ACCOUNT_ID}" --data-urlencode "subject_token=${J}" --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
           T="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$X")"
-          test -n "$T"; echo "::add-mask::$T"; printf '%s' "$T" > "$RUNNER_TEMP/ydb-token"
-      - name: Inspect real progress
+          test -n "$T"; echo "::add-mask::$T"; printf '%s' "$T" > "$RUNNER_TEMP/ydb-token"; chmod 600 "$RUNNER_TEMP/ydb-token"
+          echo 'FIRST_FORECAST_YDB_EDITOR_AUTH=PASS'
+      - name: Build real SBER snapshot and append only on PASS quality
         shell: bash
         run: |
+          set -euo pipefail
           python - <<'PY'
           import json, os
           from pathlib import Path
           import ydb
+          from birzha.application.market_data import MarketDataService
+          from birzha.application.flow import MarketFlowService
+          from birzha.application.snapshot import MarketSnapshotService
+          from birzha.application.forecast import build_forecast_from_snapshot
+          from birzha.application.upstream_control import ProcessUpstreamControlPlane
+          from birzha.providers.moex_analytics import MoexAnalyticsClient
+          from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
+          from birzha.storage.ydb_state import YdbForecastJournal
+
           token=(Path(os.environ['RUNNER_TEMP'])/'ydb-token').read_text()
           driver=ydb.Driver(connection_string=os.environ['YDB_CONNECTION_STRING'],credentials=ydb.AccessTokenCredentials(token))
           driver.wait(timeout=10, fail_fast=True)
           pool=ydb.QuerySessionPool(driver)
-          def rows(result):
-              out=[]
-              for rs in result or []:
-                  out.extend(getattr(rs,'rows',[]) or [])
-              return out
-          def val(row,key):
-              if isinstance(row,dict): return row.get(key)
-              try: return row[key]
-              except Exception: return getattr(row,key,None)
-          rr=rows(pool.execute_with_retries("""
-            SELECT workflow_id, stage, status, created_at, updated_at, last_error
-            FROM `orchestration_runs`
-            WHERE kind='D1_ARCHIVE_REFRESH_V1'
-            ORDER BY created_at DESC LIMIT 1;
-          """))
-          assert rr, 'no D1 archive workflow'
-          r=rr[0]; wid=str(val(r,'workflow_id'))
-          print('REAL_WORKFLOW='+json.dumps({k:str(val(r,k) or '') for k in ('workflow_id','stage','status','created_at','updated_at','last_error')},sort_keys=True))
-          safe_wid=wid.replace("'","''")
-          aa=rows(pool.execute_with_retries(f"""
-            SELECT sequence, kind, status, attempt, payload_json, evidence_json, last_error
-            FROM `orchestration_actions` WHERE workflow_id='{safe_wid}' ORDER BY sequence;
-          """))
-          counts={}
-          first_pending=None
-          passed_ranges=[]
-          for a in aa:
-              kind=str(val(a,'kind') or ''); status=str(val(a,'status') or '')
-              counts[(kind,status)]=counts.get((kind,status),0)+1
-              p=json.loads(str(val(a,'payload_json') or '{}'))
-              if status=='PASS' and kind=='HISTORY_SYNC_CHUNK':
-                  passed_ranges.append((str(p.get('symbol')),str(p.get('from_date')),str(p.get('till_date'))))
-              if first_pending is None and status in ('PENDING','RUNNING'):
-                  first_pending={'sequence':int(val(a,'sequence') or 0),'kind':kind,'status':status,'symbol':str(p.get('symbol') or ''),'from_date':str(p.get('from_date') or ''),'till_date':str(p.get('till_date') or ''),'attempt':int(val(a,'attempt') or 0),'last_error':str(val(a,'last_error') or '')}
-          print('REAL_ACTION_COUNTS='+json.dumps({f'{k[0]}:{k[1]}':v for k,v in counts.items()},sort_keys=True))
-          print('REAL_PASSED_CHUNKS='+json.dumps(passed_ranges,ensure_ascii=False))
-          print('REAL_NEXT='+json.dumps(first_pending or {},sort_keys=True,ensure_ascii=False))
-          for sym in ('SBER','Si','BR','GOLD','IMOEX','RTSI'):
-              q="""DECLARE $s AS Utf8; SELECT MIN(trade_date) AS first_date,MAX(trade_date) AS last_date,COUNT(*) AS cnt FROM `historical_candles_sessions` WHERE symbol=$s;"""
-              x=rows(pool.execute_with_retries(q,{'$s':(sym,ydb.PrimitiveType.Utf8)})); z=x[0] if x else None
-              print('REAL_COVERAGE='+json.dumps({'symbol':sym,'first_date':str(val(z,'first_date') or '') if z else '', 'last_date':str(val(z,'last_date') or '') if z else '', 'rows':int(val(z,'cnt') or 0) if z else 0},sort_keys=True))
-          pool.stop(); driver.stop(timeout=5)
-          print('M26_2_REAL_PROGRESS_READONLY=PASS')
+          try:
+              control=ProcessUpstreamControlPlane(
+                  gate_factory=lambda provider_key: YdbSlotPacingGate(pool,provider_key=provider_key),
+                  require_distributed_gate=True,
+              )
+              market=MarketDataService.default(control_plane=control)
+              flow=MarketFlowService(market_data=market,analytics=MoexAnalyticsClient(control_plane=control))
+              snapshots=MarketSnapshotService(market_data=market,flow=flow)
+              snapshot=snapshots.build('SBER')
+              sd=snapshot.to_dict()
+              summary={
+                  'symbol':sd.get('symbol'),'secid':sd.get('secid'),'as_of':sd.get('as_of'),
+                  'data_quality':sd.get('data_quality'),'warnings':sd.get('warnings') or [],
+                  'quality_contract':sd.get('quality_contract') or {},
+                  'd1':sd.get('d1'),'h1':sd.get('h1'),'m15':sd.get('m15'),
+                  'flow':sd.get('flow'),
+              }
+              print('FIRST_REAL_SNAPSHOT='+json.dumps(summary,ensure_ascii=False,sort_keys=True))
+              if sd.get('data_quality')!='PASS' or (sd.get('quality_contract') or {}).get('status')!='PASS':
+                  print('FIRST_REAL_FORECAST_CREATE=SKIPPED_DEGRADED_DATA')
+                  raise SystemExit(0)
+
+              record=build_forecast_from_snapshot(snapshot)
+              assert record.validation_status=='UNVALIDATED_BASELINE'
+              # Existing production table only; intentionally no DDL/schema operation in this one-shot path.
+              store=object.__new__(YdbForecastJournal)
+              store._pool=pool
+              store._table='forecast_records'
+              result=store.append(record)
+              assert result.status in {'APPENDED','DUPLICATE_IDENTICAL'}
+              got=store.get(record.forecast_id)
+              assert got is not None and got.to_dict()==record.to_dict()
+              print('FIRST_REAL_FORECAST='+json.dumps(record.to_dict(),ensure_ascii=False,sort_keys=True))
+              print('FIRST_REAL_FORECAST_JOURNAL='+json.dumps({'forecast_id':result.forecast_id,'payload_hash':result.payload_hash,'status':result.status},sort_keys=True))
+              print('FIRST_REAL_FORECAST_READBACK=PASS')
+          finally:
+              pool.stop(); driver.stop(timeout=5)
           PY
       - name: Cleanup
         if: always()
