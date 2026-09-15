@@ -2,8 +2,6 @@ name: M23 BR Backfill Resume
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '27 * * * *'
 
 permissions:
   contents: read
