@@ -105,7 +105,10 @@ class GoogleSheetsBridge:
     def _stable_key(action: str, *parts: object) -> str:
         material = "\x00".join(str(part) for part in parts)
         digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
-        return f"birzha:{action}:{digest}"
+        # v2 deliberately rotates the Apps Script idempotency cache namespace.
+        # Older cached mutation envelopes contain request_ids generated randomly
+        # by the v1 client and cannot be safely replay-correlated.
+        return f"birzha:v2:{action}:{digest}"
 
     @staticmethod
     def _rows_sha(rows: Sequence[Sequence[Any]]) -> str:
@@ -130,7 +133,19 @@ class GoogleSheetsBridge:
                 f"Bridge v1 mutation {action} requires idempotency_key",
                 code="IDEMPOTENCY_KEY_REQUIRED",
             )
-        request_id = str(uuid.uuid4())
+        if idempotency_key:
+            # A mutation replayed under the same semantic idempotency key must
+            # carry the same correlation id. The bridge may replay the original
+            # response envelope; deterministic correlation keeps the strict
+            # request_id equality check valid across process restarts.
+            request_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"{BRIDGE_PROJECT_ID}:{action}:{idempotency_key}",
+                )
+            )
+        else:
+            request_id = str(uuid.uuid4())
         body: dict[str, Any] = {
             "secret": self.config.bridge_secret,
             "project_id": BRIDGE_PROJECT_ID,

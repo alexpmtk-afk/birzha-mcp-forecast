@@ -92,7 +92,7 @@ def test_ensure_archive_uses_birzha_mapping_and_known_br_spreadsheet(monkeypatch
     assert si["spreadsheet_id"] == "si-sheet"
     assert seen[0][1]["path"] == "Si — Доллар-рубль"
     assert seen[0][1]["filename"] == "MOEX_HISTDATA_Si_MCP_CANONICAL"
-    assert seen[0][2] and seen[0][2].startswith("birzha:sheet_ensure:")
+    assert seen[0][2] and seen[0][2].startswith("birzha:v2:sheet_ensure:")
     assert br["spreadsheet_id"] == "1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ"
     assert seen[1][1] == {"spreadsheet_id": br["spreadsheet_id"]}
 
@@ -155,7 +155,7 @@ def test_replace_snapshot_orders_stage_chunks_verify_commit_inspect(monkeypatch)
     assert actions[5] == "sheet_inspect"
     assert actions[6] == "sheet_stage_begin"
     mutation_keys = [key for action, _, key in calls if action.startswith("sheet_") and action not in {"sheet_verify", "sheet_inspect"}]
-    assert all(key and key.startswith("birzha:") for key in mutation_keys)
+    assert all(key and key.startswith("birzha:v2:") for key in mutation_keys)
 
 
 def test_replace_snapshot_aborts_uncommitted_stage_on_failure(monkeypatch):
@@ -171,7 +171,7 @@ def test_replace_snapshot_aborts_uncommitted_stage_on_failure(monkeypatch):
         if action == "sheet_verify":
             raise GoogleSheetsBridgeError("verify failed", code="VERIFY_FAILED")
         if action == "sheet_abort":
-            assert idempotency_key and idempotency_key.startswith("birzha:sheet_abort:")
+            assert idempotency_key and idempotency_key.startswith("birzha:v2:sheet_abort:")
             return {"aborted": True}
         raise AssertionError(action)
 
@@ -182,3 +182,84 @@ def test_replace_snapshot_aborts_uncommitted_stage_on_failure(monkeypatch):
             sheets={"D1": [["key", "date"], ["a", "2026-09-14"]]},
         )
     assert actions == ["sheet_stage_begin", "sheet_write_chunk", "sheet_verify", "sheet_abort"]
+
+
+
+def test_mutation_replay_uses_deterministic_request_id_and_v2_namespace(monkeypatch):
+    b = bridge()
+    bodies: list[dict[str, Any]] = []
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            body = bodies[-1]
+            return {
+                "protocol_version": 1,
+                "project_id": BRIDGE_PROJECT_ID,
+                "request_id": body["request_id"],
+                "action": body["action"],
+                "ok": True,
+                "result": {"committed": True},
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json, headers):
+            bodies.append(dict(json))
+            return FakeResponse()
+
+    monkeypatch.setattr("birzha.storage.google_sheets_bridge.httpx.Client", FakeClient)
+    key = b._stable_key("sheet_commit", "sheet-1", "D1", "digest")
+    assert key.startswith("birzha:v2:sheet_commit:")
+    assert b._post("sheet_commit", {"spreadsheet_id": "sheet-1"}, idempotency_key=key)["committed"] is True
+    assert b._post("sheet_commit", {"spreadsheet_id": "sheet-1"}, idempotency_key=key)["committed"] is True
+    assert len(bodies) == 2
+    assert bodies[0]["request_id"] == bodies[1]["request_id"]
+    assert bodies[0]["idempotency_key"] == bodies[1]["idempotency_key"] == key
+
+
+def test_bridge_still_rejects_wrong_request_id(monkeypatch):
+    b = bridge()
+
+    class FakeResponse:
+        status_code = 200
+        is_success = True
+
+        def json(self):
+            return {
+                "protocol_version": 1,
+                "project_id": BRIDGE_PROJECT_ID,
+                "request_id": "definitely-not-the-request-id",
+                "action": "sheet_commit",
+                "ok": True,
+                "result": {"committed": True},
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, *, json, headers):
+            return FakeResponse()
+
+    monkeypatch.setattr("birzha.storage.google_sheets_bridge.httpx.Client", FakeClient)
+    key = b._stable_key("sheet_commit", "sheet-1", "D1", "digest")
+    with pytest.raises(GoogleSheetsBridgeError) as exc:
+        b._post("sheet_commit", {"spreadsheet_id": "sheet-1"}, idempotency_key=key)
+    assert exc.value.code == "REQUEST_ID_MISMATCH"
