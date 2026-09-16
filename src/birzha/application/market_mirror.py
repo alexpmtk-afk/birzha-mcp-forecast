@@ -68,15 +68,19 @@ def build_market_mirror_snapshot(
     including overlap/warmup contract candles. Google Sheets is therefore an
     auditable mirror of YDB, not a reduced active-contract projection.
     """
-    symbol = symbol.strip().upper()
+    source_symbol = symbol.strip()
+    symbol = source_symbol.upper()
     start = from_date[:10]
     finish = till_date[:10]
-    if not symbol:
+    if not source_symbol:
         raise ValueError("symbol is required")
     if not start or not finish or finish < start:
         raise ValueError("invalid mirror date range")
 
-    session_key = _session_symbol(symbol)
+    # Verification/session keys are durable YDB identities created by the
+    # historical loader. Preserve the caller's canonical root spelling here
+    # (notably "Si") while keeping the human-facing mirror symbol uppercase.
+    session_key = _session_symbol(source_symbol)
     if not source.is_session_range_verified(session_key, start, finish):
         raise RuntimeError(
             f"D1 session range is not verified for {symbol} {start}..{finish}"
