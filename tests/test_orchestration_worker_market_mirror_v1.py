@@ -9,6 +9,9 @@ from birzha.application.orchestration_worker import OrchestrationWorker
 
 
 class FakeStore:
+    def __init__(self):
+        self.session_dates = set()
+
     def is_verified(self, symbol, timeframe, left, right):
         del symbol, timeframe, left, right
         return True
@@ -23,12 +26,21 @@ class FakeStore:
     def mark_session_range_verified(self, symbol, left, right):
         del symbol, left, right
 
+    def record_sessions(self, symbol, secid, trade_dates):
+        del symbol, secid
+        self.session_dates.update(trade_dates)
+
+    def stored_sessions(self, symbol, left, right):
+        del symbol
+        return tuple(item for item in sorted(self.session_dates) if left <= item <= right)
+
 
 class FakeHistory:
     def __init__(self):
         self.store = FakeStore()
         self.market_data = object()
         self.calls = []
+        self.edge_calls = []
 
     def sync(self, symbol, *, timeframe, from_date, till_date):
         self.calls.append((symbol, timeframe, from_date, till_date))
@@ -41,6 +53,30 @@ class FakeHistory:
             stored_candles=3,
             reused_verified_range=False,
         )
+
+    def _segments(self, symbol, start, finish):
+        self.edge_calls.append((symbol, start.isoformat(), finish.isoformat()))
+        return ((SimpleNamespace(secid=f"{symbol}-EDGE"), start, finish),)
+
+    def _sync_contract(
+        self,
+        symbol,
+        instrument,
+        timeframe,
+        start,
+        finish,
+        *,
+        force_full_sessions=False,
+        verification_symbol=None,
+        session_symbol=None,
+    ):
+        del timeframe, start, force_full_sessions, verification_symbol
+        self.store.record_sessions(
+            session_symbol or symbol,
+            instrument.secid,
+            (finish.isoformat(),),
+        )
+        return SimpleNamespace(fetched_candles=0, stored_candles=1)
 
 
 class FakeMirror:
@@ -79,8 +115,10 @@ def test_d1_finalization_requires_configured_mirror_when_mandatory():
 
 def test_d1_finalization_waits_for_mirror_pass():
     mirror = FakeMirror()
-    result = worker(mirror=mirror, required=True)._finalize_history_range(payload("D1"))
+    instance = worker(mirror=mirror, required=True)
+    result = instance._finalize_history_range(payload("D1"))
     assert result["status"] == "PASS"
+    assert result["edge_revalidation"]["last_session"] == "2026-09-14"
     assert result["market_mirror"]["status"] == "MIRROR_SYNC_PASS"
     assert mirror.calls == [("BR", "2026-09-01", "2026-09-14")]
 
