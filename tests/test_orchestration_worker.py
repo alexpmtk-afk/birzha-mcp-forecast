@@ -207,9 +207,13 @@ def test_finalizer_freshly_revalidates_right_edge_before_full_marker() -> None:
 def test_finalizer_does_not_mark_full_range_when_fresh_edge_has_no_sessions() -> None:
     worker, history = _worker()
     verification_symbol = "SBER#D1_SESSION_V2_ACTIVITY"
-    chunks = [["2021-02-01", "2021-02-28"]]
-    history.store.mark_verified(verification_symbol, "D1", *chunks[0])
-    history.store.mark_session_range_verified(verification_symbol, *chunks[0])
+    chunks = [
+        ["2021-02-01", "2021-02-14"],
+        ["2021-02-15", "2021-02-28"],
+    ]
+    for left, right in chunks:
+        history.store.mark_verified(verification_symbol, "D1", left, right)
+        history.store.mark_session_range_verified(verification_symbol, left, right)
 
     def no_session_sync(*args, **kwargs):
         del args, kwargs
