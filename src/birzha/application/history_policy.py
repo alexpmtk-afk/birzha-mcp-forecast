@@ -15,9 +15,11 @@ PERSISTENT_PRICE_TIMEFRAMES = ("D1",)
 ON_DEMAND_PRICE_TIMEFRAMES = ("H1", "M15")
 D1_ARCHIVE_START = "2021-01-01"
 MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
-# Futures/evening trading may continue late. 23:55 MSK is a conservative
-# boundary after which the current calendar day can be treated as completed.
-D1_SAFE_COMPLETE_TIME = time(23, 55)
+# A completed exchange session is not the same thing as a safely published
+# historical ISS day.  Never certify the current Moscow calendar day.  The
+# previous day becomes eligible only after a conservative next-morning
+# publication buffer; before that, keep the archive upper bound one day older.
+D1_SAFE_PUBLICATION_TIME = time(10, 0)
 
 
 class IntradayPersistenceForbiddenError(ValueError):
@@ -50,18 +52,17 @@ def require_persistent_price_timeframes(
 
 
 def latest_safe_d1_calendar_date(now: datetime | None = None) -> str:
-    """Return a conservative upper calendar bound for completed MOEX D1 data.
+    """Return a fail-closed upper bound for published MOEX D1 history.
 
-    Before 23:55 MSK the current day may still be forming, so the previous
-    calendar day is used. After that boundary the current Moscow calendar day
-    is safe. Non-trading dates are harmless upper bounds: the MOEX session
-    calendar still determines the last actual trading session stored.
+    The active Moscow day is never considered archival history.  Yesterday is
+    exposed only after ``D1_SAFE_PUBLICATION_TIME`` on the following Moscow
+    morning; before that the bound remains two calendar days back.  Weekends
+    and exchange holidays are harmless calendar upper bounds because the MOEX
+    session calendar still determines the last actual session stored.
     """
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
         current = current.replace(tzinfo=UTC)
     local = current.astimezone(MOEX_TIMEZONE)
-    day = local.date()
-    if local.time().replace(tzinfo=None) < D1_SAFE_COMPLETE_TIME:
-        day -= timedelta(days=1)
-    return day.isoformat()
+    lag_days = 1 if local.time().replace(tzinfo=None) >= D1_SAFE_PUBLICATION_TIME else 2
+    return (local.date() - timedelta(days=lag_days)).isoformat()
