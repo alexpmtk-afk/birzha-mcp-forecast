@@ -8,6 +8,7 @@ Persistent market-price work is D1-only and requires Google Bridge-v1 parity.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 from birzha.application.historical_data import HistoricalDataService, _verification_symbol
 from birzha.application.history_policy import require_persistent_price_timeframe
@@ -24,6 +25,10 @@ from birzha.domain.orchestration import WorkflowAction, WorkflowStatus
 SAFE_UNATTENDED_KINDS = frozenset(
     {"D1_ARCHIVE_SYNC", "HISTORY_SYNC_CHUNK", "HISTORY_FINALIZE_RANGE", "READINESS_AUDIT"}
 )
+# Re-query a bounded right-edge window before a full D1 range is certified.
+# This repairs sessions that were absent from MOEX historical ISS during an
+# earlier attempt but became visible later, without replaying the full archive.
+D1_EDGE_REVALIDATION_DAYS = 7
 # The production Serverless Container is allowed up to six minutes for a full
 # Google mirror commit/read-back. Keep the durable lease longer than that so a
 # later timer tick can never reclaim the same action while the first call is
@@ -198,6 +203,70 @@ class OrchestrationWorker:
             "market_mirror": mirror_evidence,
         }
 
+    def _revalidate_d1_edge(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        from_date: str,
+        till_date: str,
+        session_symbol: str,
+    ) -> dict[str, object]:
+        """Refresh a bounded right edge without trusting historical markers.
+
+        Chunk verification markers can outlive an upstream publication delay.
+        Calling the service's low-level resolver/contract sync path deliberately
+        bypasses the store-first marker shortcut and asks MOEX which sessions are
+        visible *now*. Any newly visible session is then fetched before the full
+        range can be certified or mirrored.
+        """
+        finish = date.fromisoformat(till_date)
+        archive_start = date.fromisoformat(from_date)
+        edge_start = max(
+            archive_start,
+            finish - timedelta(days=D1_EDGE_REVALIDATION_DAYS - 1),
+        )
+        segments = self.history._segments(symbol, edge_start, finish)
+        if not segments:
+            raise RuntimeError(
+                f"D1 edge revalidation produced no segments for {symbol} "
+                f"{edge_start.isoformat()}..{till_date}"
+            )
+
+        fetched = 0
+        stored = 0
+        for instrument, left, right in segments:
+            result = self.history._sync_contract(
+                symbol,
+                instrument,
+                timeframe,
+                left,
+                right,
+                session_symbol=session_symbol,
+            )
+            fetched += result.fetched_candles
+            stored += result.stored_candles
+
+        sessions = self.history.store.stored_sessions(
+            session_symbol,
+            edge_start.isoformat(),
+            till_date,
+        )
+        if not sessions:
+            raise RuntimeError(
+                f"D1 edge revalidation found no verified sessions for {symbol} "
+                f"{edge_start.isoformat()}..{till_date}"
+            )
+        return {
+            "status": "PASS",
+            "from_date": edge_start.isoformat(),
+            "till_date": till_date,
+            "fresh_segments": len(segments),
+            "fetched_candles": fetched,
+            "stored_candles": stored,
+            "last_session": sessions[-1],
+        }
+
     def _finalize_history_range(self, payload: dict[str, object]) -> dict[str, object]:
         symbol = str(payload["symbol"])
         timeframe = require_persistent_price_timeframe(str(payload["timeframe"]))
@@ -215,6 +284,17 @@ class OrchestrationWorker:
             else symbol
         )
         session_symbol = verification_symbol if resolver_known else symbol
+
+        # Fresh right-edge proof must happen before aggregate verified markers
+        # or Google mirror commit. This heals stale negative knowledge created
+        # when MOEX historical ISS had not published the final session yet.
+        edge_evidence = self._revalidate_d1_edge(
+            symbol=symbol,
+            timeframe=timeframe,
+            from_date=from_date,
+            till_date=till_date,
+            session_symbol=session_symbol,
+        )
 
         checked = 0
         for item in chunks_raw:
@@ -264,6 +344,7 @@ class OrchestrationWorker:
             "till_date": till_date,
             "verified_chunks": checked,
             "verification_symbol": verification_symbol,
+            "edge_revalidation": edge_evidence,
         }
         if mirror_evidence is not None:
             result["market_mirror"] = mirror_evidence
