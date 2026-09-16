@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  APP_SHA: 1b7564bdeab31484efba61da270d519998c97cd2
+  APP_SHA: 24a2c04d0ff5433609d080ab6d24913bc441bad7
   REGISTRY_ID: crpk5qvf4p7kcqil2u3v
   PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
