@@ -1,4 +1,4 @@
-name: M26.6 Publish Worker Image Once
+name: M26.8 Publish Bridge Replay Worker Image
 
 on:
   push:
@@ -11,11 +11,11 @@ permissions:
   id-token: write
 
 concurrency:
-  group: birzha-m26-6-worker-image-once
+  group: birzha-m26-8-worker-image-once
   cancel-in-progress: false
 
 env:
-  APP_SHA: 7e96bbf51a8d76b7952ab76730fd8467aaca2677
+  APP_SHA: fc4d205adc806446a98ebda5d3b210771f84d489
   REGISTRY_ID: crpk5qvf4p7kcqil2u3v
   PUBLISHER_SERVICE_ACCOUNT_ID: ajessiopotr4eq1g2c2v
   OIDC_AUDIENCE: https://github.com/alexpmtk-afk
@@ -51,12 +51,13 @@ jobs:
           grep -Fq 'D1_FUTURES_ARCHIVE_CHUNK_DAYS = 92' src/birzha/application/orchestration_plan.py
           grep -Fq 'DEFAULT_WORKER_LEASE_SECONDS = 420' src/birzha/application/orchestration_worker.py
           grep -Fq 'BRIDGE_PROTOCOL_VERSION = 1' src/birzha/storage/google_sheets_bridge.py
-          TARGET_TAG="m26-6-futures-chunks-git-${APP_SHA}"
+          grep -Fq 'birzha:v2:' src/birzha/storage/google_sheets_bridge.py
+          TARGET_TAG="m26-8-bridge-replay-git-${APP_SHA}"
           TARGET_REPOSITORY="${REGISTRY_ID}/${IMAGE_NAME}"
           echo "TARGET_TAG=$TARGET_TAG" >> "$GITHUB_ENV"
           echo "TARGET_REPOSITORY=$TARGET_REPOSITORY" >> "$GITHUB_ENV"
           echo "TARGET_IMAGE=cr.yandex/${TARGET_REPOSITORY}:${TARGET_TAG}" >> "$GITHUB_ENV"
-          echo "LOCAL_IMAGE=birzha-m26-6-worker:source-${APP_SHA}" >> "$GITHUB_ENV"
+          echo "LOCAL_IMAGE=birzha-m26-8-worker:source-${APP_SHA}" >> "$GITHUB_ENV"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
@@ -68,6 +69,18 @@ jobs:
           python -m compileall -q src tests scripts
       - name: Build exact immutable image
         run: docker build --pull --label "org.opencontainers.image.revision=${APP_SHA}" -t "$LOCAL_IMAGE" .
+      - name: Local MCP acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name birzha-m26-8-publish-smoke -p 8080:8080 "$LOCAL_IMAGE"
+          trap 'docker stop birzha-m26-8-publish-smoke >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:8080/healthz >/dev/null
+          python scripts/docker_smoke.py
       - name: Exchange GitHub OIDC for Yandex token
         shell: bash
         run: |
@@ -84,10 +97,11 @@ jobs:
           assert c.get('sub')==os.environ['EXPECTED_OIDC_SUBJECT']
           assert c.get('aud')==os.environ['OIDC_AUDIENCE']
           assert c.get('ref')=='refs/heads/main'
+          print('M26_8_PUBLISH_OIDC=PASS')
           PY
           X="$(curl --proto '=https' --tlsv1.2 --fail --silent --show-error --retry 5 -X POST 'https://auth.yandex.cloud/oauth/token' -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:token-exchange' --data-urlencode 'requested_token_type=urn:ietf:params:oauth:token-type:access_token' --data-urlencode "audience=${PUBLISHER_SERVICE_ACCOUNT_ID}" --data-urlencode "subject_token=${J}" --data-urlencode 'subject_token_type=urn:ietf:params:oauth:token-type:id_token')"
           T="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<< "$X")"
-          test -n "$T"; echo "::add-mask::$T"; printf '%s' "$T" > "$RUNNER_TEMP/yandex-iam-token"
+          test -n "$T"; echo "::add-mask::$T"; umask 077; printf '%s' "$T" > "$RUNNER_TEMP/yandex-iam-token"
       - name: Assert immutable tag absent
         shell: bash
         run: |
@@ -125,14 +139,14 @@ jobs:
           assert len(m)==1
           digest=m[0].get('digest','')
           assert digest.startswith('sha256:') and len(digest)==71
-          e={'source_sha':os.environ['APP_SHA'],'tag':os.environ['TARGET_IMAGE'],'digest':digest,'immutable_url':f"cr.yandex/{os.environ['TARGET_REPOSITORY']}@{digest}"}
-          Path('artifacts/m26_6_worker_image.json').write_text(json.dumps(e,indent=2,sort_keys=True)+'\n')
-          print('M26_6_WORKER_IMAGE='+json.dumps(e,sort_keys=True))
+          e={'schema':'BIRZHA_M26_8_IMAGE_V1','source_sha':os.environ['APP_SHA'],'tag':os.environ['TARGET_IMAGE'],'digest':digest,'immutable_url':f"cr.yandex/{os.environ['TARGET_REPOSITORY']}@{digest}"}
+          Path('artifacts/m26_8_worker_image.json').write_text(json.dumps(e,indent=2,sort_keys=True)+'\n')
+          print('M26_8_WORKER_IMAGE='+json.dumps(e,sort_keys=True))
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: birzha-m26-6-worker-image
-          path: artifacts/m26_6_worker_image.json
+          name: birzha-m26-8-worker-image
+          path: artifacts/m26_8_worker_image.json
           if-no-files-found: error
           retention-days: 30
       - name: Cleanup
