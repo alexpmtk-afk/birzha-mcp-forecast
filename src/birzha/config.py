@@ -14,6 +14,7 @@ LOCAL_ALLOWED_HOSTS = (
 )
 DEFAULT_JOURNAL_PATH = "/tmp/birzha_forecast_journal.duckdb"
 DEFAULT_HISTORICAL_PATH = "/tmp/birzha_historical_data.duckdb"
+DEFAULT_ORCHESTRATION_PATH = ""
 
 
 def _csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -44,6 +45,7 @@ class Settings:
     state_backend: str = "duckdb"
     forecast_journal_path: str = DEFAULT_JOURNAL_PATH
     historical_store_path: str = DEFAULT_HISTORICAL_PATH
+    orchestration_path: str | None = None
     ydb_connection_string: str | None = None
     require_mcp_auth: bool = False
     mcp_bearer_token: str | None = None
@@ -105,6 +107,7 @@ class Settings:
             state_backend=backend,
             forecast_journal_path=os.getenv("BIRZHA_FORECAST_JOURNAL_PATH", DEFAULT_JOURNAL_PATH),
             historical_store_path=os.getenv("BIRZHA_HISTORICAL_STORE_PATH", DEFAULT_HISTORICAL_PATH),
+            orchestration_path=(os.getenv("BIRZHA_ORCHESTRATION_PATH") or "").strip() or None,
             ydb_connection_string=ydb_connection,
             require_mcp_auth=require_auth,
             mcp_bearer_token=bearer_token,
