@@ -43,6 +43,66 @@ def read_table(root: Path, name: str, expected_columns: int) -> list[list[str]]:
     return rows
 
 
+def _csv_value(value: object) -> object:
+    return r"\N" if value is None else value
+
+
+def build_candle_stage(root: Path, stage_path: Path) -> int:
+    source = root / "historical_candles" / "data_00.csv"
+    if not source.is_file():
+        return 0
+    count = 0
+    with source.open("r", encoding="utf-8", newline="") as src, stage_path.open(
+        "w", encoding="utf-8", newline=""
+    ) as dst:
+        reader = csv.reader(src)
+        writer = csv.writer(dst, lineterminator="\n")
+        for row_no, row in enumerate(reader, 1):
+            if len(row) != 6:
+                raise RuntimeError(
+                    f"historical_candles: row {row_no} has {len(row)} columns, expected 6"
+                )
+            secid = text(row[0])
+            timeframe = text(row[1])
+            begin = text(row[2])
+            end_time = text(row[3])
+            payload = json.loads(text(row[4]))
+            source_name = text(row[5])
+            instrument = payload.get("instrument") or {}
+            candle = payload.get("candle") or {}
+            writer.writerow(
+                [
+                    secid,
+                    str(instrument.get("symbol") or ""),
+                    _csv_value(instrument.get("root_symbol")),
+                    str(instrument.get("board") or ""),
+                    str(instrument.get("engine") or ""),
+                    str(instrument.get("market") or ""),
+                    str(instrument.get("asset_class") or "unknown"),
+                    timeframe,
+                    begin,
+                    end_time,
+                    _csv_value(candle.get("open")),
+                    _csv_value(candle.get("close")),
+                    _csv_value(candle.get("high")),
+                    _csv_value(candle.get("low")),
+                    _csv_value(candle.get("value")),
+                    _csv_value(candle.get("volume")),
+                    "true" if bool(candle.get("completed")) else "false",
+                    source_name,
+                ]
+            )
+            count += 1
+            if count % 25000 == 0:
+                print(f"CANDLE_STAGE_ROWS={count}", flush=True)
+    print(f"CANDLE_STAGE_ROWS={count}", flush=True)
+    return count
+
+
+def _duckdb_path(path: Path) -> str:
+    return str(path.resolve()).replace("\\", "/").replace("'", "''")
+
+
 def safe_extract(archive: Path, destination: Path) -> Path:
     with tarfile.open(archive, "r:gz") as tf:
         base = destination.resolve()
@@ -165,58 +225,29 @@ def migrate_state(root: Path, state_db: Path) -> dict[str, int]:
 
 
 def migrate_history(root: Path, history_db: Path) -> dict[str, int]:
-    candles = read_table(root, "historical_candles", 6)
     verified = read_table(root, "historical_candles_verified_ranges", 4)
     sessions = read_table(root, "historical_candles_sessions", 3)
     session_verified = read_table(root, "historical_candles_session_verified_ranges", 3)
     flow = read_table(root, "historical_flow_rows", 6)
     flow_verified = read_table(root, "historical_flow_rows_verified", 4)
 
-    candle_rows: list[list[object]] = []
-    for row in candles:
-        secid = text(row[0])
-        timeframe = text(row[1])
-        begin = text(row[2])
-        end_time = text(row[3])
-        payload = json.loads(text(row[4]))
-        source = text(row[5])
-        instrument = payload.get("instrument") or {}
-        candle = payload.get("candle") or {}
-        candle_rows.append(
-            [
-                secid,
-                str(instrument.get("symbol") or ""),
-                instrument.get("root_symbol"),
-                str(instrument.get("board") or ""),
-                str(instrument.get("engine") or ""),
-                str(instrument.get("market") or ""),
-                str(instrument.get("asset_class") or "unknown"),
-                timeframe,
-                begin,
-                end_time,
-                candle.get("open"),
-                candle.get("close"),
-                candle.get("high"),
-                candle.get("low"),
-                candle.get("value"),
-                candle.get("volume"),
-                bool(candle.get("completed")),
-                source,
-            ]
-        )
+    candle_stage = history_db.parent / (history_db.name + ".candles.csv")
+    candle_count = build_candle_stage(root, candle_stage)
 
     con = duckdb.connect(str(history_db))
     try:
         con.execute("BEGIN TRANSACTION")
-        con.executemany(
-            """
-            INSERT OR REPLACE INTO historical_candles
-            (secid,symbol,root_symbol,board,engine,market,asset_class,timeframe,
-             begin,end_time,open,close,high,low,value,volume,completed,source)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            candle_rows,
-        )
+        if candle_count:
+            stage = _duckdb_path(candle_stage)
+            con.execute(
+                f"""
+                COPY historical_candles
+                (secid,symbol,root_symbol,board,engine,market,asset_class,timeframe,
+                 begin,end_time,open,close,high,low,value,volume,completed,source)
+                FROM '{stage}'
+                (FORMAT CSV, HEADER FALSE, NULL '\\N')
+                """
+            )
         con.executemany(
             "INSERT OR IGNORE INTO historical_verified_ranges VALUES (?,?,?,?)",
             [[text(v) for v in row] for row in verified],
@@ -244,7 +275,7 @@ def migrate_history(root: Path, history_db: Path) -> dict[str, int]:
         con.execute("COMMIT")
 
         expected = {
-            "historical_candles": len(candles),
+            "historical_candles": candle_count,
             "historical_verified_ranges": len(verified),
             "historical_sessions": len(sessions),
             "historical_session_verified_ranges": len(session_verified),
@@ -264,6 +295,8 @@ def migrate_history(root: Path, history_db: Path) -> dict[str, int]:
         raise
     finally:
         con.close()
+        candle_stage.unlink(missing_ok=True)
+
 
 
 def main() -> int:
@@ -285,10 +318,16 @@ def main() -> int:
 
     temp = Path(tempfile.mkdtemp(prefix="birzha-ydb-migrate-"))
     try:
+        print("PHASE=extract", flush=True)
         root = safe_extract(args.dump, temp)
+        print("PHASE=init_databases", flush=True)
         init_databases(args.state_db, args.history_db)
+        print("PHASE=migrate_state", flush=True)
         state = migrate_state(root, args.state_db)
+        print("STATE_MIGRATION_COUNTS=" + json.dumps(state, sort_keys=True), flush=True)
+        print("PHASE=migrate_history", flush=True)
         history = migrate_history(root, args.history_db)
+        print("HISTORY_MIGRATION_COUNTS=" + json.dumps(history, sort_keys=True), flush=True)
         print("BIRZHA_YDB_TO_DUCKDB=PASS")
         print("STATE_COUNTS=" + json.dumps(state, sort_keys=True))
         print("HISTORY_COUNTS=" + json.dumps(history, sort_keys=True))
