@@ -7,7 +7,7 @@ on:
       - ".github/workflows/temp-old-yandex-inventory-20260918.yml"
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -15,6 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+
       - name: Read-only inventory through Yandex OIDC
         shell: bash
         env:
@@ -23,7 +29,14 @@ jobs:
           TARGET_FOLDER_ID: b1g0224nfivl9224dm96
         run: |
           python - <<'PY'
-          import json, os, sys, urllib.parse, urllib.request, urllib.error
+          import json, os, urllib.parse, urllib.request, urllib.error
+          from pathlib import Path
+
+          report=[]
+
+          def emit(line):
+              print(line)
+              report.append(line)
 
           oidc_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
           oidc_req_token = os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
@@ -36,7 +49,7 @@ jobs:
           req = urllib.request.Request(url, headers={"Authorization": "Bearer " + oidc_req_token})
           with urllib.request.urlopen(req, timeout=30) as r:
               oidc_jwt = json.loads(r.read().decode())["value"]
-          print("GITHUB_OIDC=PASS")
+          emit("GITHUB_OIDC=PASS")
 
           body = urllib.parse.urlencode({
               "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
@@ -53,20 +66,20 @@ jobs:
           )
           with urllib.request.urlopen(req, timeout=30) as r:
               iam_token = json.loads(r.read().decode())["access_token"]
-          print("YANDEX_OIDC_TOKEN_EXCHANGE=PASS")
+          emit("YANDEX_OIDC_TOKEN_EXCHANGE=PASS")
 
           def get_json(label, url):
               req = urllib.request.Request(url, headers={"Authorization": "Bearer " + iam_token})
               try:
                   with urllib.request.urlopen(req, timeout=35) as r:
                       data = json.loads(r.read().decode())
-                      print(f"{label}_HTTP=200")
+                      emit(f"{label}_HTTP=200")
                       return data
               except urllib.error.HTTPError as e:
-                  print(f"{label}_HTTP={e.code}")
+                  emit(f"{label}_HTTP={e.code}")
                   return None
               except Exception as e:
-                  print(f"{label}_ERROR={type(e).__name__}")
+                  emit(f"{label}_ERROR={type(e).__name__}")
                   return None
 
           folder = get_json(
@@ -74,9 +87,9 @@ jobs:
               f"https://resource-manager.api.cloud.yandex.net/resource-manager/v1/folders/{folder_id}",
           )
           if folder:
-              print(f"FOLDER_ID={folder.get('id','')}")
-              print(f"FOLDER_NAME={folder.get('name','')}")
-              print(f"FOLDER_STATUS={folder.get('status','')}")
+              emit(f"FOLDER_ID={folder.get('id','')}")
+              emit(f"FOLDER_NAME={folder.get('name','')}")
+              emit(f"FOLDER_STATUS={folder.get('status','')}")
 
           endpoints = [
               ("LOCKBOX", "https://lockbox.api.cloud.yandex.net/lockbox/v1/secrets", "secrets"),
@@ -99,9 +112,9 @@ jobs:
               if data is None:
                   continue
               items = data.get(key) or []
-              print(f"{label}_COUNT={len(items)}")
+              emit(f"{label}_COUNT={len(items)}")
               for x in items:
-                  print(
+                  emit(
                       f"{label}_ITEM "
                       f"id={x.get('id','')} "
                       f"name={x.get('name','')} "
@@ -111,5 +124,19 @@ jobs:
                       f"versioning={x.get('versioning','')}"
                   )
 
-          print("OLD_FOLDER_INVENTORY_DONE=YES")
+          emit("OLD_FOLDER_INVENTORY_DONE=YES")
+          p=Path("migration-status")
+          p.mkdir(exist_ok=True)
+          (p/"old-yandex-inventory-20260918.txt").write_text("\n".join(report)+"\n", encoding="utf-8")
           PY
+
+      - name: Commit sanitized inventory report
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "yandex-inventory-bot"
+          git config user.email "yandex-inventory-bot@users.noreply.github.com"
+          git add migration-status/old-yandex-inventory-20260918.txt
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: record sanitized old Yandex inventory"
+          git push origin HEAD:main
