@@ -8,7 +8,7 @@ def _clear(monkeypatch):
         "HOST", "PORT", "MCP_ALLOWED_HOSTS", "MCP_ALLOWED_ORIGINS",
         "BIRZHA_STATE_BACKEND", "YDB_CONNECTION_STRING", "BIRZHA_FORECAST_JOURNAL_PATH",
         "BIRZHA_REQUIRE_MCP_AUTH", "BIRZHA_MCP_BEARER_TOKEN", "BIRZHA_SOURCE_SHA",
-        "BIRZHA_SOURCE_COMMIT",
+        "BIRZHA_SOURCE_COMMIT", "BIRZHA_DURABLE_LOCAL_ORCHESTRATION",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -25,6 +25,7 @@ def test_default_settings(monkeypatch):
     assert settings.require_mcp_auth is False
     assert settings.mcp_bearer_token is None
     assert settings.source_sha is None
+    assert settings.durable_local_orchestration is False
 
 
 def test_runtime_port(monkeypatch):
@@ -108,3 +109,9 @@ def test_source_sha_takes_precedence_over_commit_alias(monkeypatch):
     monkeypatch.setenv("BIRZHA_SOURCE_SHA", "a" * 40)
     monkeypatch.setenv("BIRZHA_SOURCE_COMMIT", "b" * 40)
     assert Settings.from_env().source_sha == "a" * 40
+
+
+def test_durable_local_orchestration_flag(monkeypatch):
+    _clear(monkeypatch)
+    monkeypatch.setenv("BIRZHA_DURABLE_LOCAL_ORCHESTRATION", "true")
+    assert Settings.from_env().durable_local_orchestration is True
