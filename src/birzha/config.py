@@ -52,6 +52,7 @@ class Settings:
     market_mirror_bridge_url: str | None = None
     market_mirror_bridge_secret: str | None = None
     market_mirror_root_folder_id: str | None = None
+    durable_local_orchestration: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -83,6 +84,8 @@ class Settings:
                 "BIRZHA_SOURCE_SHA/BIRZHA_SOURCE_COMMIT must be a full 40-character Git commit SHA"
             )
 
+        durable_local_orchestration = _bool_env("BIRZHA_DURABLE_LOCAL_ORCHESTRATION", False)
+
         mirror_required = _bool_env("BIRZHA_MARKET_MIRROR_REQUIRED", False)
         mirror_url = (os.getenv("BIRZHA_MARKET_MIRROR_BRIDGE_URL") or "").strip() or None
         mirror_secret = (os.getenv("BIRZHA_MARKET_MIRROR_BRIDGE_SECRET") or "").strip() or None
@@ -113,4 +116,5 @@ class Settings:
             market_mirror_bridge_url=mirror_url,
             market_mirror_bridge_secret=mirror_secret,
             market_mirror_root_folder_id=mirror_root,
+            durable_local_orchestration=durable_local_orchestration,
         )
