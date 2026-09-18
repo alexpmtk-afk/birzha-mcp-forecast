@@ -99,6 +99,27 @@ def build_candle_stage(root: Path, stage_path: Path) -> int:
     return count
 
 
+def build_session_stage(root: Path, stage_path: Path) -> int:
+    source = root / "historical_candles_sessions" / "data_00.csv"
+    if not source.is_file():
+        return 0
+    count = 0
+    with source.open("r", encoding="utf-8", newline="") as src, stage_path.open(
+        "w", encoding="utf-8", newline=""
+    ) as dst:
+        reader = csv.reader(src)
+        writer = csv.writer(dst, lineterminator="\n")
+        for row_no, row in enumerate(reader, 1):
+            if len(row) != 3:
+                raise RuntimeError(
+                    f"historical_candles_sessions: row {row_no} has {len(row)} columns, expected 3"
+                )
+            writer.writerow([text(row[0]), text(row[1]), text(row[2])])
+            count += 1
+    print(f"SESSION_STAGE_ROWS={count}", flush=True)
+    return count
+
+
 def build_rate_slot_stage(root: Path, stage_path: Path) -> int:
     source = root / "upstream_rate_slots" / "data_00.csv"
     if not source.is_file():
@@ -255,7 +276,8 @@ def migrate_state(root: Path, state_db: Path) -> dict[str, int]:
 
 def migrate_history(root: Path, history_db: Path) -> dict[str, int]:
     verified = read_table(root, "historical_candles_verified_ranges", 4)
-    sessions = read_table(root, "historical_candles_sessions", 3)
+    session_stage = history_db.parent / (history_db.name + ".sessions.csv")
+    session_count = build_session_stage(root, session_stage)
     session_verified = read_table(root, "historical_candles_session_verified_ranges", 3)
     flow = read_table(root, "historical_flow_rows", 6)
     flow_verified = read_table(root, "historical_flow_rows_verified", 4)
@@ -281,32 +303,40 @@ def migrate_history(root: Path, history_db: Path) -> dict[str, int]:
             "INSERT OR IGNORE INTO historical_verified_ranges VALUES (?,?,?,?)",
             [[text(v) for v in row] for row in verified],
         )
-        con.executemany(
-            "INSERT OR IGNORE INTO historical_sessions VALUES (?,?,?)",
-            [[text(v) for v in row] for row in sessions],
-        )
+        if session_count:
+            stage = _duckdb_path(session_stage)
+            con.execute(
+                f"""
+                COPY historical_sessions
+                (symbol, secid, trade_date)
+                FROM '{stage}'
+                (FORMAT CSV, HEADER FALSE)
+                """
+            )
         con.executemany(
             "INSERT OR IGNORE INTO historical_session_verified_ranges VALUES (?,?,?)",
             [[text(v) for v in row] for row in session_verified],
         )
-        con.executemany(
-            """
-            INSERT OR REPLACE INTO historical_flow_rows
-            (dataset,key_symbol,row_key,trade_date,payload_json,source)
-            VALUES (?,?,?,?,?,?)
-            """,
-            [[text(v) for v in row] for row in flow],
-        )
-        con.executemany(
-            "INSERT OR IGNORE INTO historical_flow_verified VALUES (?,?,?,?)",
-            [[text(v) for v in row] for row in flow_verified],
-        )
+        if flow:
+            con.executemany(
+                """
+                INSERT OR REPLACE INTO historical_flow_rows
+                (dataset,key_symbol,row_key,trade_date,payload_json,source)
+                VALUES (?,?,?,?,?,?)
+                """,
+                [[text(v) for v in row] for row in flow],
+            )
+        if flow_verified:
+            con.executemany(
+                "INSERT OR IGNORE INTO historical_flow_verified VALUES (?,?,?,?)",
+                [[text(v) for v in row] for row in flow_verified],
+            )
         con.execute("COMMIT")
 
         expected = {
             "historical_candles": candle_count,
             "historical_verified_ranges": len(verified),
-            "historical_sessions": len(sessions),
+            "historical_sessions": session_count,
             "historical_session_verified_ranges": len(session_verified),
             "historical_flow_rows": len(flow),
             "historical_flow_verified": len(flow_verified),
