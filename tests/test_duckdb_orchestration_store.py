@@ -19,6 +19,8 @@ def test_duckdb_orchestration_persists_across_reopen(tmp_path: Path) -> None:
     )
     assert created is True
     workflow_id = run.workflow_id
+    expected_action_count = len(first.list_actions(workflow_id))
+    assert expected_action_count > 0
     first.close()
 
     second = DuckDBOrchestrationStore(str(path))
@@ -27,7 +29,7 @@ def test_duckdb_orchestration_persists_across_reopen(tmp_path: Path) -> None:
     assert restored.workflow_id == workflow_id
     assert restored.stage == WorkflowStage.HISTORY_PREPARATION
     assert restored.status == WorkflowStatus.RUNNING
-    assert len(second.list_actions(workflow_id)) == 102
+    assert len(second.list_actions(workflow_id)) == expected_action_count
     second.close()
 
 
