@@ -99,6 +99,27 @@ def build_candle_stage(root: Path, stage_path: Path) -> int:
     return count
 
 
+def build_rate_slot_stage(root: Path, stage_path: Path) -> int:
+    source = root / "upstream_rate_slots" / "data_00.csv"
+    if not source.is_file():
+        return 0
+    count = 0
+    with source.open("r", encoding="utf-8", newline="") as src, stage_path.open(
+        "w", encoding="utf-8", newline=""
+    ) as dst:
+        reader = csv.reader(src)
+        writer = csv.writer(dst, lineterminator="\n")
+        for row_no, row in enumerate(reader, 1):
+            if len(row) != 2:
+                raise RuntimeError(
+                    f"upstream_rate_slots: row {row_no} has {len(row)} columns, expected 2"
+                )
+            writer.writerow([text(row[0]), int(row[1])])
+            count += 1
+    print(f"RATE_SLOT_STAGE_ROWS={count}", flush=True)
+    return count
+
+
 def _duckdb_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace("'", "''")
 
@@ -139,7 +160,8 @@ def migrate_state(root: Path, state_db: Path) -> dict[str, int]:
     outcomes = read_table(root, "outcome_records", 5)
     runs = read_table(root, "orchestration_runs", 8)
     actions = read_table(root, "orchestration_actions", 13)
-    slots = read_table(root, "upstream_rate_slots", 2)
+    slot_stage = state_db.parent / (state_db.name + ".rate_slots.csv")
+    slot_count = build_rate_slot_stage(root, slot_stage)
 
     con = duckdb.connect(str(state_db))
     try:
@@ -196,10 +218,16 @@ def migrate_state(root: Path, state_db: Path) -> dict[str, int]:
             )
             """
         )
-        con.executemany(
-            "INSERT OR IGNORE INTO migration_upstream_rate_slots VALUES (?,?)",
-            [[text(r[0]), int(r[1])] for r in slots],
-        )
+        if slot_count:
+            stage = _duckdb_path(slot_stage)
+            con.execute(
+                f"""
+                COPY migration_upstream_rate_slots
+                (provider_key, slot)
+                FROM '{stage}'
+                (FORMAT CSV, HEADER FALSE)
+                """
+            )
         con.execute("COMMIT")
 
         expected = {
@@ -207,7 +235,7 @@ def migrate_state(root: Path, state_db: Path) -> dict[str, int]:
             "outcome_records": len(outcomes),
             "orchestration_runs": len(runs),
             "orchestration_actions": len(actions),
-            "migration_upstream_rate_slots": len(slots),
+            "migration_upstream_rate_slots": slot_count,
         }
         for table, count in expected.items():
             actual = int(con.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
@@ -222,6 +250,7 @@ def migrate_state(root: Path, state_db: Path) -> dict[str, int]:
         raise
     finally:
         con.close()
+        slot_stage.unlink(missing_ok=True)
 
 
 def migrate_history(root: Path, history_db: Path) -> dict[str, int]:
