@@ -340,6 +340,22 @@ def _flow_rows(service: MarketDataService, start: date, finish: date):
             current, from_date=start.isoformat(), till_date=finish.isoformat()
         )
         futoi_error = None
+        error_message = " ".join(
+            str(row.get("ERROR_MESSAGE") or "")
+            for row in futoi_rows
+            if isinstance(row, dict)
+        )
+        if "last 14 days" in error_message.lower():
+            public_till = finish - timedelta(days=14)
+            futoi_rows = analytics.fetch_futoi(
+                current,
+                from_date=start.isoformat(),
+                till_date=public_till.isoformat(),
+            )
+            futoi_error = (
+                "PUBLIC_DELAY_14D:"
+                f"current public FUTOI unavailable after {public_till.isoformat()}"
+            )
     except Exception as exc:
         futoi_rows = []
         futoi_error = f"{type(exc).__name__}:{str(exc)[:500]}"
