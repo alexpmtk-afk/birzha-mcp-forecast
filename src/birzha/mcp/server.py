@@ -20,6 +20,7 @@ from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.outcome import OutcomeService
+from birzha.application.semantic_policy import build_semantic_plan
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.application.validation import WalkForwardValidator
@@ -88,6 +89,14 @@ _calibration = ModelCalibrationService(validator=_validator)
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
 def system_version() -> dict[str, str]:
     return {"service": SERVICE_NAME, "version": VERSION, "architecture": ARCHITECTURE_VERSION}
+
+
+@mcp.tool(
+    name="semantic.plan",
+    description="Translate a natural-language market request into canonical BIRZHA data, timeframe, indicator and flow requirements without making the caller choose low-level MCP tools.",
+)
+def semantic_plan(question: str, as_of_date: str | None = None) -> dict[str, object]:
+    return build_semantic_plan(question, as_of_date=as_of_date).to_dict()
 
 
 @mcp.tool(name="market.resolve_instrument", description="Resolve a directly listed MOEX instrument such as SBER or the current liquid futures contract for a root such as Si.")
