@@ -14,6 +14,7 @@ from birzha.providers.moex_analytics import MoexAnalyticsClient
 
 
 SYMBOL = "BR"
+# One-instrument BR refresh marker: 2026-09-27
 TIMEFRAME_WINDOWS = {"D1": 45, "H1": 90, "M15": 30}
 WARMUP_DAYS = {"D1": 120, "H1": 90, "M15": 30}
 
