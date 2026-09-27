@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -220,18 +221,39 @@ class MoexAnalyticsClient:
             raise MoexAnalyticsError("FUTOI is only applicable to futures instruments")
         security_code = _futoi_security_code(instrument)
         path = f"/analyticalproducts/futoi/securities/{security_code}.json"
-        return self._paged_rows(
-            base=ISS_BASE,
-            path=path,
-            params={
-                "iss.meta": "off",
-                "from": from_date,
-                "till": till_date,
-                "limit": 1000,
-            },
-            table="futoi",
-            authenticated_policy=False,
-        )
+        start_day = date.fromisoformat(from_date)
+        end_day = date.fromisoformat(till_date)
+        if start_day > end_day:
+            raise ValueError("from_date must not be after till_date")
+
+        # FUTOI is a special ISS endpoint: it has no start/cursor pagination.
+        # MOEX documents a hard maximum of 1000 rows and requires advancing
+        # the `from` date instead. Query one exchange date at a time so a full
+        # multi-day block can never silently cut the last date in half.
+        rows: list[dict[str, Any]] = []
+        current_day = start_day
+        while current_day <= end_day:
+            day = current_day.isoformat()
+            payload = self._request(
+                base=ISS_BASE,
+                path=path,
+                params={
+                    "iss.meta": "off",
+                    "from": day,
+                    "till": day,
+                    "limit": 1000,
+                },
+                authenticated_policy=False,
+            ).json()
+            page = self._table(payload, "futoi")
+            if len(page) >= 1000:
+                raise MoexAnalyticsError(
+                    "FUTOI single-day response reached the 1000-row ISS limit "
+                    f"for {day}; completeness cannot be proven"
+                )
+            rows.extend(page)
+            current_day += timedelta(days=1)
+        return rows
 
 
 def _futoi_security_code(instrument: Instrument) -> str:
