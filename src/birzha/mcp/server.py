@@ -18,6 +18,7 @@ from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
+from birzha.application.market_analysis import MarketAnalysisService
 from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.outcome import OutcomeService
 from birzha.application.snapshot import MarketSnapshotService
@@ -73,6 +74,7 @@ _flow = MarketFlowService(market_data=_market, analytics=_analytics, historical=
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
+_analysis = MarketAnalysisService(history=_history, journal=_journal)
 _outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
 _validator = WalkForwardValidator(
     market_data=_market,
@@ -211,6 +213,11 @@ def forecast_get(forecast_id: str) -> dict[str, object]:
 @mcp.tool(name="forecast.list", description="List recent immutable Forecast Records, optionally filtered by symbol.")
 def forecast_list(limit: int = 20, symbol: str | None = None) -> dict[str, object]:
     return _journal.list_recent(limit=limit, symbol=symbol)
+
+
+@mcp.tool(name="analysis.run_core", description="When the user asks to analyze the market, verify and refresh recent completed daily history, then create and save a preliminary forecast for each of the six configured instruments. Return a plain Russian summary and per-instrument errors. This does not certify the full archive or model accuracy.")
+def analysis_run_core() -> dict[str, object]:
+    return _analysis.run()
 
 
 @mcp.tool(name="outcome.evaluate", description="Evaluate a stored forecast against future completed MOEX trading sessions and append newly matured 5/10/20-session outcomes without modifying the forecast.")
