@@ -122,7 +122,7 @@ class MarketFlowService:
         if not trade_rows:
             warnings.append(
                 "ALGOPACK_TRADESTATS_EMPTY"
-                if self.analytics.authenticated
+                if bool(getattr(self.analytics, "authenticated", True))
                 else "PUBLIC_TRADESTATS_CAPTURE_EMPTY"
             )
         if not futoi_rows:
