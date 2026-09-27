@@ -1,0 +1,50 @@
+name: BR D1 Gap Export
+
+on:
+  push:
+    branches:
+      - feature/semantic-timeframe-indicators-20260924
+    paths:
+      - 'scripts/export_br_d1_gap.py'
+      - '.github/workflows/br-d1-gap-export.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  export-br-d1-gap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/semantic-timeframe-indicators-20260924
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+      - name: Export BR D1 gap
+        run: |
+          set -euo pipefail
+          rm -rf tmp/br-d1-gap
+          python scripts/export_br_d1_gap.py \
+            --from-date 2026-09-16 \
+            --till-date 2026-09-25 \
+            --output tmp/br-d1-gap
+      - name: Commit generated D1 gap
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tmp/br-d1-gap
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "Generate BR D1 gap through 2026-09-25"
+          git push origin HEAD:feature/semantic-timeframe-indicators-20260924
