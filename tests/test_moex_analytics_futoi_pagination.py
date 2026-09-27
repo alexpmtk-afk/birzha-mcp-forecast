@@ -96,3 +96,45 @@ def test_futoi_fails_closed_when_one_day_hits_iss_row_limit() -> None:
             from_date="2026-09-10",
             till_date="2026-09-10",
         )
+
+
+class FakeFutoiErrorClient(MoexAnalyticsClient):
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def _request(
+        self,
+        *,
+        base: str,
+        path: str,
+        params: dict[str, object],
+        authenticated_policy: bool,
+    ) -> AnalyticsResponse:
+        self.calls.append(dict(params))
+        payload = {
+            "futoi": {
+                "columns": ["ERROR_MESSAGE"],
+                "data": [
+                    [
+                        "Invalid date. Free users can't receive data for the last 14 days "
+                        "(2026-09-13)."
+                    ]
+                ],
+            }
+        }
+        return AnalyticsResponse(
+            status_code=200,
+            headers={},
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+
+def test_futoi_rejects_moex_error_rows_as_market_data() -> None:
+    client = FakeFutoiErrorClient()
+
+    with pytest.raises(MoexAnalyticsError, match="Free users can't receive data"):
+        client.fetch_futoi(
+            BR,
+            from_date="2026-09-13",
+            till_date="2026-09-13",
+        )
