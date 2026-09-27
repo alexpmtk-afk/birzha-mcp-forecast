@@ -14,8 +14,8 @@ from birzha.providers.moex_analytics import MoexAnalyticsClient
 
 
 SYMBOL = "BR"
-TIMEFRAME_WINDOWS = {"H1": 90, "M15": 30}
-WARMUP_DAYS = {"H1": 90, "M15": 30}
+TIMEFRAME_WINDOWS = {"D1": 45, "H1": 90, "M15": 30}
+WARMUP_DAYS = {"D1": 120, "H1": 90, "M15": 30}
 
 RAW_COLUMNS = [
     "record_key",
@@ -348,19 +348,35 @@ def _flow_rows(service: MarketDataService, start: date, finish: date):
         if "last 14 days" in error_message.lower():
             public_till = finish - timedelta(days=14)
             futoi_rows = []
+            daily_errors = []
             cursor = start
             while cursor <= public_till:
-                day_rows = analytics.fetch_futoi(
-                    current,
-                    from_date=cursor.isoformat(),
-                    till_date=cursor.isoformat(),
-                )
-                futoi_rows.extend(day_rows)
+                try:
+                    day_rows = analytics.fetch_futoi(
+                        current,
+                        from_date=cursor.isoformat(),
+                        till_date=cursor.isoformat(),
+                    )
+                    message = " ".join(
+                        str(row.get("ERROR_MESSAGE") or "")
+                        for row in day_rows
+                        if isinstance(row, dict)
+                    )
+                    if message:
+                        daily_errors.append(f"{cursor.isoformat()}:{message[:250]}")
+                    else:
+                        futoi_rows.extend(day_rows)
+                except Exception as exc:
+                    daily_errors.append(
+                        f"{cursor.isoformat()}:{type(exc).__name__}:{str(exc)[:250]}"
+                    )
                 cursor += timedelta(days=1)
             futoi_error = (
                 "PUBLIC_DELAY_14D:"
                 f"current public FUTOI unavailable after {public_till.isoformat()}"
             )
+            if daily_errors:
+                futoi_error += "; daily_errors=" + " | ".join(daily_errors[:10])
     except Exception as exc:
         futoi_rows = []
         futoi_error = f"{type(exc).__name__}:{str(exc)[:500]}"
