@@ -157,12 +157,31 @@ def _normalize_completion(
     else:
         end = end.astimezone(MOEX_TIMEZONE)
 
-    # MOEX updates the current D1 candle during the trading day and its ``end``
-    # timestamp can be earlier than wall-clock ``now``.  It is therefore not a
-    # final daily observation until the exchange date has rolled over.  Fail
-    # closed here rather than leaking a forming D1 candle into an ex-ante T0.
-    if timeframe == "D1" and end.date() >= observed_now.date():
+    # MOEX updates the current candle while it is still forming. For D1 the
+    # returned end timestamp may already be earlier than wall-clock now, and for
+    # native H1 the forming bar may use the current timestamp as its end. Do not
+    # treat those rows as completed merely because the provider's temporary end
+    # is in the past.
+    tf = (timeframe or "").upper()
+    if tf == "D1" and end.date() >= observed_now.date():
         return replace(candle, completed=False)
+
+    try:
+        begin = datetime.fromisoformat(candle.begin.replace("Z", "+00:00"))
+    except ValueError:
+        begin = None
+    if begin is not None:
+        if begin.tzinfo is None:
+            begin = begin.replace(tzinfo=MOEX_TIMEZONE)
+        else:
+            begin = begin.astimezone(MOEX_TIMEZONE)
+        expected_end = None
+        if tf == "H1":
+            expected_end = begin + timedelta(hours=1) - timedelta(seconds=1)
+        elif tf == "M15":
+            expected_end = begin + timedelta(minutes=15) - timedelta(seconds=1)
+        if expected_end is not None and expected_end > observed_now:
+            return replace(candle, completed=False)
 
     completed = bool(candle.completed and end <= observed_now)
     return replace(candle, completed=completed)
