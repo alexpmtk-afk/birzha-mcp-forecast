@@ -45,6 +45,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          saved="$RUNNER_TEMP/br-one-instrument"
+          rm -rf "$saved"
+          cp -a tmp/br-one-instrument "$saved"
+
+          git fetch origin feature/semantic-timeframe-indicators-20260924
+          git reset --hard origin/feature/semantic-timeframe-indicators-20260924
+
+          rm -rf tmp/br-one-instrument
+          mkdir -p tmp
+          cp -a "$saved" tmp/br-one-instrument
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add tmp/br-one-instrument
@@ -53,5 +64,4 @@ jobs:
             exit 0
           fi
           git commit -m "Generate BR one-instrument dataset"
-          git pull --rebase origin feature/semantic-timeframe-indicators-20260924
           git push origin HEAD:feature/semantic-timeframe-indicators-20260924
