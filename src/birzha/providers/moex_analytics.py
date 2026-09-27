@@ -208,6 +208,41 @@ class MoexAnalyticsClient:
             authenticated_policy=self.authenticated,
         )
 
+    def fetch_public_recent_trades(
+        self,
+        instrument: Instrument,
+        *,
+        max_pages: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Return all currently available public futures trades for one contract.
+
+        MOEX ISS exposes individual futures trades for the current trading day,
+        not a historical raw-trade archive. Pages are read with start offsets
+        and a 1000-row limit. Callers must persist derived history themselves.
+        """
+
+        if instrument.asset_class != "future":
+            raise MoexAnalyticsError(
+                "Public raw-trade capture is currently configured for futures only"
+            )
+        path = (
+            f"/engines/{instrument.engine}/markets/{instrument.market}/boards/"
+            f"{instrument.board}/securities/{instrument.secid}/trades.json"
+        )
+        return self._paged_rows(
+            base=ISS_BASE,
+            path=path,
+            params={
+                "iss.meta": "off",
+                "iss.only": "trades",
+                "limit": 1000,
+            },
+            table="trades",
+            authenticated_policy=False,
+            page_limit=1000,
+            max_pages=max_pages,
+        )
+
     def fetch_futoi(
         self,
         instrument: Instrument,
