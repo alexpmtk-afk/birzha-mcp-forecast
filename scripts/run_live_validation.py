@@ -19,7 +19,8 @@ CASES = (
 )
 
 GOLD_PROBE_DATE = date(2026, 5, 20)
-BR_TRADESTATS_PROBE_DATES = ("2026-09-11", "2026-08-28", "2026-05-20")\nBR_RAW_TRADES_PROBE_DATES = ("2026-09-25", "2026-09-11")
+BR_TRADESTATS_PROBE_DATES = ("2026-09-11", "2026-08-28", "2026-05-20")
+BR_RAW_TRADES_PROBE_DATES = ("2026-09-25", "2026-09-11")
 
 
 def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, object]:
