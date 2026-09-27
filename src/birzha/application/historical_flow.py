@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
+from birzha.application.public_tradestats import (
+    PUBLIC_TRADESTATS_SOURCE,
+    aggregate_public_futures_trades,
+)
 from birzha.domain.market import Instrument
 from birzha.providers.moex_analytics import MoexAnalyticsClient
 from birzha.storage.historical_flow_store import HistoricalFlowStore
@@ -41,6 +45,15 @@ class HistoricalFlowDataService:
         verified = self.store.is_verified(
             verification_dataset, key, from_date, till_date
         )
+
+        # Without subscriber authorization MOEX no longer exposes historical
+        # TradeStats through public ISS. Never keep retrying that restricted
+        # endpoint and never mark an unprovable historical range as verified.
+        # Return only rows that BIRZHA has actually persisted from public raw
+        # trades captures.
+        if not bool(getattr(self.analytics, "authenticated", True)):
+            return self.store.read_rows(dataset, key, from_date, till_date)
+
         if self.read_only:
             return (
                 self.store.read_rows(dataset, key, from_date, till_date)
@@ -56,6 +69,48 @@ class HistoricalFlowDataService:
                 verification_dataset, key, from_date, till_date
             )
         return self.store.read_rows(dataset, key, from_date, till_date)
+
+    def capture_public_recent_tradestats(self, symbol: str) -> dict[str, object]:
+        """Capture the currently available public futures trades and persist 5m rows.
+
+        Public ISS does not provide historical individual futures trades. This
+        operation therefore accumulates forward history only and deliberately
+        does not mark any historical range as complete/verified.
+        """
+
+        if self.read_only:
+            raise RuntimeError("read-only historical flow service cannot capture public trades")
+        instrument = self.market_data.resolve(symbol)
+        if instrument.asset_class != "future":
+            raise ValueError("public raw-trade capture is currently supported for futures only")
+
+        raw_rows = self.analytics.fetch_public_recent_trades(instrument)
+        derived = aggregate_public_futures_trades(raw_rows)
+        written = self.store.upsert_rows(
+            "TRADESTATS",
+            instrument.secid,
+            derived,
+            PUBLIC_TRADESTATS_SOURCE,
+        )
+        trade_dates = sorted(
+            {
+                str(row.get("tradedate") or "")[:10]
+                for row in derived
+                if row.get("tradedate")
+            }
+        )
+        return {
+            "symbol": symbol,
+            "secid": instrument.secid,
+            "source": PUBLIC_TRADESTATS_SOURCE,
+            "raw_trades": len(raw_rows),
+            "derived_5m_rows": len(derived),
+            "rows_written": written,
+            "trade_dates": trade_dates,
+            "value_fields": "UNAVAILABLE_IN_PUBLIC_FUTURES_TRADES",
+            "historical_backfill": "NOT_AVAILABLE_FROM_PUBLIC_RAW_TRADES",
+            "historical_range_marked_verified": False,
+        }
 
     def futoi(
         self, instrument: Instrument, *, from_date: str, till_date: str
@@ -119,6 +174,12 @@ class HistoricalFlowDataService:
         dataset = "TRADESTATS"
         verification_dataset = _verification_dataset(dataset)
         key = instrument.secid
+
+        if not bool(getattr(self.analytics, "authenticated", True)):
+            return self.store.read_rows(
+                dataset, key, start.isoformat(), finish.isoformat()
+            )
+
         if self.store.is_verified(
             verification_dataset, key, start.isoformat(), finish.isoformat()
         ):

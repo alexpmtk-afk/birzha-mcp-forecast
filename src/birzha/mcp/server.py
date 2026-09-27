@@ -145,6 +145,29 @@ def history_flow_sync(symbol: str, from_date: str, till_date: str) -> dict[str, 
         return {"status":"ERROR","symbol":symbol,"from_date":from_date,"till_date":till_date,"error_type":type(exc).__name__,"error":str(exc)[:1500]}
 
 
+@mcp.tool(
+    name="history.flow_capture_public_trades",
+    description=(
+        "Capture all currently available public MOEX futures trades for one symbol, "
+        "derive TradeStats-compatible 5-minute buy/sell volume, price and open-interest rows, "
+        "and persist them without claiming unavailable historical completeness."
+    ),
+)
+def history_flow_capture_public_trades(symbol: str) -> dict[str, object]:
+    try:
+        return {
+            "status": "PASS",
+            **_historical_flow.capture_public_recent_tradestats(symbol),
+        }
+    except Exception as exc:
+        return {
+            "status": "ERROR",
+            "symbol": symbol,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:1500],
+        }
+
+
 @mcp.tool(name="history.coverage", description="Return durable stored coverage for one exact MOEX SECID and timeframe.")
 def history_coverage(secid: str, timeframe: str) -> dict[str, object]:
     try:

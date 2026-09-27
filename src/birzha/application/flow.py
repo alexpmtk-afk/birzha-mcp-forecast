@@ -10,6 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService
+from birzha.application.public_tradestats import PUBLIC_TRADESTATS_SOURCE
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
@@ -119,7 +120,11 @@ class MarketFlowService:
             futoi_rows = _causal_rows(futoi_rows, cutoff)
 
         if not trade_rows:
-            warnings.append("ALGOPACK_TRADESTATS_EMPTY")
+            warnings.append(
+                "ALGOPACK_TRADESTATS_EMPTY"
+                if bool(getattr(self.analytics, "authenticated", True))
+                else "PUBLIC_TRADESTATS_CAPTURE_EMPTY"
+            )
         if not futoi_rows:
             warnings.append("FUTOI_EMPTY")
 
@@ -158,13 +163,24 @@ class MarketFlowService:
             assert parsed_as_of is not None and parsed_as_of <= cutoff
 
         quality = "PASS" if not warnings else "DEGRADED"
+        public_trade_rows = any(
+            str(row.get("_source") or "") == PUBLIC_TRADESTATS_SOURCE
+            for row in trade_rows
+        )
+        if public_trade_rows:
+            source = "MOEX_ISS_PUBLIC_TRADES_DERIVED+FUTOI"
+        elif trade_rows:
+            source = "MOEX_ALGOPACK+FUTOI"
+        else:
+            source = "MOEX_FUTOI"
+
         return MarketFlowSnapshot(
             symbol=instrument.symbol,
             secid=instrument.secid,
             from_date=start.isoformat(),
             till_date=till.isoformat(),
             as_of=as_of,
-            source="MOEX_ALGOPACK+FUTOI",
+            source=source,
             intervals=len(trade_rows),
             buy_volume=_round_or_none(buy_volume),
             sell_volume=_round_or_none(sell_volume),
