@@ -362,7 +362,7 @@ def _flow_rows(service: MarketDataService, start: date, finish: date):
                         str(row.get("ERROR_MESSAGE") or "")
                         for row in day_rows
                         if isinstance(row, dict)
-                    )
+                    ).strip()
                     if message:
                         daily_errors.append(f"{cursor.isoformat()}:{message[:250]}")
                     else:
