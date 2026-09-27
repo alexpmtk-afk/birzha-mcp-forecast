@@ -39,7 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf tmp/br-one-instrument
-          python scripts/export_one_instrument_br.py             --as-of 2026-09-24             --output tmp/br-one-instrument
+          python scripts/export_one_instrument_br.py             --as-of 2026-09-27             --output tmp/br-one-instrument
 
       - name: Commit generated BR dataset
         shell: bash
