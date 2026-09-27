@@ -6,6 +6,7 @@ on:
       - feature/semantic-timeframe-indicators-20260924
     paths:
       - 'scripts/export_one_instrument_br.py'
+      - 'src/birzha/application/market_data.py'
       - '.github/workflows/br-one-instrument-export.yml'
 
 permissions:
