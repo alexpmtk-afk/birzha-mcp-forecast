@@ -1,0 +1,47 @@
+name: BR HOME ALGOPACK Probe
+
+on:
+  push:
+    branches:
+      - feature/semantic-timeframe-indicators-20260924
+    paths:
+      - '.github/workflows/br-home-algopack-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, gpt-powershell-home]
+    timeout-minutes: 10
+    steps:
+      - name: Probe HOME ALGOPACK credential without exposing it
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = 'C:\MCP-HOME\secrets\birzha'
+          $token = $env:MOEX_ALGOPACK_BEARER_TOKEN
+          if (-not $token -and (Test-Path $root)) {
+            foreach ($f in Get-ChildItem -Path $root -Filter '*.json' -File) {
+              $raw = Get-Content -Raw -LiteralPath $f.FullName
+              $m = [regex]::Match($raw, '"(?:MOEX_ALGOPACK_BEARER_TOKEN|algopack_bearer_token|algopack_token)"\s*:\s*"([^"]+)"', 'IgnoreCase')
+              if ($m.Success) {
+                $token = $m.Groups[1].Value
+                break
+              }
+            }
+          }
+          if ($token) {
+            Write-Output "::add-mask::$token"
+            Write-Output "ALGOPACK_TOKEN_FOUND=YES"
+          } else {
+            Write-Output "ALGOPACK_TOKEN_FOUND=NO"
+          }
+
+      - name: Confirm HOME Birzha runtime exists
+        shell: powershell
+        run: |
+          $project = 'C:\MCP-HOME\projects\birzha-mcp-forecast'
+          $python = Join-Path $project '.venv\Scripts\python.exe'
+          if (Test-Path $project) { Write-Output 'HOME_BIRZHA_PROJECT=PASS' } else { Write-Output 'HOME_BIRZHA_PROJECT=FAIL' }
+          if (Test-Path $python) { Write-Output 'HOME_BIRZHA_PYTHON=PASS' } else { Write-Output 'HOME_BIRZHA_PYTHON=FAIL' }
