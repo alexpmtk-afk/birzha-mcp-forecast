@@ -99,7 +99,7 @@ class MarketFlowService:
                 if self.historical is not None
                 else self.analytics.fetch_tradestats(instrument, from_date=start.isoformat(), till_date=till.isoformat())
             )
-        except (MoexAnalyticsError, JSONDecodeError) as exc:
+        except (MoexAnalyticsError, JSONDecodeError, TimeoutError) as exc:
             trade_rows = []
             warnings.append(
                 f"ALGOPACK_TRADESTATS_UNAVAILABLE:{type(exc).__name__}:{exc}"
@@ -111,7 +111,7 @@ class MarketFlowService:
                 if self.historical is not None
                 else self.analytics.fetch_futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
             )
-        except (MoexAnalyticsError, JSONDecodeError) as exc:
+        except (MoexAnalyticsError, JSONDecodeError, TimeoutError) as exc:
             futoi_rows = []
             warnings.append(f"FUTOI_UNAVAILABLE:{type(exc).__name__}:{exc}")
 
