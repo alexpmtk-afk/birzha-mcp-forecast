@@ -19,7 +19,7 @@ CASES = (
 )
 
 GOLD_PROBE_DATE = date(2026, 5, 20)
-BR_TRADESTATS_PROBE_DATES = ("2026-09-11", "2026-08-28", "2026-05-20")
+BR_TRADESTATS_PROBE_DATES = ("2026-09-11", "2026-08-28", "2026-05-20")\nBR_RAW_TRADES_PROBE_DATES = ("2026-09-25", "2026-09-11")
 
 
 def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, object]:
@@ -90,10 +90,76 @@ def _br_public_tradestats_evidence() -> list[dict[str, object]]:
     return evidence
 
 
+
+
+def _br_raw_trades_evidence() -> list[dict[str, object]]:
+    market_data = MarketDataService.default()
+    client = market_data.provider
+    evidence: list[dict[str, object]] = []
+    columns = "TRADENO,TRADEDATE,TRADETIME,SECID,PRICE,QUANTITY,VALUE,SYSTIME,OPENPOSITION,BUYSELL"
+
+    for day in BR_RAW_TRADES_PROBE_DATES:
+        instrument = market_data.resolve("BR", as_of=date.fromisoformat(day))
+        paths = (
+            f"/engines/futures/markets/forts/boards/RFUD/securities/{instrument.secid}/trades.json",
+            f"/history/engines/futures/markets/forts/boards/RFUD/securities/{instrument.secid}/trades.json",
+            f"/history/engines/futures/markets/forts/securities/{instrument.secid}/trades.json",
+        )
+        for path in paths:
+            params = {
+                "iss.meta": "off",
+                "iss.only": "trades",
+                "trades.columns": columns,
+                "from": day,
+                "till": day,
+                "limit": 20,
+                "start": 0,
+            }
+            url = f"https://iss.moex.com/iss{path}?{urlencode(params)}"
+            response = client._one_attempt(url)  # noqa: SLF001 - temporary public ISS probe
+            body_text = response.body.decode("utf-8", "replace")
+            text_body = re.sub(r'data:image/[^;]+;base64,[^"]+', '', body_text, flags=re.IGNORECASE)
+            text_body = re.sub(r"<script[\\s\\S]*?</script>", " ", text_body, flags=re.IGNORECASE)
+            text_body = re.sub(r"<style[\\s\\S]*?</style>", " ", text_body, flags=re.IGNORECASE)
+            text_body = re.sub(r"<[^>]+>", " ", text_body)
+            text_body = " ".join(unescape(text_body).split())[:1500]
+            headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
+            json_summary: dict[str, object] | None = None
+            try:
+                payload = json.loads(body_text)
+                summary: dict[str, object] = {}
+                for name, table in payload.items():
+                    if isinstance(table, dict):
+                        summary[name] = {
+                            "columns": table.get("columns"),
+                            "rows": (table.get("data") or [])[:3],
+                            "row_count": len(table.get("data") or []),
+                        }
+                json_summary = summary
+            except Exception:
+                pass
+            item = {
+                "date": day,
+                "secid": instrument.secid,
+                "path": path,
+                "url": url,
+                "status": response.status_code,
+                "content_type": headers.get("content-type"),
+                "content_length": len(response.body),
+                "json_summary": json_summary,
+                "body_text": text_body,
+            }
+            evidence.append(item)
+            print("BR_RAW_TRADES_PROBE=" + json.dumps(item, ensure_ascii=False, sort_keys=True))
+
+    return evidence
+
+
 def main() -> int:
     validator = WalkForwardValidator.default()
     gold_resolution = _gold_resolution_evidence(validator)
     br_public_tradestats = _br_public_tradestats_evidence()
+    br_raw_trades = _br_raw_trades_evidence()
 
     reports: list[dict[str, object]] = []
     for case in CASES:
@@ -108,6 +174,7 @@ def main() -> int:
         "quality_acceptance": False,
         "gold_resolution": gold_resolution,
         "br_public_tradestats": br_public_tradestats,
+        "br_raw_trades": br_raw_trades,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")
