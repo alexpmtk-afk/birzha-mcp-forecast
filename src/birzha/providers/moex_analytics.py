@@ -246,6 +246,18 @@ class MoexAnalyticsClient:
                 authenticated_policy=False,
             ).json()
             page = self._table(payload, "futoi")
+            error_message = next(
+                (
+                    str(row.get("ERROR_MESSAGE") or row.get("error_message") or "").strip()
+                    for row in page
+                    if row.get("ERROR_MESSAGE") or row.get("error_message")
+                ),
+                "",
+            )
+            if error_message:
+                raise MoexAnalyticsError(
+                    f"MOEX FUTOI unavailable for {day}: {error_message}"
+                )
             if len(page) >= 1000:
                 raise MoexAnalyticsError(
                     "FUTOI single-day response reached the 1000-row ISS limit "
