@@ -3,8 +3,11 @@ from __future__ import annotations
 from datetime import date
 import json
 from pathlib import Path
+from urllib.parse import urlencode
 
+from birzha.application.market_data import MarketDataService
 from birzha.application.validation import WalkForwardValidator
+from birzha.providers.moex_analytics import ISS_BASE, MoexAnalyticsClient
 
 
 CASES = (
@@ -14,6 +17,7 @@ CASES = (
 )
 
 GOLD_PROBE_DATE = date(2026, 5, 20)
+BR_TRADESTATS_PROBE_DATES = ("2026-09-11", "2026-08-28", "2026-05-20")
 
 
 def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, object]:
@@ -38,9 +42,47 @@ def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, obje
     return payload
 
 
+def _br_public_tradestats_evidence() -> list[dict[str, object]]:
+    market_data = MarketDataService.default()
+    analytics = MoexAnalyticsClient(bearer_token="")
+    evidence: list[dict[str, object]] = []
+
+    for day in BR_TRADESTATS_PROBE_DATES:
+        instrument = market_data.resolve("BR", as_of=date.fromisoformat(day))
+        path = f"/datashop/algopack/fo/tradestats/{instrument.secid}.json"
+        params: dict[str, object] = {
+            "iss.meta": "off",
+            "from": day,
+            "till": day,
+            "limit": 1000,
+            "start": 0,
+        }
+        url = f"{ISS_BASE}{path}?{urlencode(params)}"
+        response = analytics._algopack_governor.execute(  # noqa: SLF001 - temporary live probe
+            [(ISS_BASE, path, params)],
+            lambda task: lambda: analytics._one_attempt(task[0], task[1], task[2]),  # noqa: SLF001
+        )[0]
+        body_text = response.body.decode("utf-8", "replace")
+        snippet = body_text[:1000]
+        item = {
+            "date": day,
+            "secid": instrument.secid,
+            "last_trade_date": instrument.last_trade_date,
+            "host": "iss.moex.com",
+            "url": url,
+            "status": response.status_code,
+            "body_snippet": snippet,
+        }
+        evidence.append(item)
+        print("BR_PUBLIC_TRADESTATS_PROBE=" + json.dumps(item, ensure_ascii=False, sort_keys=True))
+
+    return evidence
+
+
 def main() -> int:
     validator = WalkForwardValidator.default()
     gold_resolution = _gold_resolution_evidence(validator)
+    br_public_tradestats = _br_public_tradestats_evidence()
 
     reports: list[dict[str, object]] = []
     for case in CASES:
@@ -54,16 +96,13 @@ def main() -> int:
         "purpose": "minimal real-network causal walk-forward end-to-end evidence",
         "quality_acceptance": False,
         "gold_resolution": gold_resolution,
+        "br_public_tradestats": br_public_tradestats,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(evidence, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
-    # This gate proves only that the real historical path completes for a share
-    # and configured futures roots, including explicit GOLD -> GD* resolution.
-    # It must never be interpreted as evidence of statistical model quality;
-    # that requires the governed six-market study.
     failed = [
         r
         for r in reports
