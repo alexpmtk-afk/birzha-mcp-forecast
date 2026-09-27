@@ -156,11 +156,46 @@ def _br_raw_trades_evidence() -> list[dict[str, object]]:
     return evidence
 
 
+
+
+def _br_trades_paging_evidence() -> list[dict[str, object]]:
+    market_data = MarketDataService.default()
+    client = market_data.provider
+    instrument = market_data.resolve("BR", as_of=date(2026, 9, 25))
+    path = f"/engines/futures/markets/forts/boards/RFUD/securities/{instrument.secid}/trades.json"
+    variants = (
+        ("generic_limit", {"iss.meta":"off","iss.only":"trades,trades.cursor","limit":1000,"start":0}),
+        ("block_limit", {"iss.meta":"off","iss.only":"trades,trades.cursor","trades.limit":1000,"start":0}),
+        ("start_10", {"iss.meta":"off","iss.only":"trades,trades.cursor","trades.limit":1000,"start":10}),
+        ("latest", {"iss.meta":"off","iss.only":"trades,trades.cursor","trades.limit":1000,"latest":1}),
+    )
+    evidence=[]
+    for name, params in variants:
+        url=f"https://iss.moex.com/iss{path}?{urlencode(params)}"
+        response=client._one_attempt(url)  # noqa: SLF001
+        body=response.body.decode("utf-8","replace")
+        payload=json.loads(body) if response.status_code == 200 and body.lstrip().startswith("{") else {}
+        summary={}
+        for table_name, table in payload.items():
+            if isinstance(table, dict):
+                summary[table_name]={
+                    "columns":table.get("columns"),
+                    "row_count":len(table.get("data") or []),
+                    "first":(table.get("data") or [None])[0],
+                    "last":(table.get("data") or [None])[-1],
+                }
+        item={"variant":name,"secid":instrument.secid,"status":response.status_code,"url":url,"summary":summary}
+        evidence.append(item)
+        print("BR_TRADES_PAGING_PROBE="+json.dumps(item,ensure_ascii=False,sort_keys=True))
+    return evidence
+
+
 def main() -> int:
     validator = WalkForwardValidator.default()
     gold_resolution = _gold_resolution_evidence(validator)
     br_public_tradestats = _br_public_tradestats_evidence()
     br_raw_trades = _br_raw_trades_evidence()
+    br_trades_paging = _br_trades_paging_evidence()
 
     reports: list[dict[str, object]] = []
     for case in CASES:
@@ -176,6 +211,7 @@ def main() -> int:
         "gold_resolution": gold_resolution,
         "br_public_tradestats": br_public_tradestats,
         "br_raw_trades": br_raw_trades,
+        "br_trades_paging": br_trades_paging,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")
