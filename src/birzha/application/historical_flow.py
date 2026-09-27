@@ -51,7 +51,7 @@ class HistoricalFlowDataService:
         # endpoint and never mark an unprovable historical range as verified.
         # Return only rows that BIRZHA has actually persisted from public raw
         # trades captures.
-        if not self.analytics.authenticated:
+        if not bool(getattr(self.analytics, "authenticated", True)):
             return self.store.read_rows(dataset, key, from_date, till_date)
 
         if self.read_only:
@@ -175,7 +175,7 @@ class HistoricalFlowDataService:
         verification_dataset = _verification_dataset(dataset)
         key = instrument.secid
 
-        if not self.analytics.authenticated:
+        if not bool(getattr(self.analytics, "authenticated", True)):
             return self.store.read_rows(
                 dataset, key, start.isoformat(), finish.isoformat()
             )
