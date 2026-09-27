@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import date
+from html import unescape
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -64,6 +66,12 @@ def _br_public_tradestats_evidence() -> list[dict[str, object]]:
         )[0]
         body_text = response.body.decode("utf-8", "replace")
         snippet = body_text[:1000]
+        text_body = re.sub(r'data:image/[^;]+;base64,[^"]+', '', body_text, flags=re.IGNORECASE)
+        text_body = re.sub(r"<script[\\s\\S]*?</script>", " ", text_body, flags=re.IGNORECASE)
+        text_body = re.sub(r"<style[\\s\\S]*?</style>", " ", text_body, flags=re.IGNORECASE)
+        text_body = re.sub(r"<[^>]+>", " ", text_body)
+        text_body = " ".join(unescape(text_body).split())[:2000]
+        headers = {str(k).lower(): str(v) for k, v in response.headers.items()}
         item = {
             "date": day,
             "secid": instrument.secid,
@@ -71,6 +79,9 @@ def _br_public_tradestats_evidence() -> list[dict[str, object]]:
             "host": "iss.moex.com",
             "url": url,
             "status": response.status_code,
+            "content_type": headers.get("content-type"),
+            "content_length": len(response.body),
+            "body_text": text_body,
             "body_snippet": snippet,
         }
         evidence.append(item)
