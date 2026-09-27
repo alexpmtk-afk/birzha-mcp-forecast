@@ -4,7 +4,12 @@ from datetime import date
 import json
 from pathlib import Path
 
+from birzha.application.historical_flow import HistoricalFlowDataService
+from birzha.application.market_data import MarketDataService
+from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.application.validation import WalkForwardValidator
+from birzha.providers.moex_analytics import MoexAnalyticsClient
+from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
 
 
 CASES = (
@@ -38,9 +43,40 @@ def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, obje
     return payload
 
 
+
+def _br_public_capture_evidence() -> dict[str, object]:
+    control = ProcessUpstreamControlPlane()
+    market = MarketDataService.default(control_plane=control)
+    analytics = MoexAnalyticsClient(control_plane=control, bearer_token="")
+    store = DuckDBHistoricalFlowStore(":memory:")
+    service = HistoricalFlowDataService(
+        market_data=market,
+        analytics=analytics,
+        store=store,
+    )
+    result = service.capture_public_recent_tradestats("BR")
+    secid = str(result["secid"])
+    trade_dates = list(result["trade_dates"])
+    rows: list[dict[str, object]] = []
+    if trade_dates:
+        rows = store.read_rows("TRADESTATS", secid, trade_dates[0], trade_dates[-1])
+    sample = rows[:2]
+    evidence = {**result, "stored_rows": len(rows), "sample": sample}
+    print("BR_PUBLIC_CAPTURE=" + json.dumps(evidence, ensure_ascii=False, sort_keys=True))
+
+    if int(result["raw_trades"]) <= 0:
+        raise RuntimeError("BR_PUBLIC_CAPTURE_FAIL: no public raw trades received")
+    if int(result["derived_5m_rows"]) <= 0 or len(rows) <= 0:
+        raise RuntimeError("BR_PUBLIC_CAPTURE_FAIL: no derived rows persisted")
+    if any(row.get("val_b") is not None or row.get("val_s") is not None for row in rows):
+        raise RuntimeError("BR_PUBLIC_CAPTURE_FAIL: RUB value fields must remain unavailable")
+    return evidence
+
+
 def main() -> int:
     validator = WalkForwardValidator.default()
     gold_resolution = _gold_resolution_evidence(validator)
+    br_public_capture = _br_public_capture_evidence()
 
     reports: list[dict[str, object]] = []
     for case in CASES:
@@ -54,6 +90,7 @@ def main() -> int:
         "purpose": "minimal real-network causal walk-forward end-to-end evidence",
         "quality_acceptance": False,
         "gold_resolution": gold_resolution,
+        "br_public_capture": br_public_capture,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")
