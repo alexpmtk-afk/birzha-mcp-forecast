@@ -102,7 +102,15 @@ class MoexAnalyticsClient:
                 body=exc.read(),
             )
         except URLError as exc:
-            raise MoexAnalyticsError(f"MOEX analytics network error: {exc.reason}") from exc
+            reason = exc.reason
+            if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+                return AnalyticsResponse(status_code=504, headers={}, body=b"")
+            raise MoexAnalyticsError(f"MOEX analytics network error: {reason}") from exc
+        except TimeoutError:
+            # A single slow ISS page is transient, not a data-integrity failure.
+            # Return a retryable synthetic 504 so the shared request governor
+            # applies the normal bounded retry/backoff and pacing budget.
+            return AnalyticsResponse(status_code=504, headers={}, body=b"")
 
     def _request(
         self,
