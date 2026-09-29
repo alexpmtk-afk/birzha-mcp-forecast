@@ -7,7 +7,7 @@ from typing import Any
 from birzha.application.orchestrator import WorkflowOrchestrator
 from birzha.config import Settings
 from birzha.domain.orchestration import WorkflowStage
-from birzha.storage.orchestration_store import MemoryOrchestrationStore
+from birzha.storage.duckdb_orchestration_store import DuckDBOrchestrationStore
 from birzha.storage.ydb_runtime_orchestration_store import YdbRuntimeOrchestrationStore
 from birzha.storage.ydb_state import YdbRuntime
 
@@ -50,7 +50,7 @@ def install_orchestration_tools(
             raise RuntimeError("YDB runtime is required for durable orchestration")
         store = YdbRuntimeOrchestrationStore(ydb_runtime.pool)
     else:
-        store = MemoryOrchestrationStore()
+        store = DuckDBOrchestrationStore(settings.forecast_journal_path)
     orchestrator = WorkflowOrchestrator(store)
 
     @mcp.tool(
