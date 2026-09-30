@@ -23,6 +23,7 @@ from birzha.upstream.moex import MOEX_AUTHENTICATED_POLICY, MOEX_ISS_PUBLIC_POLI
 ISS_BASE = "https://iss.moex.com/iss"
 APIM_BASE = "https://apim.moex.com/iss"
 FUTOI_SECURITY_CODES = {"GOLD": "GD"}
+PUBLIC_TRADE_PAGE_LIMIT = 500
 PUBLIC_TRADE_COLUMNS = (
     "RECNO",
     "TRADENO",
@@ -255,11 +256,11 @@ class MoexAnalyticsClient:
                 "iss.meta": "off",
                 "iss.only": "trades",
                 "trades.columns": ",".join(PUBLIC_TRADE_COLUMNS),
-                "limit": 1000,
+                "limit": PUBLIC_TRADE_PAGE_LIMIT,
             },
             table="trades",
             authenticated_policy=False,
-            page_limit=1000,
+            page_limit=PUBLIC_TRADE_PAGE_LIMIT,
             max_pages=max_pages,
         )
 
