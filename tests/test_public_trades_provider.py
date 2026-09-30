@@ -32,9 +32,10 @@ def test_public_recent_trades_uses_public_iss_and_start_pagination() -> None:
             "RECNO,TRADENO,TRADEDATE,TRADETIME,PRICE,QUANTITY,"
             "OPENPOSITION,BUYSELL,OFFMARKETDEAL"
         )
+        assert params["limit"] == 500
         start = int(params["start"])
         starts.append(start)
-        count = 1000 if start == 0 else 2
+        count = 500 if start == 0 else 2
         payload = {
             "trades": {
                 "columns": ["RECNO", "TRADEDATE", "TRADETIME"],
@@ -54,11 +55,11 @@ def test_public_recent_trades_uses_public_iss_and_start_pagination() -> None:
 
     rows = client.fetch_public_recent_trades(INSTRUMENT, max_pages=3)
 
-    assert len(rows) == 1002
-    assert starts == [0, 1000]
+    assert len(rows) == 502
+    assert starts == [0, 500]
     assert bases == [ISS_BASE, ISS_BASE]
     assert rows[0]["RECNO"] == 0
-    assert rows[-1]["RECNO"] == 1001
+    assert rows[-1]["RECNO"] == 501
 
 
 class _FakeHttpResponse:
