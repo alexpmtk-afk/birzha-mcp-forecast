@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.public_tradestats import (
@@ -18,6 +19,10 @@ from birzha.storage.historical_flow_store import HistoricalFlowStore
 TRADESTATS_ASSET_CLASSES = frozenset({"future", "equity", "fx"})
 FLOW_MAX_CALENDAR_DAYS_PER_FETCH = 60
 FLOW_VERIFICATION_VERSION = "FLOW_V1"
+PUBLIC_TRADES_RAW_DATASET = "PUBLIC_TRADES_RAW"
+PUBLIC_TRADES_CHECKPOINT_DATASET = "PUBLIC_TRADES_CHECKPOINT"
+PUBLIC_TRADES_RAW_SOURCE = "MOEX_ISS_PUBLIC_TRADES_RAW"
+PUBLIC_TRADES_MAX_PAGES_PER_RUN = 500
 
 
 def _verification_dataset(dataset: str) -> str:
@@ -71,11 +76,12 @@ class HistoricalFlowDataService:
         return self.store.read_rows(dataset, key, from_date, till_date)
 
     def capture_public_recent_tradestats(self, symbol: str) -> dict[str, object]:
-        """Capture the currently available public futures trades and persist 5m rows.
+        """Capture public futures trades with durable page-by-page resume.
 
-        Public ISS does not provide historical individual futures trades. This
-        operation therefore accumulates forward history only and deliberately
-        does not mark any historical range as complete/verified.
+        Every successful ISS page is persisted before the next request and the
+        next start offset is checkpointed in the same durable store. If a later
+        page times out, the next invocation resumes from that checkpoint rather
+        than downloading the trading day again from zero.
         """
 
         if self.read_only:
@@ -84,7 +90,57 @@ class HistoricalFlowDataService:
         if instrument.asset_class != "future":
             raise ValueError("public raw-trade capture is currently supported for futures only")
 
-        raw_rows = self.analytics.fetch_public_recent_trades(instrument)
+        capture_date = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+        resume_start = self._public_trade_checkpoint(instrument.secid, capture_date)
+        start = resume_start
+        pages_fetched = 0
+        raw_trades_fetched = 0
+
+        for _ in range(PUBLIC_TRADES_MAX_PAGES_PER_RUN):
+            page, next_start, done = self.analytics.fetch_public_recent_trade_page(
+                instrument,
+                start=start,
+            )
+            if page:
+                self.store.upsert_rows(
+                    PUBLIC_TRADES_RAW_DATASET,
+                    instrument.secid,
+                    page,
+                    PUBLIC_TRADES_RAW_SOURCE,
+                )
+                raw_trades_fetched += len(page)
+                pages_fetched += 1
+
+            if next_start < start:
+                raise RuntimeError(
+                    f"public trades checkpoint moved backwards: {start} -> {next_start}"
+                )
+            if next_start > start:
+                self._save_public_trade_checkpoint(
+                    instrument.secid,
+                    capture_date,
+                    next_start,
+                )
+                start = next_start
+
+            if done:
+                break
+            if not page and next_start == start:
+                raise RuntimeError(
+                    f"public trades pagination stalled at start={start}"
+                )
+        else:
+            raise RuntimeError(
+                "public trades capture exceeded safe page budget "
+                f"{PUBLIC_TRADES_MAX_PAGES_PER_RUN}"
+            )
+
+        raw_rows = self.store.read_rows(
+            PUBLIC_TRADES_RAW_DATASET,
+            instrument.secid,
+            capture_date,
+            capture_date,
+        )
         derived = aggregate_public_futures_trades(raw_rows)
         written = self.store.upsert_rows(
             "TRADESTATS",
@@ -103,7 +159,12 @@ class HistoricalFlowDataService:
             "symbol": symbol,
             "secid": instrument.secid,
             "source": PUBLIC_TRADESTATS_SOURCE,
-            "raw_trades": len(raw_rows),
+            "capture_date": capture_date,
+            "resume_start": resume_start,
+            "next_start": start,
+            "pages_fetched": pages_fetched,
+            "raw_trades_fetched": raw_trades_fetched,
+            "raw_trades_total": len(raw_rows),
             "derived_5m_rows": len(derived),
             "rows_written": written,
             "trade_dates": trade_dates,
@@ -111,6 +172,40 @@ class HistoricalFlowDataService:
             "historical_backfill": "NOT_AVAILABLE_FROM_PUBLIC_RAW_TRADES",
             "historical_range_marked_verified": False,
         }
+
+    def _public_trade_checkpoint(self, secid: str, capture_date: str) -> int:
+        rows = self.store.read_rows(
+            PUBLIC_TRADES_CHECKPOINT_DATASET,
+            secid,
+            capture_date,
+            capture_date,
+        )
+        values = []
+        for row in rows:
+            try:
+                values.append(int(row.get("next_start") or 0))
+            except (TypeError, ValueError):
+                continue
+        return max(values, default=0)
+
+    def _save_public_trade_checkpoint(
+        self,
+        secid: str,
+        capture_date: str,
+        next_start: int,
+    ) -> None:
+        self.store.upsert_rows(
+            PUBLIC_TRADES_CHECKPOINT_DATASET,
+            secid,
+            [
+                {
+                    "tradedate": capture_date,
+                    "tradetime": "00:00:00",
+                    "next_start": int(next_start),
+                }
+            ],
+            PUBLIC_TRADES_RAW_SOURCE,
+        )
 
     def futoi(
         self, instrument: Instrument, *, from_date: str, till_date: str
