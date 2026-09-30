@@ -23,6 +23,17 @@ from birzha.upstream.moex import MOEX_AUTHENTICATED_POLICY, MOEX_ISS_PUBLIC_POLI
 ISS_BASE = "https://iss.moex.com/iss"
 APIM_BASE = "https://apim.moex.com/iss"
 FUTOI_SECURITY_CODES = {"GOLD": "GD"}
+PUBLIC_TRADE_COLUMNS = (
+    "RECNO",
+    "TRADENO",
+    "TRADEDATE",
+    "TRADETIME",
+    "PRICE",
+    "QUANTITY",
+    "OPENPOSITION",
+    "BUYSELL",
+    "OFFMARKETDEAL",
+)
 
 
 @dataclass(slots=True)
@@ -243,6 +254,7 @@ class MoexAnalyticsClient:
             params={
                 "iss.meta": "off",
                 "iss.only": "trades",
+                "trades.columns": ",".join(PUBLIC_TRADE_COLUMNS),
                 "limit": 1000,
             },
             table="trades",
