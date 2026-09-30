@@ -139,3 +139,39 @@ def test_public_recent_trades_retries_urlerror_wrapped_timeout() -> None:
 
     assert attempts == 2
     assert len(rows) == 2
+
+
+def test_public_trade_page_checkpoint_uses_actual_rows_not_page_capacity() -> None:
+    client = object.__new__(MoexAnalyticsClient)
+
+    def fake_request(*, base, path, params, authenticated_policy):
+        assert int(params["start"]) == 500
+        payload = {
+            "trades": {
+                "columns": ["RECNO", "TRADEDATE", "TRADETIME"],
+                "data": [
+                    [500 + i, "2026-09-30", "12:00:00"]
+                    for i in range(250)
+                ],
+            },
+            "trades.cursor": {
+                "columns": ["INDEX", "TOTAL", "PAGESIZE"],
+                "data": [[500, 750, 500]],
+            },
+        }
+        return AnalyticsResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+    client._request = fake_request  # type: ignore[method-assign,attr-defined]
+
+    page, next_start, done = client.fetch_public_recent_trade_page(
+        INSTRUMENT,
+        start=500,
+    )
+
+    assert len(page) == 250
+    assert next_start == 750
+    assert done is True
