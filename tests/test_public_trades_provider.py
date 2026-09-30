@@ -28,6 +28,10 @@ def test_public_recent_trades_uses_public_iss_and_start_pagination() -> None:
         bases.append(base)
         assert path.endswith("/BRV6/trades.json")
         assert authenticated_policy is False
+        assert params["trades.columns"] == (
+            "RECNO,TRADENO,TRADEDATE,TRADETIME,PRICE,QUANTITY,"
+            "OPENPOSITION,BUYSELL,OFFMARKETDEAL"
+        )
         start = int(params["start"])
         starts.append(start)
         count = 1000 if start == 0 else 2
