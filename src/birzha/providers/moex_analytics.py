@@ -228,40 +228,87 @@ class MoexAnalyticsClient:
             authenticated_policy=self.authenticated,
         )
 
-    def fetch_public_recent_trades(
+    def fetch_public_recent_trade_page(
         self,
         instrument: Instrument,
         *,
-        max_pages: int = 500,
-    ) -> list[dict[str, Any]]:
-        """Return all currently available public futures trades for one contract.
+        start: int = 0,
+        page_limit: int = PUBLIC_TRADE_PAGE_LIMIT,
+    ) -> tuple[list[dict[str, Any]], int, bool]:
+        """Return one bounded public futures-trades page.
 
-        MOEX ISS exposes individual futures trades for the current trading day,
-        not a historical raw-trade archive. Pages are read with start offsets
-        and a 1000-row limit. Callers must persist derived history themselves.
+        The caller owns checkpointing. This keeps a successful prefix durable:
+        if a later ISS page times out, the next run can resume from the saved
+        start offset instead of downloading the trading day from zero.
         """
 
         if instrument.asset_class != "future":
             raise MoexAnalyticsError(
                 "Public raw-trade capture is currently configured for futures only"
             )
+        if start < 0:
+            raise ValueError("start must be >= 0")
+        if page_limit <= 0:
+            raise ValueError("page_limit must be > 0")
+
         path = (
             f"/engines/{instrument.engine}/markets/{instrument.market}/boards/"
             f"{instrument.board}/securities/{instrument.secid}/trades.json"
         )
-        return self._paged_rows(
+        payload = self._request(
             base=ISS_BASE,
             path=path,
             params={
                 "iss.meta": "off",
                 "iss.only": "trades",
                 "trades.columns": ",".join(PUBLIC_TRADE_COLUMNS),
-                "limit": PUBLIC_TRADE_PAGE_LIMIT,
+                "limit": page_limit,
+                "start": start,
             },
-            table="trades",
             authenticated_policy=False,
-            page_limit=PUBLIC_TRADE_PAGE_LIMIT,
-            max_pages=max_pages,
+        ).json()
+        page = self._table(payload, "trades")
+        if not page:
+            return [], start, True
+
+        cursor_rows = self._table(payload, "trades.cursor")
+        if cursor_rows:
+            cursor = cursor_rows[0]
+            total = int(cursor.get("TOTAL") or cursor.get("total") or (start + len(page)))
+            page_size = int(cursor.get("PAGESIZE") or cursor.get("pagesize") or len(page))
+            next_start = start + (page_size if page_size > 0 else len(page))
+            return page, next_start, next_start >= total
+
+        next_start = start + len(page)
+        return page, next_start, len(page) < page_limit
+
+    def fetch_public_recent_trades(
+        self,
+        instrument: Instrument,
+        *,
+        max_pages: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Return all currently available public futures trades for one contract."""
+
+        if max_pages <= 0:
+            raise ValueError("max_pages must be > 0")
+        rows: list[dict[str, Any]] = []
+        start = 0
+        for _ in range(max_pages):
+            page, next_start, done = self.fetch_public_recent_trade_page(
+                instrument,
+                start=start,
+            )
+            rows.extend(page)
+            if done:
+                return rows
+            if next_start <= start:
+                raise MoexAnalyticsError(
+                    f"MOEX public trades pagination stalled at start={start}"
+                )
+            start = next_start
+        raise MoexAnalyticsError(
+            f"MOEX public trades pagination exceeded safe max_pages={max_pages}"
         )
 
     def fetch_futoi(
