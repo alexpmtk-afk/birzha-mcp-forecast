@@ -271,15 +271,13 @@ class MoexAnalyticsClient:
         if not page:
             return [], start, True
 
+        next_start = start + len(page)
         cursor_rows = self._table(payload, "trades.cursor")
         if cursor_rows:
             cursor = cursor_rows[0]
-            total = int(cursor.get("TOTAL") or cursor.get("total") or (start + len(page)))
-            page_size = int(cursor.get("PAGESIZE") or cursor.get("pagesize") or len(page))
-            next_start = start + (page_size if page_size > 0 else len(page))
+            total = int(cursor.get("TOTAL") or cursor.get("total") or next_start)
             return page, next_start, next_start >= total
 
-        next_start = start + len(page)
         return page, next_start, len(page) < page_limit
 
     def fetch_public_recent_trades(

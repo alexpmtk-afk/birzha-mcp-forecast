@@ -22,7 +22,7 @@ FLOW_VERIFICATION_VERSION = "FLOW_V1"
 PUBLIC_TRADES_RAW_DATASET = "PUBLIC_TRADES_RAW"
 PUBLIC_TRADES_CHECKPOINT_DATASET = "PUBLIC_TRADES_CHECKPOINT"
 PUBLIC_TRADES_RAW_SOURCE = "MOEX_ISS_PUBLIC_TRADES_RAW"
-PUBLIC_TRADES_MAX_PAGES_PER_RUN = 500
+PUBLIC_TRADES_PAGES_PER_RUN = 2
 
 
 def _verification_dataset(dataset: str) -> str:
@@ -96,7 +96,8 @@ class HistoricalFlowDataService:
         pages_fetched = 0
         raw_trades_fetched = 0
 
-        for _ in range(PUBLIC_TRADES_MAX_PAGES_PER_RUN):
+        complete = False
+        for _ in range(PUBLIC_TRADES_PAGES_PER_RUN):
             page, next_start, done = self.analytics.fetch_public_recent_trade_page(
                 instrument,
                 start=start,
@@ -124,16 +125,12 @@ class HistoricalFlowDataService:
                 start = next_start
 
             if done:
+                complete = True
                 break
             if not page and next_start == start:
                 raise RuntimeError(
                     f"public trades pagination stalled at start={start}"
                 )
-        else:
-            raise RuntimeError(
-                "public trades capture exceeded safe page budget "
-                f"{PUBLIC_TRADES_MAX_PAGES_PER_RUN}"
-            )
 
         raw_rows = self.store.read_rows(
             PUBLIC_TRADES_RAW_DATASET,
@@ -141,13 +138,16 @@ class HistoricalFlowDataService:
             capture_date,
             capture_date,
         )
-        derived = aggregate_public_futures_trades(raw_rows)
-        written = self.store.upsert_rows(
-            "TRADESTATS",
-            instrument.secid,
-            derived,
-            PUBLIC_TRADESTATS_SOURCE,
-        )
+        derived: list[dict[str, object]] = []
+        written = 0
+        if complete:
+            derived = aggregate_public_futures_trades(raw_rows)
+            written = self.store.upsert_rows(
+                "TRADESTATS",
+                instrument.secid,
+                derived,
+                PUBLIC_TRADESTATS_SOURCE,
+            )
         trade_dates = sorted(
             {
                 str(row.get("tradedate") or "")[:10]
@@ -160,6 +160,7 @@ class HistoricalFlowDataService:
             "secid": instrument.secid,
             "source": PUBLIC_TRADESTATS_SOURCE,
             "capture_date": capture_date,
+            "complete": complete,
             "resume_start": resume_start,
             "next_start": start,
             "pages_fetched": pages_fetched,

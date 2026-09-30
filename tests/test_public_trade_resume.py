@@ -129,3 +129,61 @@ def test_raw_public_trade_replay_does_not_duplicate_rows() -> None:
     stored = store.read_rows(PUBLIC_TRADES_RAW_DATASET, "BRV6", day, day)
     assert len(stored) == 2
     assert {row["RECNO"] for row in stored} == {1, 2}
+
+
+class _ThreePageAnalytics:
+    def __init__(self):
+        self.starts: list[int] = []
+
+    def fetch_public_recent_trade_page(self, instrument, *, start=0):
+        assert instrument.secid == "BRV6"
+        self.starts.append(start)
+        if start == 0:
+            return [
+                _trade(10, "11:00:01", "B", 1, 107.10),
+                _trade(11, "11:01:01", "S", 2, 107.20),
+            ], 2, False
+        if start == 2:
+            return [
+                _trade(12, "11:02:01", "B", 3, 107.30),
+                _trade(13, "11:03:01", "S", 4, 107.40),
+            ], 4, False
+        if start == 4:
+            return [
+                _trade(14, "11:04:01", "B", 5, 107.50),
+            ], 5, True
+        raise AssertionError(f"unexpected start={start}")
+
+
+def test_public_trade_capture_finishes_in_short_checkpointed_workers() -> None:
+    store = DuckDBHistoricalFlowStore(":memory:")
+    analytics = _ThreePageAnalytics()
+    service = HistoricalFlowDataService(
+        market_data=_Market(),
+        analytics=analytics,
+        store=store,
+    )
+
+    first = service.capture_public_recent_tradestats("BR")
+
+    assert first["complete"] is False
+    assert first["resume_start"] == 0
+    assert first["next_start"] == 4
+    assert first["pages_fetched"] == 2
+    assert first["raw_trades_fetched"] == 4
+    assert first["raw_trades_total"] == 4
+    assert first["derived_5m_rows"] == 0
+    assert first["rows_written"] == 0
+    assert analytics.starts == [0, 2]
+
+    second = service.capture_public_recent_tradestats("BR")
+
+    assert second["complete"] is True
+    assert second["resume_start"] == 4
+    assert second["next_start"] == 5
+    assert second["pages_fetched"] == 1
+    assert second["raw_trades_fetched"] == 1
+    assert second["raw_trades_total"] == 5
+    assert second["derived_5m_rows"] == 1
+    assert second["rows_written"] == 1
+    assert analytics.starts == [0, 2, 4]
