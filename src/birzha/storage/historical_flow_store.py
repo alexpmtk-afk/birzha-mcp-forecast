@@ -111,10 +111,12 @@ def _row_key(row: dict[str, object], payload: str) -> str:
     parts=[
         str(_first(row,"tradedate","TRADEDATE") or ""),
         str(_first(row,"tradetime","TRADETIME","systime","SYSTIME") or ""),
+        str(_first(row,"recno","RECNO") or ""),
+        str(_first(row,"tradeno","TRADENO") or ""),
         str(_first(row,"seqnum","SEQNUM") or ""),
         str(_first(row,"clgroup","CLGROUP") or ""),
     ]
     identity="|".join(parts)
-    if identity == "|||":
+    if identity == "|||||":
         identity=payload
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
