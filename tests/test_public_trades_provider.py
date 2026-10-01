@@ -28,6 +28,16 @@ EQUITY_INSTRUMENT = Instrument(
     root_symbol="SBER",
 )
 
+GOLD_INSTRUMENT = Instrument(
+    symbol="GOLD",
+    secid="GDZ6",
+    board="RFUD",
+    engine="futures",
+    market="forts",
+    asset_class="future",
+    root_symbol="GOLD",
+)
+
 
 def test_public_recent_trades_uses_public_iss_and_start_pagination() -> None:
     client = object.__new__(MoexAnalyticsClient)
@@ -233,3 +243,39 @@ def test_public_equity_trade_page_uses_equity_fields() -> None:
     assert done is True
     assert page[0]["BUYSELL"] == "B"
     assert page[0]["VALUE"] == 3155.0
+
+
+def test_gold_public_trade_page_uses_smaller_default_page() -> None:
+    client = object.__new__(MoexAnalyticsClient)
+
+    def fake_request(*, base, path, params, authenticated_policy):
+        assert base == ISS_BASE
+        assert path.endswith("/GDZ6/trades.json")
+        assert authenticated_policy is False
+        assert params["limit"] == 100
+        payload = {
+            "trades": {
+                "columns": ["RECNO", "TRADEDATE", "TRADETIME"],
+                "data": [
+                    [i, "2026-10-01", "10:00:00"]
+                    for i in range(100)
+                ],
+            },
+            "trades.cursor": {
+                "columns": ["INDEX", "TOTAL", "PAGESIZE"],
+                "data": [[0, 250, 100]],
+            },
+        }
+        return AnalyticsResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+    client._request = fake_request  # type: ignore[method-assign,attr-defined]
+
+    page, next_start, done = client.fetch_public_recent_trade_page(GOLD_INSTRUMENT)
+
+    assert len(page) == 100
+    assert next_start == 100
+    assert done is False
