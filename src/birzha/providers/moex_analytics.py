@@ -24,6 +24,7 @@ ISS_BASE = "https://iss.moex.com/iss"
 APIM_BASE = "https://apim.moex.com/iss"
 FUTOI_SECURITY_CODES = {"GOLD": "GD"}
 PUBLIC_TRADE_PAGE_LIMIT = 500
+PUBLIC_TRADE_READ_TIMEOUT_SECONDS = 60.0
 PUBLIC_TRADE_PAGE_LIMIT_BY_ROOT = {"GOLD": 100}
 PUBLIC_TRADE_COLUMNS = (
     "RECNO",
@@ -110,8 +111,13 @@ class MoexAnalyticsClient:
         if self._token and base == APIM_BASE:
             headers["Authorization"] = f"Bearer {self._token}"
         req = Request(url, headers=headers)
+        timeout_seconds = (
+            max(self._timeout_seconds, PUBLIC_TRADE_READ_TIMEOUT_SECONDS)
+            if path.endswith("/trades.json")
+            else self._timeout_seconds
+        )
         try:
-            with self._opener(req, timeout=self._timeout_seconds) as response:
+            with self._opener(req, timeout=timeout_seconds) as response:
                 return AnalyticsResponse(
                     status_code=int(getattr(response, "status", 200)),
                     headers={str(k): str(v) for k, v in response.headers.items()},
