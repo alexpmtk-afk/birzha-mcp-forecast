@@ -16,6 +16,7 @@ from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
 from birzha.domain.market import Instrument
 from birzha.providers.moex_analytics import MoexAnalyticsClient, MoexAnalyticsError
+from birzha.upstream.safety import UpstreamRateLimited, UpstreamRequestBudgetExceeded
 
 
 MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
@@ -99,7 +100,7 @@ class MarketFlowService:
                 if self.historical is not None
                 else self.analytics.fetch_tradestats(instrument, from_date=start.isoformat(), till_date=till.isoformat())
             )
-        except (MoexAnalyticsError, JSONDecodeError, TimeoutError) as exc:
+        except (MoexAnalyticsError, JSONDecodeError, TimeoutError, UpstreamRateLimited, UpstreamRequestBudgetExceeded) as exc:
             trade_rows = []
             warnings.append(
                 f"ALGOPACK_TRADESTATS_UNAVAILABLE:{type(exc).__name__}:{exc}"
@@ -111,7 +112,7 @@ class MarketFlowService:
                 if self.historical is not None
                 else self.analytics.fetch_futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
             )
-        except (MoexAnalyticsError, JSONDecodeError, TimeoutError) as exc:
+        except (MoexAnalyticsError, JSONDecodeError, TimeoutError, UpstreamRateLimited, UpstreamRequestBudgetExceeded) as exc:
             futoi_rows = []
             warnings.append(f"FUTOI_UNAVAILABLE:{type(exc).__name__}:{exc}")
 
