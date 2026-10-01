@@ -245,7 +245,7 @@ def test_public_equity_trade_page_uses_equity_fields() -> None:
     assert page[0]["VALUE"] == 3155.0
 
 
-def test_gold_public_trade_page_uses_smaller_default_page() -> None:
+def test_gold_public_trade_page_bootstraps_small_tail() -> None:
     client = object.__new__(MoexAnalyticsClient)
 
     def fake_request(*, base, path, params, authenticated_policy):
@@ -277,8 +277,8 @@ def test_gold_public_trade_page_uses_smaller_default_page() -> None:
     page, next_start, done = client.fetch_public_recent_trade_page(GOLD_INSTRUMENT)
 
     assert len(page) == 100
-    assert next_start == 100
-    assert done is False
+    assert next_start == 99
+    assert done is True
 
 
 def test_gold_bootstrap_reads_current_tail_by_recno() -> None:
