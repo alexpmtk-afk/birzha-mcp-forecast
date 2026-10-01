@@ -83,6 +83,36 @@ class MarketFlowService:
 
         if lookback_days <= 0:
             raise ValueError("lookback_days must be > 0")
+        if instrument.asset_class == "index":
+            default_till = datetime.now(MOEX_TIMEZONE).date()
+            till = date.fromisoformat(till_date) if till_date else default_till
+            start = date.fromisoformat(from_date) if from_date else till - timedelta(days=lookback_days)
+            if start > till:
+                raise ValueError("from_date must not be after till_date")
+            return MarketFlowSnapshot(
+                symbol=instrument.symbol,
+                secid=instrument.secid,
+                from_date=start.isoformat(),
+                till_date=till.isoformat(),
+                as_of=None,
+                source="NOT_APPLICABLE_FOR_INDEX",
+                intervals=0,
+                buy_volume=None,
+                sell_volume=None,
+                volume_delta=None,
+                volume_delta_ratio=None,
+                buy_value=None,
+                sell_value=None,
+                value_delta=None,
+                price_change_pct=None,
+                algopack_oi_open=None,
+                algopack_oi_close=None,
+                algopack_oi_change=None,
+                individuals=None,
+                legal_entities=None,
+                data_quality="PASS",
+                warnings=(),
+            )
         cutoff = _parse_timestamp(cutoff_at) if cutoff_at else None
         if cutoff_at and cutoff is None:
             raise ValueError("cutoff_at must be a parseable exchange timestamp")
