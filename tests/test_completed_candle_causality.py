@@ -46,6 +46,28 @@ def test_closed_native_candle_remains_completed() -> None:
     assert normalized.completed is True
 
 
+
+def test_h1_provider_partial_end_does_not_make_forming_bar_complete() -> None:
+    now = datetime(2026, 9, 27, 18, 52, tzinfo=MOSCOW)
+    candle = Candle(
+        open=100.0,
+        close=101.0,
+        high=102.0,
+        low=99.0,
+        value=1000.0,
+        volume=10.0,
+        begin="2026-09-27 18:00:00",
+        end="2026-09-27 18:37:21",
+        completed=True,
+    )
+    normalized = _normalize_completion(
+        candle,
+        timeframe="H1",
+        now=now,
+    )
+    assert normalized.completed is False
+
+
 def test_current_day_d1_candle_fails_closed_even_when_exchange_end_is_in_past() -> None:
     now = datetime(2026, 9, 15, 20, 40, tzinfo=MOSCOW)
     normalized = _normalize_completion(
