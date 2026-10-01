@@ -171,3 +171,77 @@ def test_market_flow_keeps_persisted_trade_analysis_when_optional_futoi_is_unava
     assert flow.data_quality == "DEGRADED"
     assert any(item.startswith("FUTOI_UNAVAILABLE:UpstreamRateLimited:") for item in flow.warnings)
     assert "FUTOI_EMPTY" in flow.warnings
+
+
+EQUITY_INSTRUMENT = Instrument(
+    symbol="SBER",
+    secid="SBER",
+    board="TQBR",
+    engine="stock",
+    market="shares",
+    asset_class="equity",
+    root_symbol="SBER",
+)
+
+
+@dataclass
+class FakeEquityMarketData:
+    def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
+        assert symbol == "SBER"
+        assert as_of == date(2026, 10, 1)
+        return EQUITY_INSTRUMENT
+
+
+@dataclass
+class FakeEquityHistorical:
+    def tradestats(self, instrument: Instrument, *, from_date: str, till_date: str):
+        assert instrument is EQUITY_INSTRUMENT
+        return [
+            {
+                "tradedate": "2026-10-01",
+                "tradetime": "10:05:00",
+                "pr_open": 315.0,
+                "pr_close": 315.5,
+                "vol_b": 100,
+                "vol_s": 60,
+                "val_b": 31_500.0,
+                "val_s": 18_900.0,
+                "_source": PUBLIC_TRADESTATS_SOURCE,
+            },
+            {
+                "tradedate": "2026-10-01",
+                "tradetime": "10:10:00",
+                "pr_open": 315.5,
+                "pr_close": 316.0,
+                "vol_b": 80,
+                "vol_s": 40,
+                "val_b": 25_240.0,
+                "val_s": 12_640.0,
+                "_source": PUBLIC_TRADESTATS_SOURCE,
+            },
+        ]
+
+    def futoi(self, instrument: Instrument, *, from_date: str, till_date: str):
+        raise AssertionError("FUTOI must not be requested for equities")
+
+
+def test_equity_market_flow_uses_public_trades_without_futoi() -> None:
+    service = MarketFlowService(
+        market_data=FakeEquityMarketData(),
+        analytics=FakeAnalytics(),
+        historical=FakeEquityHistorical(),
+    )  # type: ignore[arg-type]
+
+    flow = service.build("SBER", from_date="2026-10-01", till_date="2026-10-01")
+
+    assert flow.intervals == 2
+    assert flow.buy_volume == 180.0
+    assert flow.sell_volume == 100.0
+    assert flow.volume_delta == 80.0
+    assert flow.value_delta == 25_200.0
+    assert flow.price_change_pct == round((316.0 / 315.0 - 1.0) * 100.0, 6)
+    assert flow.source == "MOEX_ISS_PUBLIC_TRADES_DERIVED"
+    assert flow.individuals is None
+    assert flow.legal_entities is None
+    assert flow.data_quality == "PASS"
+    assert flow.warnings == ()
