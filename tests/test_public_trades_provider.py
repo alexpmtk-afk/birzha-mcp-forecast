@@ -252,18 +252,18 @@ def test_gold_public_trade_page_bootstraps_small_tail() -> None:
         assert base == ISS_BASE
         assert path.endswith("/GDZ6/trades.json")
         assert authenticated_policy is False
-        assert params["limit"] == 100
+        assert params["limit"] == 10
         payload = {
             "trades": {
                 "columns": ["RECNO", "TRADEDATE", "TRADETIME"],
                 "data": [
                     [i, "2026-10-01", "10:00:00"]
-                    for i in range(100)
+                    for i in range(10)
                 ],
             },
             "trades.cursor": {
                 "columns": ["INDEX", "TOTAL", "PAGESIZE"],
-                "data": [[0, 250, 100]],
+                "data": [[0, 250, 10]],
             },
         }
         return AnalyticsResponse(
@@ -276,8 +276,8 @@ def test_gold_public_trade_page_bootstraps_small_tail() -> None:
 
     page, next_start, done = client.fetch_public_recent_trade_page(GOLD_INSTRUMENT)
 
-    assert len(page) == 100
-    assert next_start == 99
+    assert len(page) == 10
+    assert next_start == 9
     assert done is True
 
 
@@ -290,7 +290,7 @@ def test_gold_bootstrap_reads_current_tail_by_recno() -> None:
         assert base == ISS_BASE
         assert path == "/engines/futures/markets/forts/securities/GDZ6/trades.json"
         assert authenticated_policy is False
-        assert params["limit"] == 100
+        assert params["limit"] == 10
         assert params["reversed"] == 1
         assert params["previous_session"] == 0
         assert "start" not in params
