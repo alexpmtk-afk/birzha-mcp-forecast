@@ -14,12 +14,15 @@ from birzha.application.historical_data import HistoricalDataService, _verificat
 from birzha.application.history_policy import require_persistent_price_timeframe
 from birzha.application.market_data import is_futures_root_symbol
 from birzha.application.market_mirror_sync import MarketMirrorSyncService
-from birzha.application.orchestrator import WorkflowOrchestrator
+from birzha.application.orchestrator import (
+    D1_ARCHIVE_REFRESH_WORKFLOW,
+    WorkflowOrchestrator,
+)
 from birzha.application.validation_readiness import (
     CORE_VALIDATION_SYMBOLS,
     ValidationDataReadinessService,
 )
-from birzha.domain.orchestration import WorkflowAction, WorkflowStatus
+from birzha.domain.orchestration import WorkflowAction, WorkflowRun, WorkflowStatus
 
 
 SAFE_UNATTENDED_KINDS = frozenset(
@@ -43,6 +46,40 @@ class OrchestrationWorker:
     mirror: MarketMirrorSyncService | None = None
     require_market_mirror: bool = False
     lease_seconds: int = DEFAULT_WORKER_LEASE_SECONDS
+
+    def ensure_next_d1_archive_refresh(
+        self,
+        *,
+        archive_start: str,
+        archive_end: str,
+        source_sha: str,
+    ) -> tuple[WorkflowRun, bool]:
+        """Resume the oldest active archive before opening a newer daily range.
+
+        Mirror commits replace the full Sheets snapshot. Serializing archive
+        ranges prevents a delayed older workflow from publishing after a newer
+        snapshot and rolling the human-facing mirror backward.
+        """
+        active_archives = [
+            run
+            for run in self.orchestrator.store.list_workflows(
+                active_only=True,
+                limit=100,
+            )
+            if run.kind == D1_ARCHIVE_REFRESH_WORKFLOW
+        ]
+        if active_archives:
+            oldest = min(
+                active_archives,
+                key=lambda run: (run.created_at, run.workflow_id),
+            )
+            return oldest, False
+
+        return self.orchestrator.start_d1_archive_refresh(
+            archive_start=archive_start,
+            archive_end=archive_end,
+            source_sha=source_sha,
+        )
 
     def run_next_active(self, *, worker_id: str) -> dict[str, object]:
         active = self.orchestrator.store.list_workflows(active_only=True, limit=100)

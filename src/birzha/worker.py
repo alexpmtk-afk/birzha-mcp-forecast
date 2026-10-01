@@ -161,12 +161,13 @@ async def healthz(_: Request) -> JSONResponse:
 
 async def tick(_: Request) -> JSONResponse:
     worker_id = f"timer-{uuid4().hex}"
-    archive_end = latest_safe_d1_calendar_date()
-    archive_run, created = _orchestrator.start_d1_archive_refresh(
+    latest_safe_archive_end = latest_safe_d1_calendar_date()
+    archive_run, created = _worker.ensure_next_d1_archive_refresh(
         archive_start=D1_ARCHIVE_START,
-        archive_end=archive_end,
+        archive_end=latest_safe_archive_end,
         source_sha=settings.source_sha or "",
     )
+    archive_end = str(archive_run.metadata.get("archive_end") or latest_safe_archive_end)
 
     if archive_run.status == WorkflowStatus.FAILED:
         return JSONResponse(
