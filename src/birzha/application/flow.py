@@ -106,15 +106,17 @@ class MarketFlowService:
                 f"ALGOPACK_TRADESTATS_UNAVAILABLE:{type(exc).__name__}:{exc}"
             )
 
-        try:
-            futoi_rows = (
-                self.historical.futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
-                if self.historical is not None
-                else self.analytics.fetch_futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
-            )
-        except (MoexAnalyticsError, JSONDecodeError, TimeoutError, UpstreamRateLimited, UpstreamRequestBudgetExceeded) as exc:
-            futoi_rows = []
-            warnings.append(f"FUTOI_UNAVAILABLE:{type(exc).__name__}:{exc}")
+        futoi_rows: list[dict[str, Any]] = []
+        if instrument.asset_class == "future":
+            try:
+                futoi_rows = (
+                    self.historical.futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
+                    if self.historical is not None
+                    else self.analytics.fetch_futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
+                )
+            except (MoexAnalyticsError, JSONDecodeError, TimeoutError, UpstreamRateLimited, UpstreamRequestBudgetExceeded) as exc:
+                futoi_rows = []
+                warnings.append(f"FUTOI_UNAVAILABLE:{type(exc).__name__}:{exc}")
 
         if cutoff is not None:
             trade_rows = _causal_rows(trade_rows, cutoff)
@@ -126,7 +128,7 @@ class MarketFlowService:
                 if bool(getattr(self.analytics, "authenticated", True))
                 else "PUBLIC_TRADESTATS_CAPTURE_EMPTY"
             )
-        if not futoi_rows:
+        if instrument.asset_class == "future" and not futoi_rows:
             warnings.append("FUTOI_EMPTY")
 
         buy_volume = _sum_field(trade_rows, "vol_b")
@@ -169,7 +171,11 @@ class MarketFlowService:
             for row in trade_rows
         )
         if public_trade_rows:
-            source = "MOEX_ISS_PUBLIC_TRADES_DERIVED+FUTOI"
+            source = (
+                "MOEX_ISS_PUBLIC_TRADES_DERIVED+FUTOI"
+                if instrument.asset_class == "future"
+                else "MOEX_ISS_PUBLIC_TRADES_DERIVED"
+            )
         elif trade_rows:
             source = "MOEX_ALGOPACK+FUTOI"
         else:
