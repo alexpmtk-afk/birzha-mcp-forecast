@@ -279,3 +279,82 @@ def test_gold_public_trade_page_uses_smaller_default_page() -> None:
     assert len(page) == 100
     assert next_start == 100
     assert done is False
+
+
+def test_gold_bootstrap_reads_current_tail_by_recno() -> None:
+    client = object.__new__(MoexAnalyticsClient)
+    seen: dict[str, object] = {}
+
+    def fake_request(*, base, path, params, authenticated_policy):
+        seen.update(params)
+        assert base == ISS_BASE
+        assert path == "/engines/futures/markets/forts/securities/GDZ6/trades.json"
+        assert authenticated_policy is False
+        assert params["limit"] == 100
+        assert params["reversed"] == 1
+        assert params["previous_session"] == 0
+        assert "start" not in params
+        assert "recno" not in params
+        payload = {
+            "trades": {
+                "columns": ["RECNO", "TRADENO", "TRADEDATE", "TRADETIME"],
+                "data": [
+                    [905, 1905, "2026-10-01", "18:00:05"],
+                    [904, 1904, "2026-10-01", "18:00:04"],
+                    [903, 1903, "2026-10-01", "18:00:03"],
+                ],
+            }
+        }
+        return AnalyticsResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+    client._request = fake_request  # type: ignore[method-assign,attr-defined]
+
+    page, next_start, done = client.fetch_public_recent_trade_page(GOLD_INSTRUMENT)
+
+    assert len(page) == 3
+    assert next_start == 905
+    assert done is True
+    assert seen["reversed"] == 1
+
+
+def test_gold_incremental_reads_only_recno_after_checkpoint() -> None:
+    client = object.__new__(MoexAnalyticsClient)
+
+    def fake_request(*, base, path, params, authenticated_policy):
+        assert base == ISS_BASE
+        assert path == "/engines/futures/markets/forts/securities/GDZ6/trades.json"
+        assert authenticated_policy is False
+        assert params["recno"] == 905
+        assert params["reversed"] == 0
+        assert params["previous_session"] == 0
+        assert "start" not in params
+        payload = {
+            "trades": {
+                "columns": ["RECNO", "TRADENO", "TRADEDATE", "TRADETIME"],
+                "data": [
+                    [905, 1905, "2026-10-01", "18:00:05"],
+                    [906, 1906, "2026-10-01", "18:00:06"],
+                    [907, 1907, "2026-10-01", "18:00:07"],
+                ],
+            }
+        }
+        return AnalyticsResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+    client._request = fake_request  # type: ignore[method-assign,attr-defined]
+
+    page, next_start, done = client.fetch_public_recent_trade_page(
+        GOLD_INSTRUMENT,
+        start=905,
+    )
+
+    assert [row["RECNO"] for row in page] == [906, 907]
+    assert next_start == 907
+    assert done is True
