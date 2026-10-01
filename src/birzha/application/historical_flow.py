@@ -138,16 +138,13 @@ class HistoricalFlowDataService:
             capture_date,
             capture_date,
         )
-        derived: list[dict[str, object]] = []
-        written = 0
-        if complete:
-            derived = aggregate_public_futures_trades(raw_rows)
-            written = self.store.upsert_rows(
-                "TRADESTATS",
-                instrument.secid,
-                derived,
-                PUBLIC_TRADESTATS_SOURCE,
-            )
+        derived = aggregate_public_futures_trades(raw_rows)
+        written = self.store.upsert_rows(
+            "TRADESTATS",
+            instrument.secid,
+            derived,
+            PUBLIC_TRADESTATS_SOURCE,
+        )
         trade_dates = sorted(
             {
                 str(row.get("tradedate") or "")[:10]
