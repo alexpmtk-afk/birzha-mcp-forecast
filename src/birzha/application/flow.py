@@ -10,7 +10,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService
-from birzha.application.public_tradestats import PUBLIC_TRADESTATS_SOURCE
+from birzha.application.public_tradestats import (
+    PUBLIC_LATEST_TRADESTATS_SOURCE,
+    PUBLIC_TRADESTATS_SOURCE,
+)
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
@@ -196,11 +199,21 @@ class MarketFlowService:
             assert parsed_as_of is not None and parsed_as_of <= cutoff
 
         quality = "PASS" if not warnings else "DEGRADED"
-        public_trade_rows = any(
+        latest_public_rows = any(
+            str(row.get("_source") or "") == PUBLIC_LATEST_TRADESTATS_SOURCE
+            for row in trade_rows
+        )
+        derived_public_rows = any(
             str(row.get("_source") or "") == PUBLIC_TRADESTATS_SOURCE
             for row in trade_rows
         )
-        if public_trade_rows:
+        if latest_public_rows:
+            source = (
+                "MOEX_ISS_PUBLIC_TRADESTATS_LATEST+FUTOI"
+                if instrument.asset_class == "future"
+                else "MOEX_ISS_PUBLIC_TRADESTATS_LATEST"
+            )
+        elif derived_public_rows:
             source = (
                 "MOEX_ISS_PUBLIC_TRADES_DERIVED+FUTOI"
                 if instrument.asset_class == "future"
