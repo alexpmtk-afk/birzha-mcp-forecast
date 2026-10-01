@@ -124,7 +124,7 @@ def test_public_recent_trades_retries_direct_read_timeout() -> None:
     def opener(request, timeout):
         nonlocal attempts
         attempts += 1
-        assert timeout == 20.0
+        assert timeout == 60.0
         if attempts == 1:
             raise TimeoutError("The read operation timed out")
         return _FakeHttpResponse(_two_trade_payload())
