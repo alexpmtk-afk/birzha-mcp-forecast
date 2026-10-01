@@ -150,8 +150,8 @@ def history_flow_sync(symbol: str, from_date: str, till_date: str) -> dict[str, 
 @mcp.tool(
     name="history.flow_capture_public_trades",
     description=(
-        "Capture all currently available public MOEX futures trades for one symbol, "
-        "derive TradeStats-compatible 5-minute buy/sell volume, price and open-interest rows, "
+        "Capture currently available public MOEX futures or equity trades for one symbol, "
+        "derive TradeStats-compatible 5-minute buy/sell volume and price rows with optional value/open interest, "
         "and persist them without claiming unavailable historical completeness."
     ),
 )

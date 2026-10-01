@@ -18,6 +18,16 @@ INSTRUMENT = Instrument(
     root_symbol="BR",
 )
 
+EQUITY_INSTRUMENT = Instrument(
+    symbol="SBER",
+    secid="SBER",
+    board="TQBR",
+    engine="stock",
+    market="shares",
+    asset_class="equity",
+    root_symbol="SBER",
+)
+
 
 def test_public_recent_trades_uses_public_iss_and_start_pagination() -> None:
     client = object.__new__(MoexAnalyticsClient)
@@ -175,3 +185,51 @@ def test_public_trade_page_checkpoint_uses_actual_rows_not_page_capacity() -> No
     assert len(page) == 250
     assert next_start == 750
     assert done is True
+
+
+def test_public_equity_trade_page_uses_equity_fields() -> None:
+    client = object.__new__(MoexAnalyticsClient)
+
+    def fake_request(*, base, path, params, authenticated_policy):
+        assert base == ISS_BASE
+        assert path.endswith("/SBER/trades.json")
+        assert authenticated_policy is False
+        assert params["trades.columns"] == (
+            "TRADENO,TRADEDATE,TRADETIME,PRICE,QUANTITY,VALUE,BUYSELL"
+        )
+        payload = {
+            "trades": {
+                "columns": [
+                    "TRADENO",
+                    "TRADEDATE",
+                    "TRADETIME",
+                    "PRICE",
+                    "QUANTITY",
+                    "VALUE",
+                    "BUYSELL",
+                ],
+                "data": [
+                    [1001, "2026-10-01", "10:00:01", 315.5, 10, 3155.0, "B"],
+                    [1002, "2026-10-01", "10:00:02", 315.6, 5, 1578.0, "S"],
+                ],
+            },
+            "trades.cursor": {
+                "columns": ["INDEX", "TOTAL", "PAGESIZE"],
+                "data": [[0, 2, 500]],
+            },
+        }
+        return AnalyticsResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=json.dumps(payload).encode("utf-8"),
+        )
+
+    client._request = fake_request  # type: ignore[method-assign,attr-defined]
+
+    page, next_start, done = client.fetch_public_recent_trade_page(EQUITY_INSTRUMENT)
+
+    assert len(page) == 2
+    assert next_start == 2
+    assert done is True
+    assert page[0]["BUYSELL"] == "B"
+    assert page[0]["VALUE"] == 3155.0

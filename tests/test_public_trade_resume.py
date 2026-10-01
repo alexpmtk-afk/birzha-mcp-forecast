@@ -172,8 +172,8 @@ def test_public_trade_capture_finishes_in_short_checkpointed_workers() -> None:
     assert first["pages_fetched"] == 2
     assert first["raw_trades_fetched"] == 4
     assert first["raw_trades_total"] == 4
-    assert first["derived_5m_rows"] == 0
-    assert first["rows_written"] == 0
+    assert first["derived_5m_rows"] == 1
+    assert first["rows_written"] == 1
     assert analytics.starts == [0, 2]
 
     second = service.capture_public_recent_tradestats("BR")
@@ -187,3 +187,71 @@ def test_public_trade_capture_finishes_in_short_checkpointed_workers() -> None:
     assert second["derived_5m_rows"] == 1
     assert second["rows_written"] == 1
     assert analytics.starts == [0, 2, 4]
+
+
+EQUITY_INSTRUMENT = Instrument(
+    symbol="SBER",
+    secid="SBER",
+    board="TQBR",
+    engine="stock",
+    market="shares",
+    asset_class="equity",
+    root_symbol="SBER",
+)
+
+
+class _EquityMarket:
+    def resolve(self, symbol: str):
+        assert symbol == "SBER"
+        return EQUITY_INSTRUMENT
+
+
+class _EquityOnePageAnalytics:
+    def fetch_public_recent_trade_page(self, instrument, *, start=0):
+        assert instrument is EQUITY_INSTRUMENT
+        assert start == 0
+        day = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+        return [
+            {
+                "TRADENO": 1,
+                "TRADEDATE": day,
+                "TRADETIME": "10:00:01",
+                "PRICE": 315.5,
+                "QUANTITY": 10,
+                "VALUE": 3155.0,
+                "BUYSELL": "B",
+            },
+            {
+                "TRADENO": 2,
+                "TRADEDATE": day,
+                "TRADETIME": "10:01:01",
+                "PRICE": 315.6,
+                "QUANTITY": 5,
+                "VALUE": 1578.0,
+                "BUYSELL": "S",
+            },
+        ], 2, True
+
+
+def test_public_equity_capture_derives_trade_stats_without_futoi() -> None:
+    store = DuckDBHistoricalFlowStore(":memory:")
+    service = HistoricalFlowDataService(
+        market_data=_EquityMarket(),
+        analytics=_EquityOnePageAnalytics(),
+        store=store,
+    )
+
+    result = service.capture_public_recent_tradestats("SBER")
+
+    assert result["complete"] is True
+    assert result["raw_trades_total"] == 2
+    assert result["derived_5m_rows"] == 1
+    day = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+    rows = store.read_rows("TRADESTATS", "SBER", day, day)
+    assert len(rows) == 1
+    assert rows[0]["vol_b"] == 10.0
+    assert rows[0]["vol_s"] == 5.0
+    assert rows[0]["val_b"] == 3155.0
+    assert rows[0]["val_s"] == 1578.0
+    assert rows[0]["oi_open"] is None
+    assert rows[0]["oi_close"] is None
