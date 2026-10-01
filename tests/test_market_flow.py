@@ -245,3 +245,53 @@ def test_equity_market_flow_uses_public_trades_without_futoi() -> None:
     assert flow.legal_entities is None
     assert flow.data_quality == "PASS"
     assert flow.warnings == ()
+
+
+INDEX_INSTRUMENT = Instrument(
+    symbol="IMOEX",
+    secid="IMOEX",
+    board="SNDX",
+    engine="stock",
+    market="index",
+    asset_class="index",
+    root_symbol="IMOEX",
+)
+
+
+@dataclass
+class FakeIndexMarketData:
+    def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
+        assert symbol == "IMOEX"
+        assert as_of == date(2026, 9, 29)
+        return INDEX_INSTRUMENT
+
+
+@dataclass
+class FailIfIndexAnalyticsUsed:
+    def fetch_tradestats(self, *args, **kwargs):
+        raise AssertionError("TradeStats must not be requested for an index")
+
+    def fetch_futoi(self, *args, **kwargs):
+        raise AssertionError("FUTOI must not be requested for an index")
+
+
+def test_index_market_flow_is_explicitly_not_applicable() -> None:
+    service = MarketFlowService(
+        market_data=FakeIndexMarketData(),
+        analytics=FailIfIndexAnalyticsUsed(),
+    )  # type: ignore[arg-type]
+
+    flow = service.build(
+        "IMOEX",
+        from_date="2026-09-29",
+        till_date="2026-09-29",
+    )
+
+    assert flow.source == "NOT_APPLICABLE_FOR_INDEX"
+    assert flow.intervals == 0
+    assert flow.buy_volume is None
+    assert flow.sell_volume is None
+    assert flow.individuals is None
+    assert flow.legal_entities is None
+    assert flow.data_quality == "PASS"
+    assert flow.warnings == ()
