@@ -127,7 +127,11 @@ class MarketSnapshotService:
         volume_profile = profile_from_candles(h1, bins=24)
         if volume_profile is not None:
             warnings.append("VOLUME_PROFILE:approximate_candle_proxy")
-        source = "MOEX_ISS+ALGOPACK+FUTOI" if flow_snapshot is not None else "MOEX_ISS"
+        source = (
+            "MOEX_ISS"
+            if flow_snapshot is None or flow_snapshot.source == "NOT_APPLICABLE_FOR_INDEX"
+            else "MOEX_ISS+ALGOPACK+FUTOI"
+        )
         return MarketSnapshot(
             symbol=symbol,
             secid=instrument.secid,
