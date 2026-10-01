@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from birzha.application.validation import WalkForwardValidator
+from birzha.providers.moex_analytics import MoexAnalyticsClient
 
 
 CASES = (
@@ -38,9 +39,47 @@ def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, obje
     return payload
 
 
+
+def _gold_public_tail_evidence(
+    validator: WalkForwardValidator,
+) -> dict[str, object]:
+    today = date.today()
+    instrument = validator.market_data.resolve("GOLD", as_of=today)
+    client = MoexAnalyticsClient(bearer_token="")
+    rows, checkpoint, complete = client.fetch_public_recent_trade_page(
+        instrument,
+        start=0,
+        page_limit=10,
+    )
+    if not rows:
+        raise RuntimeError(
+            "GOLD_PUBLIC_TAIL_FAIL: public ISS returned no delayed trades"
+        )
+    recnos = [
+        int(row.get("RECNO") or row.get("recno") or 0)
+        for row in rows
+    ]
+    if checkpoint <= 0 or max(recnos, default=0) != checkpoint:
+        raise RuntimeError(
+            "GOLD_PUBLIC_TAIL_FAIL: invalid RECNO checkpoint"
+        )
+    evidence = {
+        "date": today.isoformat(),
+        "secid": instrument.secid,
+        "rows": len(rows),
+        "checkpoint_recno": checkpoint,
+        "complete": complete,
+    }
+    print(
+        "GOLD_PUBLIC_TAIL=PASS "
+        f"secid={instrument.secid} rows={len(rows)} recno={checkpoint}"
+    )
+    return evidence
+
 def main() -> int:
     validator = WalkForwardValidator.default()
     gold_resolution = _gold_resolution_evidence(validator)
+    gold_public_tail = _gold_public_tail_evidence(validator)
 
     reports: list[dict[str, object]] = []
     for case in CASES:
@@ -54,6 +93,7 @@ def main() -> int:
         "purpose": "minimal real-network causal walk-forward end-to-end evidence",
         "quality_acceptance": False,
         "gold_resolution": gold_resolution,
+        "gold_public_tail": gold_public_tail,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")

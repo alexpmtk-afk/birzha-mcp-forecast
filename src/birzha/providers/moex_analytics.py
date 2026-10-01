@@ -272,6 +272,63 @@ class MoexAnalyticsClient:
         if effective_page_limit <= 0:
             raise ValueError("page_limit must be > 0")
 
+        root = (instrument.root_symbol or instrument.symbol).strip().upper()
+        if instrument.asset_class == "future" and root == "GOLD":
+            path = (
+                f"/engines/{instrument.engine}/markets/{instrument.market}/"
+                f"securities/{instrument.secid}/trades.json"
+            )
+            params: dict[str, object] = {
+                "iss.meta": "off",
+                "iss.only": "trades",
+                "trades.columns": ",".join(_public_trade_columns(instrument)),
+                "limit": effective_page_limit,
+                "previous_session": 0,
+            }
+            if start <= 0:
+                params["reversed"] = 1
+            else:
+                params["reversed"] = 0
+                params["recno"] = start
+
+            payload = self._request(
+                base=ISS_BASE,
+                path=path,
+                params=params,
+                authenticated_policy=False,
+            ).json()
+            page = self._table(payload, "trades")
+            if start > 0:
+                page = [
+                    row
+                    for row in page
+                    if int(row.get("RECNO") or row.get("recno") or 0) > start
+                ]
+            if not page:
+                return [], start, True
+
+            recnos = [
+                int(row.get("RECNO") or row.get("recno") or 0)
+                for row in page
+                if row.get("RECNO") is not None or row.get("recno") is not None
+            ]
+            if not recnos:
+                raise MoexAnalyticsError(
+                    "GOLD public trades response is missing RECNO"
+                )
+            next_start = max(recnos)
+            if next_start <= start:
+                raise MoexAnalyticsError(
+                    f"GOLD public trades RECNO stalled at {start}"
+                )
+
+            # A reversed bootstrap deliberately starts at the current tail.
+            # From that point onward the durable checkpoint collects only new
+            # trades; a full page on incremental reads means another short
+            # worker should continue from the saved RECNO.
+            done = start <= 0 or len(page) < effective_page_limit
+            return page, next_start, done
+
         path = (
             f"/engines/{instrument.engine}/markets/{instrument.market}/boards/"
             f"{instrument.board}/securities/{instrument.secid}/trades.json"
