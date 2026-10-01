@@ -12,7 +12,8 @@ from birzha.application.public_tradestats import (
     aggregate_public_futures_trades,
 )
 from birzha.domain.market import Instrument
-from birzha.providers.moex_analytics import MoexAnalyticsClient
+from birzha.providers.moex_analytics import MoexAnalyticsClient, MoexAnalyticsError
+from birzha.upstream.safety import UpstreamRateLimited, UpstreamRequestBudgetExceeded
 from birzha.storage.historical_flow_store import HistoricalFlowStore
 
 
@@ -23,6 +24,8 @@ PUBLIC_TRADES_RAW_DATASET = "PUBLIC_TRADES_RAW"
 PUBLIC_TRADES_CHECKPOINT_DATASET = "PUBLIC_TRADES_CHECKPOINT"
 PUBLIC_TRADES_RAW_SOURCE = "MOEX_ISS_PUBLIC_TRADES_RAW"
 PUBLIC_TRADES_PAGES_PER_RUN = 2
+PUBLIC_LATEST_TRADESTATS_ROOTS = frozenset({"GOLD"})
+PUBLIC_LATEST_TRADESTATS_SOURCE = "MOEX_ISS_PUBLIC_TRADESTATS_LATEST"
 
 
 def _verification_dataset(dataset: str) -> str:
@@ -91,6 +94,60 @@ class HistoricalFlowDataService:
             raise ValueError("public raw-trade capture is supported for futures and equities only")
 
         capture_date = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+
+        root = (instrument.root_symbol or instrument.symbol).strip().upper()
+        if (
+            root in PUBLIC_LATEST_TRADESTATS_ROOTS
+            and not bool(getattr(self.analytics, "authenticated", True))
+        ):
+            try:
+                latest_rows = self.analytics.fetch_tradestats(
+                    instrument,
+                    from_date=capture_date,
+                    till_date=capture_date,
+                    latest=True,
+                )
+            except (
+                MoexAnalyticsError,
+                TimeoutError,
+                UpstreamRateLimited,
+                UpstreamRequestBudgetExceeded,
+            ):
+                latest_rows = []
+            if latest_rows:
+                written = self.store.upsert_rows(
+                    "TRADESTATS",
+                    instrument.secid,
+                    latest_rows,
+                    PUBLIC_LATEST_TRADESTATS_SOURCE,
+                )
+                trade_dates = sorted(
+                    {
+                        str(row.get("tradedate") or row.get("TRADEDATE") or "")[:10]
+                        for row in latest_rows
+                        if row.get("tradedate") or row.get("TRADEDATE")
+                    }
+                )
+                return {
+                    "symbol": symbol,
+                    "secid": instrument.secid,
+                    "source": PUBLIC_LATEST_TRADESTATS_SOURCE,
+                    "capture_mode": "PUBLIC_ISS_LATEST_TRADESTATS",
+                    "capture_date": capture_date,
+                    "complete": True,
+                    "resume_start": 0,
+                    "next_start": 0,
+                    "pages_fetched": 0,
+                    "raw_trades_fetched": 0,
+                    "raw_trades_total": 0,
+                    "derived_5m_rows": len(latest_rows),
+                    "rows_written": written,
+                    "trade_dates": trade_dates,
+                    "value_fields": "FROM_PUBLIC_TRADESTATS",
+                    "historical_backfill": "NOT_AVAILABLE_FROM_PUBLIC_LATEST_TRADESTATS",
+                    "historical_range_marked_verified": False,
+                }
+
         resume_start = self._public_trade_checkpoint(instrument.secid, capture_date)
         start = resume_start
         pages_fetched = 0
