@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.public_tradestats import (
+    PUBLIC_LATEST_TRADESTATS_SOURCE,
     PUBLIC_TRADESTATS_SOURCE,
     aggregate_public_futures_trades,
 )
@@ -25,7 +26,6 @@ PUBLIC_TRADES_CHECKPOINT_DATASET = "PUBLIC_TRADES_CHECKPOINT"
 PUBLIC_TRADES_RAW_SOURCE = "MOEX_ISS_PUBLIC_TRADES_RAW"
 PUBLIC_TRADES_PAGES_PER_RUN = 2
 PUBLIC_LATEST_TRADESTATS_ROOTS = frozenset({"GOLD"})
-PUBLIC_LATEST_TRADESTATS_SOURCE = "MOEX_ISS_PUBLIC_TRADESTATS_LATEST"
 
 
 def _verification_dataset(dataset: str) -> str:
