@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from birzha.application.validation import WalkForwardValidator
+from birzha.providers.moex_analytics import MoexAnalyticsClient
 
 
 CASES = (
@@ -38,9 +39,38 @@ def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, obje
     return payload
 
 
+
+def _gold_public_latest_tradestats_evidence(
+    validator: WalkForwardValidator,
+) -> dict[str, object]:
+    today = date.today()
+    instrument = validator.market_data.resolve("GOLD", as_of=today)
+    client = MoexAnalyticsClient(bearer_token="")
+    rows = client.fetch_tradestats(
+        instrument,
+        from_date=today.isoformat(),
+        till_date=today.isoformat(),
+        latest=True,
+    )
+    if not rows:
+        raise RuntimeError(
+            "GOLD_PUBLIC_LATEST_TRADESTATS_FAIL: public ISS returned no current rows"
+        )
+    evidence = {
+        "date": today.isoformat(),
+        "secid": instrument.secid,
+        "rows": len(rows),
+    }
+    print(
+        "GOLD_PUBLIC_LATEST_TRADESTATS=PASS "
+        f"secid={instrument.secid} rows={len(rows)} date={today.isoformat()}"
+    )
+    return evidence
+
 def main() -> int:
     validator = WalkForwardValidator.default()
     gold_resolution = _gold_resolution_evidence(validator)
+    gold_public_latest = _gold_public_latest_tradestats_evidence(validator)
 
     reports: list[dict[str, object]] = []
     for case in CASES:
@@ -54,6 +84,7 @@ def main() -> int:
         "purpose": "minimal real-network causal walk-forward end-to-end evidence",
         "quality_acceptance": False,
         "gold_resolution": gold_resolution,
+        "gold_public_latest_tradestats": gold_public_latest,
         "reports": reports,
     }
     output = Path("artifacts/real_moex_validation.json")
