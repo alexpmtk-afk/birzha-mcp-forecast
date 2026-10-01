@@ -35,6 +35,15 @@ PUBLIC_TRADE_COLUMNS = (
     "BUYSELL",
     "OFFMARKETDEAL",
 )
+PUBLIC_EQUITY_TRADE_COLUMNS = (
+    "TRADENO",
+    "TRADEDATE",
+    "TRADETIME",
+    "PRICE",
+    "QUANTITY",
+    "VALUE",
+    "BUYSELL",
+)
 
 
 @dataclass(slots=True)
@@ -235,16 +244,16 @@ class MoexAnalyticsClient:
         start: int = 0,
         page_limit: int = PUBLIC_TRADE_PAGE_LIMIT,
     ) -> tuple[list[dict[str, Any]], int, bool]:
-        """Return one bounded public futures-trades page.
+        """Return one bounded public trades page for futures or equities.
 
         The caller owns checkpointing. This keeps a successful prefix durable:
         if a later ISS page times out, the next run can resume from the saved
         start offset instead of downloading the trading day from zero.
         """
 
-        if instrument.asset_class != "future":
+        if instrument.asset_class not in {"future", "equity"}:
             raise MoexAnalyticsError(
-                "Public raw-trade capture is currently configured for futures only"
+                "Public raw-trade capture is configured for futures and equities only"
             )
         if start < 0:
             raise ValueError("start must be >= 0")
@@ -261,7 +270,7 @@ class MoexAnalyticsClient:
             params={
                 "iss.meta": "off",
                 "iss.only": "trades",
-                "trades.columns": ",".join(PUBLIC_TRADE_COLUMNS),
+                "trades.columns": ",".join(_public_trade_columns(instrument)),
                 "limit": page_limit,
                 "start": start,
             },
@@ -286,7 +295,7 @@ class MoexAnalyticsClient:
         *,
         max_pages: int = 500,
     ) -> list[dict[str, Any]]:
-        """Return all currently available public futures trades for one contract."""
+        """Return all currently available public trades for one instrument."""
 
         if max_pages <= 0:
             raise ValueError("max_pages must be > 0")
@@ -367,6 +376,16 @@ class MoexAnalyticsClient:
             rows.extend(page)
             current_day += timedelta(days=1)
         return rows
+
+
+def _public_trade_columns(instrument: Instrument) -> tuple[str, ...]:
+    if instrument.asset_class == "future":
+        return PUBLIC_TRADE_COLUMNS
+    if instrument.asset_class == "equity":
+        return PUBLIC_EQUITY_TRADE_COLUMNS
+    raise MoexAnalyticsError(
+        f"Public raw trades are not configured for asset_class={instrument.asset_class!r}"
+    )
 
 
 def _futoi_security_code(instrument: Instrument) -> str:
