@@ -1,8 +1,8 @@
-"""Derive TradeStats-compatible five-minute rows from public MOEX futures trades.
+"""Derive TradeStats-compatible five-minute rows from public MOEX trades.
 
-The public futures trades feed exposes side, price, quantity and open interest
-for the current trading day. It does not expose TradeStats RUB value fields,
-so val_b/val_s intentionally remain NULL instead of being approximated.
+Public futures and equity trades expose side, price and quantity. Futures may
+also expose open interest; equities may expose trade value. Missing fields stay
+NULL instead of being fabricated.
 """
 
 from __future__ import annotations
@@ -53,6 +53,14 @@ def aggregate_public_futures_trades(
         first_oi = _first_number(ordered, "OPENPOSITION", "openposition")
         last_oi = _last_number(ordered, "OPENPOSITION", "openposition")
 
+        buy_value = _sum_optional(buy, "VALUE", "value")
+        sell_value = _sum_optional(sell, "VALUE", "value")
+        value_fields = (
+            "PUBLIC_TRADE_VALUE"
+            if buy_value is not None or sell_value is not None
+            else "UNAVAILABLE_IN_PUBLIC_TRADES"
+        )
+
         result.append(
             {
                 "tradedate": tradedate,
@@ -61,8 +69,8 @@ def aggregate_public_futures_trades(
                 "pr_close": last_price,
                 "vol_b": _sum_quantity(buy),
                 "vol_s": _sum_quantity(sell),
-                "val_b": None,
-                "val_s": None,
+                "val_b": buy_value,
+                "val_s": sell_value,
                 "oi_open": first_oi,
                 "oi_close": last_oi,
                 "trades_b": len(buy),
@@ -70,7 +78,7 @@ def aggregate_public_futures_trades(
                 "first_recno": _int(ordered[0], "RECNO", "recno"),
                 "last_recno": _int(ordered[-1], "RECNO", "recno"),
                 "_source": PUBLIC_TRADESTATS_SOURCE,
-                "_value_fields": "UNAVAILABLE_IN_PUBLIC_FUTURES_TRADES",
+                "_value_fields": value_fields,
             }
         )
     return result
@@ -87,6 +95,11 @@ def _trade_sort_key(row: dict[str, object]) -> tuple[str, str, int, int]:
 
 def _sum_quantity(rows: list[dict[str, object]]) -> float:
     return sum(value for row in rows if (value := _float(row, "QUANTITY", "quantity")) is not None)
+
+
+def _sum_optional(rows: list[dict[str, object]], *keys: str) -> float | None:
+    values = [value for row in rows if (value := _float(row, *keys)) is not None]
+    return sum(values) if values else None
 
 
 def _first_number(rows: list[dict[str, object]], *keys: str) -> float | None:
