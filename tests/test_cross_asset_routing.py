@@ -156,3 +156,50 @@ def test_direct_resolver_maps_real_moex_board_semantics_to_equity() -> None:
     assert instrument.engine == "stock"
     assert instrument.market == "shares"
     assert instrument.asset_class == "equity"
+
+
+class FakeIndexResponse:
+    def __init__(self, secid: str, board: str) -> None:
+        self.secid = secid
+        self.board = board
+
+    def json(self):
+        return {
+            "boards": {
+                "columns": [
+                    "secid", "boardid", "title", "market", "engine",
+                    "is_primary", "listed_from", "listed_till", "has_candles",
+                ],
+                "data": [[self.secid, self.board, "MOEX Index", "index", "stock", 1, None, None, 1]],
+            }
+        }
+
+
+class FakeIndexIssClient:
+    def __init__(self, secid: str, board: str) -> None:
+        self.secid = secid
+        self.board = board
+
+    def _request(self, path, params):
+        assert path == f"/securities/{self.secid}.json"
+        assert params["iss.only"] == "boards"
+        return FakeIndexResponse(self.secid, self.board)
+
+    @staticmethod
+    def _table(payload, name):
+        table = payload[name]
+        return [dict(zip(table["columns"], row, strict=False)) for row in table["data"]]
+
+
+def test_direct_resolver_maps_core_indices_from_official_board_semantics() -> None:
+    for symbol, board in (("IMOEX", "SNDX"), ("RTSI", "RTSI")):
+        resolver = MoexDirectInstrumentResolver(FakeIndexIssClient(symbol, board))  # type: ignore[arg-type]
+
+        instrument = resolver.resolve(symbol)
+
+        assert instrument is not None
+        assert instrument.secid == symbol
+        assert instrument.board == board
+        assert instrument.engine == "stock"
+        assert instrument.market == "index"
+        assert instrument.asset_class == "index"
