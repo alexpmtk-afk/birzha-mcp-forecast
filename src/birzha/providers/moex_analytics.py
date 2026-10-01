@@ -24,6 +24,7 @@ ISS_BASE = "https://iss.moex.com/iss"
 APIM_BASE = "https://apim.moex.com/iss"
 FUTOI_SECURITY_CODES = {"GOLD": "GD"}
 PUBLIC_TRADE_PAGE_LIMIT = 500
+PUBLIC_TRADE_PAGE_LIMIT_BY_ROOT = {"GOLD": 100}
 PUBLIC_TRADE_COLUMNS = (
     "RECNO",
     "TRADENO",
@@ -242,7 +243,7 @@ class MoexAnalyticsClient:
         instrument: Instrument,
         *,
         start: int = 0,
-        page_limit: int = PUBLIC_TRADE_PAGE_LIMIT,
+        page_limit: int | None = None,
     ) -> tuple[list[dict[str, Any]], int, bool]:
         """Return one bounded public trades page for futures or equities.
 
@@ -257,7 +258,12 @@ class MoexAnalyticsClient:
             )
         if start < 0:
             raise ValueError("start must be >= 0")
-        if page_limit <= 0:
+        effective_page_limit = (
+            _public_trade_page_limit(instrument)
+            if page_limit is None
+            else page_limit
+        )
+        if effective_page_limit <= 0:
             raise ValueError("page_limit must be > 0")
 
         path = (
@@ -271,7 +277,7 @@ class MoexAnalyticsClient:
                 "iss.meta": "off",
                 "iss.only": "trades",
                 "trades.columns": ",".join(_public_trade_columns(instrument)),
-                "limit": page_limit,
+                "limit": effective_page_limit,
                 "start": start,
             },
             authenticated_policy=False,
@@ -287,7 +293,7 @@ class MoexAnalyticsClient:
             total = int(cursor.get("TOTAL") or cursor.get("total") or next_start)
             return page, next_start, next_start >= total
 
-        return page, next_start, len(page) < page_limit
+        return page, next_start, len(page) < effective_page_limit
 
     def fetch_public_recent_trades(
         self,
@@ -376,6 +382,11 @@ class MoexAnalyticsClient:
             rows.extend(page)
             current_day += timedelta(days=1)
         return rows
+
+
+def _public_trade_page_limit(instrument: Instrument) -> int:
+    root = (instrument.root_symbol or instrument.symbol).strip().upper()
+    return PUBLIC_TRADE_PAGE_LIMIT_BY_ROOT.get(root, PUBLIC_TRADE_PAGE_LIMIT)
 
 
 def _public_trade_columns(instrument: Instrument) -> tuple[str, ...]:
