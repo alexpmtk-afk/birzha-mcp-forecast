@@ -76,7 +76,7 @@ class HistoricalFlowDataService:
         return self.store.read_rows(dataset, key, from_date, till_date)
 
     def capture_public_recent_tradestats(self, symbol: str) -> dict[str, object]:
-        """Capture public futures trades with durable page-by-page resume.
+        """Capture public futures or equity trades with durable page-by-page resume.
 
         Every successful ISS page is persisted before the next request and the
         next start offset is checkpointed in the same durable store. If a later
@@ -87,8 +87,8 @@ class HistoricalFlowDataService:
         if self.read_only:
             raise RuntimeError("read-only historical flow service cannot capture public trades")
         instrument = self.market_data.resolve(symbol)
-        if instrument.asset_class != "future":
-            raise ValueError("public raw-trade capture is currently supported for futures only")
+        if instrument.asset_class not in {"future", "equity"}:
+            raise ValueError("public raw-trade capture is supported for futures and equities only")
 
         capture_date = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
         resume_start = self._public_trade_checkpoint(instrument.secid, capture_date)
@@ -169,7 +169,7 @@ class HistoricalFlowDataService:
             "derived_5m_rows": len(derived),
             "rows_written": written,
             "trade_dates": trade_dates,
-            "value_fields": "UNAVAILABLE_IN_PUBLIC_FUTURES_TRADES",
+            "value_fields": "AVAILABLE_WHEN_EXPOSED_BY_PUBLIC_TRADES",
             "historical_backfill": "NOT_AVAILABLE_FROM_PUBLIC_RAW_TRADES",
             "historical_range_marked_verified": False,
         }
