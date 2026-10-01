@@ -172,8 +172,8 @@ def test_public_trade_capture_finishes_in_short_checkpointed_workers() -> None:
     assert first["pages_fetched"] == 2
     assert first["raw_trades_fetched"] == 4
     assert first["raw_trades_total"] == 4
-    assert first["derived_5m_rows"] == 0
-    assert first["rows_written"] == 0
+    assert first["derived_5m_rows"] == 1
+    assert first["rows_written"] == 1
     assert analytics.starts == [0, 2]
 
     second = service.capture_public_recent_tradestats("BR")
