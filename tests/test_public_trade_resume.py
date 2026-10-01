@@ -10,6 +10,7 @@ from birzha.application.historical_flow import (
     PUBLIC_TRADES_RAW_DATASET,
     PUBLIC_TRADES_RAW_SOURCE,
 )
+from birzha.application.public_tradestats import PUBLIC_LATEST_TRADESTATS_SOURCE
 from birzha.domain.market import Instrument
 from birzha.storage.historical_flow_store import DuckDBHistoricalFlowStore
 
@@ -255,3 +256,123 @@ def test_public_equity_capture_derives_trade_stats_without_futoi() -> None:
     assert rows[0]["val_s"] == 1578.0
     assert rows[0]["oi_open"] is None
     assert rows[0]["oi_close"] is None
+
+
+GOLD_INSTRUMENT = Instrument(
+    symbol="GOLD",
+    secid="GDZ6",
+    board="RFUD",
+    engine="futures",
+    market="forts",
+    asset_class="future",
+    root_symbol="GOLD",
+)
+
+
+class _GoldMarket:
+    def resolve(self, symbol: str):
+        assert symbol == "GOLD"
+        return GOLD_INSTRUMENT
+
+
+class _GoldLatestAnalytics:
+    authenticated = False
+
+    def __init__(self):
+        self.latest_calls: list[tuple[str, str, bool]] = []
+
+    def fetch_tradestats(self, instrument, *, from_date, till_date, latest=False):
+        assert instrument is GOLD_INSTRUMENT
+        self.latest_calls.append((from_date, till_date, latest))
+        return [
+            {
+                "tradedate": from_date,
+                "tradetime": "10:05:00",
+                "pr_open": 4200.0,
+                "pr_close": 4201.0,
+                "vol_b": 12.0,
+                "vol_s": 8.0,
+                "oi_open": 1000.0,
+                "oi_close": 1010.0,
+            },
+            {
+                "tradedate": from_date,
+                "tradetime": "10:10:00",
+                "pr_open": 4201.0,
+                "pr_close": 4202.0,
+                "vol_b": 10.0,
+                "vol_s": 9.0,
+                "oi_open": 1010.0,
+                "oi_close": 1012.0,
+            },
+        ]
+
+    def fetch_public_recent_trade_page(self, *args, **kwargs):
+        raise AssertionError("raw public trades fallback must not run when latest TradeStats is available")
+
+
+def test_gold_prefers_free_latest_tradestats_before_raw_trades() -> None:
+    store = DuckDBHistoricalFlowStore(":memory:")
+    analytics = _GoldLatestAnalytics()
+    service = HistoricalFlowDataService(
+        market_data=_GoldMarket(),
+        analytics=analytics,
+        store=store,
+    )
+
+    result = service.capture_public_recent_tradestats("GOLD")
+
+    assert result["complete"] is True
+    assert result["capture_mode"] == "PUBLIC_ISS_LATEST_TRADESTATS"
+    assert result["source"] == PUBLIC_LATEST_TRADESTATS_SOURCE
+    assert result["derived_5m_rows"] == 2
+    assert result["rows_written"] == 2
+    assert len(analytics.latest_calls) == 1
+    assert analytics.latest_calls[0][2] is True
+
+    day = result["capture_date"]
+    rows = store.read_rows("TRADESTATS", "GDZ6", day, day)
+    assert len(rows) == 2
+    assert {row["_source"] for row in rows} == {PUBLIC_LATEST_TRADESTATS_SOURCE}
+
+
+class _GoldLatestEmptyThenRaw:
+    authenticated = False
+
+    def fetch_tradestats(self, instrument, *, from_date, till_date, latest=False):
+        assert instrument is GOLD_INSTRUMENT
+        assert latest is True
+        return []
+
+    def fetch_public_recent_trade_page(self, instrument, *, start=0):
+        assert instrument is GOLD_INSTRUMENT
+        day = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+        return [
+            {
+                "RECNO": 1,
+                "TRADENO": 1001,
+                "TRADEDATE": day,
+                "TRADETIME": "10:00:01",
+                "PRICE": 4200.0,
+                "QUANTITY": 2,
+                "OPENPOSITION": 1000,
+                "BUYSELL": "B",
+                "OFFMARKETDEAL": 0,
+            }
+        ], 1, True
+
+
+def test_gold_falls_back_to_raw_public_trades_when_latest_is_empty() -> None:
+    store = DuckDBHistoricalFlowStore(":memory:")
+    service = HistoricalFlowDataService(
+        market_data=_GoldMarket(),
+        analytics=_GoldLatestEmptyThenRaw(),
+        store=store,
+    )
+
+    result = service.capture_public_recent_tradestats("GOLD")
+
+    assert result["complete"] is True
+    assert "capture_mode" not in result
+    assert result["raw_trades_total"] == 1
+    assert result["derived_5m_rows"] == 1
