@@ -9,6 +9,7 @@ def _state(
     trend: float,
     r5: float,
     r20: float,
+    r10: float | None = None,
     atr: float | None = None,
     er: float = 0.50,
     close: float = 102.0,
@@ -21,7 +22,7 @@ def _state(
         candles=100,
         last_close=close,
         return_5=r5,
-        return_10=r5 * 1.5,
+        return_10=r5 * 1.5 if r10 is None else r10,
         return_20=r20,
         sma_20=99.0,
         sma_50=97.0,
@@ -82,6 +83,8 @@ def test_method_set_exposes_independent_signals() -> None:
     assert set(signals) == {
         "TREND_MOMENTUM",
         "TIMEFRAME_ALIGNMENT",
+        "HORIZON_MOMENTUM",
+        "HORIZON_REVERSION",
         "REGIME_TREND",
         "MEAN_REVERSION",
         "VOLATILITY_REGIME",
@@ -174,3 +177,38 @@ def test_mixed_regime_abstains_from_both_regime_methods() -> None:
 
     assert signals["REGIME_TREND"].available is False
     assert signals["MEAN_REVERSION"].available is False
+
+
+
+def test_horizon_methods_can_disagree_across_5_10_20_sessions() -> None:
+    snapshot = MarketSnapshot(
+        symbol="SBER",
+        secid="SBER",
+        as_of="2026-10-01T18:45:00+03:00",
+        source="MOEX_ISS",
+        d1=_state(
+            "D1",
+            trend=0.0,
+            r5=0.02,
+            r10=-0.03,
+            r20=0.05,
+            atr=0.012,
+            er=0.35,
+        ),
+        h1=_state("H1", trend=0.0, r5=0.0, r20=0.0),
+        m15=_state("M15", trend=0.0, r5=0.0, r20=0.0),
+        data_quality="PASS",
+        warnings=(),
+        flow=None,
+    )
+
+    signals = {item.name: item for item in build_method_signals(snapshot)}
+    momentum = dict(signals["HORIZON_MOMENTUM"].horizon_scores)
+    reversion = dict(signals["HORIZON_REVERSION"].horizon_scores)
+
+    assert momentum[5] > 0
+    assert momentum[10] < 0
+    assert momentum[20] > 0
+    assert reversion[5] < 0
+    assert reversion[10] > 0
+    assert reversion[20] < 0
