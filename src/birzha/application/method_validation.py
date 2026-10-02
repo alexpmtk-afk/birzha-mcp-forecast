@@ -39,6 +39,8 @@ from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 DIRECTIONAL_METHODS = (
     "TREND_MOMENTUM",
     "TIMEFRAME_ALIGNMENT",
+    "HORIZON_MOMENTUM",
+    "HORIZON_REVERSION",
     "REGIME_TREND",
     "MEAN_REVERSION",
     "VOLUME_LEVELS",
@@ -361,11 +363,20 @@ def build_method_forecast_record(
     )
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
     strength = 0.0 if signal.strength is None else float(signal.strength)
+    horizon_scores = dict(signal.horizon_scores)
     horizons = tuple(
         HorizonForecast(
             sessions=sessions,
-            direction=signal.direction,
-            signal_strength=strength,
+            direction=(
+                _score_direction(horizon_scores[sessions])
+                if sessions in horizon_scores
+                else signal.direction
+            ),
+            signal_strength=(
+                round(abs(horizon_scores[sessions]), 6)
+                if sessions in horizon_scores
+                else strength
+            ),
             expected_move_pct=None,
             adverse_move_pct=None,
         )
@@ -462,3 +473,12 @@ def _summarize_direction_benchmarks(
             )
         )
     return tuple(result)
+
+
+
+def _score_direction(score: float, threshold: float = 0.15) -> str:
+    if score >= threshold:
+        return "UP"
+    if score <= -threshold:
+        return "DOWN"
+    return "NEUTRAL"
