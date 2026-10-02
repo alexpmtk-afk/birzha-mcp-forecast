@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 
 
-METHOD_SET_VERSION = "BIRZHA_METHOD_SET_V1"
+METHOD_SET_VERSION = "BIRZHA_METHOD_SET_V2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,8 @@ def build_method_signals(snapshot: MarketSnapshot) -> tuple[ForecastMethodSignal
     return (
         _trend_momentum(snapshot),
         _timeframe_alignment(snapshot),
+        _regime_trend(snapshot),
+        _mean_reversion(snapshot),
         _volatility_regime(snapshot),
         _volume_levels(snapshot),
         _flow_oi(snapshot),
@@ -112,6 +114,107 @@ def _timeframe_alignment(snapshot: MarketSnapshot) -> ForecastMethodSignal:
         )
     return _directional_signal("TIMEFRAME_ALIGNMENT", sum(votes) / len(votes), evidence)
 
+
+
+def _regime_trend(snapshot: MarketSnapshot) -> ForecastMethodSignal:
+    """Follow trend only when D1 price action is demonstrably efficient."""
+
+    er = snapshot.d1.efficiency_ratio_20
+    evidence = [
+        f"D1:er20={_fmt(er)}",
+        f"D1:trend_score={snapshot.d1.trend_score:.6f}",
+        f"H1:trend_score={snapshot.h1.trend_score:.6f}",
+        f"M15:trend_score={snapshot.m15.trend_score:.6f}",
+    ]
+    if er is None or er < 0.45:
+        return ForecastMethodSignal(
+            name="REGIME_TREND",
+            role="DIRECTIONAL",
+            available=False,
+            score=None,
+            direction="UNAVAILABLE",
+            strength=None,
+            evidence=tuple(evidence + ["regime_not_efficient_trend"]),
+        )
+
+    weighted = (
+        0.60 * snapshot.d1.trend_score
+        + 0.25 * snapshot.h1.trend_score
+        + 0.15 * snapshot.m15.trend_score
+    )
+    regime_strength = _clamp((er - 0.35) / 0.40, 0.25, 1.0)
+    score = (weighted / 4.5) * regime_strength
+    evidence.append(f"regime_strength={regime_strength:.6f}")
+    return _directional_signal("REGIME_TREND", score, evidence)
+
+
+def _mean_reversion(snapshot: MarketSnapshot) -> ForecastMethodSignal:
+    """Fade stretched price only in low-efficiency/choppy D1 regimes."""
+
+    er = snapshot.d1.efficiency_ratio_20
+    evidence = [f"D1:er20={_fmt(er)}"]
+    if er is None or er >= 0.30:
+        return ForecastMethodSignal(
+            name="MEAN_REVERSION",
+            role="DIRECTIONAL",
+            available=False,
+            score=None,
+            direction="UNAVAILABLE",
+            strength=None,
+            evidence=tuple(evidence + ["regime_not_mean_reverting"]),
+        )
+
+    weighted_components: list[tuple[float, float]] = []
+    for state, weight in (
+        (snapshot.d1, 0.55),
+        (snapshot.h1, 0.30),
+        (snapshot.m15, 0.15),
+    ):
+        local: list[float] = []
+        if state.last_close is not None and state.vwap_20 not in {None, 0.0}:
+            vwap_stretch = _clamp((state.last_close / state.vwap_20 - 1.0) / 0.02)
+            local.append(vwap_stretch)
+            evidence.append(
+                f"{state.timeframe}:vwap_stretch={vwap_stretch:.6f}"
+            )
+        if state.price_location_20 is not None:
+            location_stretch = _clamp((state.price_location_20 - 0.5) * 2.0)
+            local.append(location_stretch)
+            evidence.append(
+                f"{state.timeframe}:location_stretch={location_stretch:.6f}"
+            )
+        if state.return_5 is not None:
+            recent_stretch = _clamp(state.return_5 / 0.03)
+            local.append(recent_stretch)
+            evidence.append(
+                f"{state.timeframe}:return5_stretch={recent_stretch:.6f}"
+            )
+        if local:
+            weighted_components.append((sum(local) / len(local), weight))
+
+    if not weighted_components:
+        return ForecastMethodSignal(
+            name="MEAN_REVERSION",
+            role="DIRECTIONAL",
+            available=False,
+            score=None,
+            direction="UNAVAILABLE",
+            strength=None,
+            evidence=tuple(evidence + ["no_stretch_features"]),
+        )
+
+    total_weight = sum(weight for _, weight in weighted_components)
+    stretch = sum(value * weight for value, weight in weighted_components) / total_weight
+    # High/positive stretch predicts DOWN; low/negative stretch predicts UP.
+    chop_strength = _clamp((0.35 - er) / 0.25, 0.40, 1.0)
+    score = -stretch * chop_strength
+    evidence.extend(
+        [
+            f"combined_stretch={stretch:.6f}",
+            f"chop_strength={chop_strength:.6f}",
+        ]
+    )
+    return _directional_signal("MEAN_REVERSION", score, evidence)
 
 def _volatility_regime(snapshot: MarketSnapshot) -> ForecastMethodSignal:
     atr = snapshot.d1.atr_14_pct
