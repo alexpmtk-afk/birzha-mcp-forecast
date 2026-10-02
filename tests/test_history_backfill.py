@@ -45,3 +45,18 @@ def test_backfill_stops_on_partial_and_retries_same_month():
     assert report.processed_windows == 2
     assert report.next_from_date == "2026-02-01"
     assert [call[2] for call in history.calls] == ["2026-01-01", "2026-02-01"]
+
+
+def test_backfill_three_month_bound_is_resumable():
+    history = FakeHistory()
+    report = HistoricalBackfillService(history).run(  # type: ignore[arg-type]
+        ["SBER"], ["H1", "M15"],
+        from_date="2021-01-01", till_date="2021-06-30", max_windows=3,
+    )
+    assert report.status == "PASS"
+    assert report.complete is False
+    assert report.processed_windows == 3
+    assert report.next_from_date == "2021-04-01"
+    assert [call[2] for call in history.calls] == [
+        "2021-01-01", "2021-02-01", "2021-03-01"
+    ]
