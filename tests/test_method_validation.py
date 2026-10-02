@@ -1,5 +1,9 @@
+from datetime import date
+from types import SimpleNamespace
+
 from birzha.application.method_signals import ForecastMethodSignal
 from birzha.application.method_validation import (
+    MethodWalkForwardValidator,
     _method_status,
     build_method_forecast_record,
 )
@@ -68,3 +72,47 @@ def test_method_status_distinguishes_unavailable_from_failure() -> None:
     assert _method_status(requested=10, completed=5, unavailable=3, failures=2) == "PARTIAL"
     assert _method_status(requested=10, completed=0, unavailable=10, failures=0) == "UNAVAILABLE"
     assert _method_status(requested=10, completed=0, unavailable=0, failures=10) == "FAILED"
+
+
+def test_method_validation_services_are_frozen_store_only() -> None:
+    base = SimpleNamespace(
+        history=object(),
+        market_data=object(),
+        historical_flow=SimpleNamespace(analytics=object(), store=object()),
+        forecasts=SimpleNamespace(
+            snapshots=SimpleNamespace(flow=object())
+        ),
+    )
+    validator = MethodWalkForwardValidator(base=base)  # type: ignore[arg-type]
+
+    snapshot_service, stored = validator._services(
+        "Si",
+        start=date(2025, 1, 1),
+        end=date(2025, 12, 31),
+    )
+
+    assert stored.require_stored_resolution is True
+    assert snapshot_service.flow is not None
+    assert snapshot_service.flow.historical is not None
+    assert snapshot_service.flow.historical.read_only is True
+
+
+def test_method_validation_rejects_live_only_mode() -> None:
+    base = SimpleNamespace(
+        history=None,
+        market_data=object(),
+        historical_flow=None,
+        forecasts=SimpleNamespace(snapshots=SimpleNamespace(flow=None)),
+    )
+    validator = MethodWalkForwardValidator(base=base)  # type: ignore[arg-type]
+
+    try:
+        validator._services(
+            "SBER",
+            start=date(2025, 1, 1),
+            end=date(2025, 12, 31),
+        )
+    except RuntimeError as exc:
+        assert "frozen stored history" in str(exc)
+    else:
+        raise AssertionError("live-only method validation must fail closed")
