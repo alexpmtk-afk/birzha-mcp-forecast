@@ -20,6 +20,7 @@ from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.market_analysis import MarketAnalysisService
 from birzha.application.model_lab import ModelAcceptanceService
+from birzha.application.method_validation import MethodWalkForwardValidator
 from birzha.application.outcome import OutcomeService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -83,6 +84,7 @@ _validator = WalkForwardValidator(
     history=_history,
     historical_flow=_historical_flow,
 )
+_method_validator = MethodWalkForwardValidator(base=_validator)
 _model_lab = ModelAcceptanceService(validator=_validator)
 _calibration = ModelCalibrationService(validator=_validator)
 
@@ -234,6 +236,17 @@ def outcome_list(forecast_id: str) -> dict[str, object]:
 @mcp.tool(name="validation.walk_forward", description="Run a causal historical walk-forward validation over official MOEX trading sessions. Historical futures roots are resolved to the contract that was liquid on each forecast date.")
 def validation_walk_forward(symbol: str, start_date: str, end_date: str, step_sessions: int = 5, max_points: int = 24) -> dict[str, object]:
     return _validator.run(symbol, start_date=start_date, end_date=end_date, step_sessions=step_sessions, max_points=max_points).to_dict()
+
+
+@mcp.tool(name="validation.methods_walk_forward", description="Run causal walk-forward validation for independent directional forecast methods on stored historical data. Does not open holdout or tune ensemble weights.")
+def validation_methods_walk_forward(symbol: str, start_date: str, end_date: str, step_sessions: int = 5, max_points: int = 60) -> dict[str, object]:
+    return _method_validator.run(
+        symbol,
+        start_date=start_date,
+        end_date=end_date,
+        step_sessions=step_sessions,
+        max_points=max_points,
+    ).to_dict()
 
 
 @mcp.tool(name="validation.assess_model", description="Statistically assess the current Forecast Engine on a causal walk-forward sample. Requires enough observations, sufficient directional coverage and a 95% Wilson lower bound above random 50% direction accuracy before ACCEPTED.")
