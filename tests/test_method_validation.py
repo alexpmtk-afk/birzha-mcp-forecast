@@ -5,8 +5,10 @@ from birzha.application.method_signals import ForecastMethodSignal
 from birzha.application.method_validation import (
     MethodWalkForwardValidator,
     _method_status,
+    _summarize_direction_benchmarks,
     build_method_forecast_record,
 )
+from birzha.domain.outcome import HorizonOutcome
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 
 
@@ -116,3 +118,45 @@ def test_method_validation_rejects_live_only_mode() -> None:
         assert "frozen stored history" in str(exc)
     else:
         raise AssertionError("live-only method validation must fail closed")
+
+
+
+def _outcome(t0: str, value: float) -> tuple[str, HorizonOutcome]:
+    return (
+        t0,
+        HorizonOutcome(
+            outcome_id=f"out-{t0}-{value}",
+            forecast_id=f"fcst-{t0}",
+            symbol="SBER",
+            secid="SBER",
+            horizon_sessions=5,
+            reference_price=100.0,
+            target_session_end="2026-01-31T18:45:00+03:00",
+            target_close=100.0 + value,
+            actual_return_pct=value,
+            direction_hit=None,
+            max_favorable_excursion_pct=None,
+            max_adverse_excursion_pct=None,
+        ),
+    )
+
+
+def test_direction_benchmark_uses_real_market_base_rate() -> None:
+    items = [
+        _outcome("2026-01-01T18:45:00+03:00", 1.0),
+        _outcome("2026-01-02T18:45:00+03:00", 2.0),
+        _outcome("2026-01-03T18:45:00+03:00", -1.0),
+        _outcome("2026-01-04T18:45:00+03:00", 0.0),
+    ]
+
+    report = _summarize_direction_benchmarks(items, step_sessions=5)
+
+    assert len(report) == 1
+    item = report[0]
+    assert item.observations == 4
+    assert item.up_moves == 2
+    assert item.down_moves == 1
+    assert item.flat_moves == 1
+    assert item.always_up_hit_rate == 0.5
+    assert item.always_down_hit_rate == 0.25
+    assert item.majority_hit_rate == 0.5
