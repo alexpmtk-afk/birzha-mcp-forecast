@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import date
 
 from birzha.application.forecast import ForecastService
+from birzha.application.flow import MarketFlowService
+from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.method_signals import (
     METHOD_SET_VERSION,
     ForecastMethodSignal,
@@ -237,19 +239,37 @@ class MethodWalkForwardValidator:
         end: date,
     ) -> tuple[MarketSnapshotService, object]:
         if self.base.history is None:
-            return self.base.forecasts.snapshots, self.base.market_data
+            raise RuntimeError(
+                "independent method validation requires frozen stored history"
+            )
 
-        if self.base.prepare_history_before_run:
-            self.base._prepare_history(symbol, start=start, end=end)
-
+        # Stage 18 is deliberately store-only. Never prepare/sync/fetch market or
+        # flow history while evaluating methods, otherwise the validation dataset
+        # can change during the test itself.
         stored = StoredMarketDataView(
             self.base.market_data,
             self.base.history,
-            require_stored_resolution=not self.base.prepare_history_before_run,
+            require_stored_resolution=True,
         )
+
+        flow_service: MarketFlowService | None = None
+        source_flow = self.base.forecasts.snapshots.flow
+        if self.base.historical_flow is not None and source_flow is not None:
+            read_only_flow = HistoricalFlowDataService(
+                market_data=stored,  # type: ignore[arg-type]
+                analytics=self.base.historical_flow.analytics,
+                store=self.base.historical_flow.store,
+                read_only=True,
+            )
+            flow_service = MarketFlowService(
+                market_data=stored,  # type: ignore[arg-type]
+                analytics=self.base.historical_flow.analytics,
+                historical=read_only_flow,
+            )
+
         snapshot_service = MarketSnapshotService(
-            market_data=stored,
-            flow=self.base.forecasts.snapshots.flow,
+            market_data=stored,  # type: ignore[arg-type]
+            flow=flow_service,
         )
         return snapshot_service, stored
 
