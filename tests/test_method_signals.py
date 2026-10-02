@@ -82,12 +82,16 @@ def test_method_set_exposes_independent_signals() -> None:
     assert set(signals) == {
         "TREND_MOMENTUM",
         "TIMEFRAME_ALIGNMENT",
+        "REGIME_TREND",
+        "MEAN_REVERSION",
         "VOLATILITY_REGIME",
         "VOLUME_LEVELS",
         "FLOW_OI",
     }
     assert signals["TREND_MOMENTUM"].direction == "UP"
     assert signals["TIMEFRAME_ALIGNMENT"].direction == "UP"
+    assert signals["REGIME_TREND"].direction == "UP"
+    assert signals["MEAN_REVERSION"].available is False
     assert signals["VOLUME_LEVELS"].direction == "UP"
     assert signals["FLOW_OI"].direction == "UP"
     assert signals["VOLATILITY_REGIME"].role == "CONTEXT"
@@ -113,3 +117,60 @@ def test_missing_flow_is_unavailable_not_zero_signal() -> None:
     assert flow.available is False
     assert flow.score is None
     assert flow.direction == "UNAVAILABLE"
+
+
+
+def test_choppy_stretched_market_enables_mean_reversion_only() -> None:
+    snapshot = MarketSnapshot(
+        symbol="SBER",
+        secid="SBER",
+        as_of="2026-10-01T18:45:00+03:00",
+        source="MOEX_ISS",
+        d1=_state(
+            "D1", trend=1.0, r5=0.03, r20=0.01, atr=0.012,
+            er=0.10, close=104.0, vwap=100.0, location=0.90,
+        ),
+        h1=_state(
+            "H1", trend=1.0, r5=0.02, r20=0.01,
+            er=0.15, close=103.0, vwap=100.0, location=0.85,
+        ),
+        m15=_state(
+            "M15", trend=0.5, r5=0.01, r20=0.005,
+            er=0.15, close=102.0, vwap=100.0, location=0.75,
+        ),
+        data_quality="PASS",
+        warnings=(),
+        flow=None,
+    )
+
+    signals = {item.name: item for item in build_method_signals(snapshot)}
+
+    assert signals["REGIME_TREND"].available is False
+    assert signals["REGIME_TREND"].direction == "UNAVAILABLE"
+    assert signals["MEAN_REVERSION"].available is True
+    assert signals["MEAN_REVERSION"].direction == "DOWN"
+    assert signals["MEAN_REVERSION"].score is not None
+    assert signals["MEAN_REVERSION"].score < 0
+
+
+def test_mixed_regime_abstains_from_both_regime_methods() -> None:
+    snapshot = MarketSnapshot(
+        symbol="SBER",
+        secid="SBER",
+        as_of="2026-10-01T18:45:00+03:00",
+        source="MOEX_ISS",
+        d1=_state(
+            "D1", trend=2.0, r5=0.01, r20=0.02, atr=0.012,
+            er=0.36, close=102.0, vwap=100.0, location=0.70,
+        ),
+        h1=_state("H1", trend=1.0, r5=0.01, r20=0.02),
+        m15=_state("M15", trend=1.0, r5=0.01, r20=0.02),
+        data_quality="PASS",
+        warnings=(),
+        flow=None,
+    )
+
+    signals = {item.name: item for item in build_method_signals(snapshot)}
+
+    assert signals["REGIME_TREND"].available is False
+    assert signals["MEAN_REVERSION"].available is False
