@@ -54,13 +54,17 @@ class OutcomeService:
         existing = {item.horizon_sessions: item for item in self.outcomes.list_for_forecast(forecast_id)}
         observed: list[HorizonOutcome] = []
         pending: list[int] = []
-        for horizon in sorted(item.sessions for item in forecast.horizons):
+        horizons_by_sessions = {
+            item.sessions: item for item in forecast.horizons
+        }
+        for horizon in sorted(horizons_by_sessions):
             if horizon in existing:
                 observed.append(existing[horizon])
                 continue
             if len(future) < horizon:
                 pending.append(horizon)
                 continue
+            horizon_forecast = horizons_by_sessions[horizon]
             window = future[:horizon]
             target = window[-1]
             assert target.close is not None
@@ -69,10 +73,10 @@ class OutcomeService:
             lows = [c.low for c in window if c.low is not None]
             best_up = ((max(highs) / reference) - 1.0) * 100.0 if highs else None
             best_down = ((min(lows) / reference) - 1.0) * 100.0 if lows else None
-            if forecast.direction == "UP":
+            if horizon_forecast.direction == "UP":
                 hit = actual_return > 0
                 mfe, mae = best_up, best_down
-            elif forecast.direction == "DOWN":
+            elif horizon_forecast.direction == "DOWN":
                 hit = actual_return < 0
                 mfe = -best_down if best_down is not None else None
                 mae = -best_up if best_up is not None else None
