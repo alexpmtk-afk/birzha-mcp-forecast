@@ -39,6 +39,8 @@ from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 DIRECTIONAL_METHODS = (
     "TREND_MOMENTUM",
     "TIMEFRAME_ALIGNMENT",
+    "REGIME_TREND",
+    "MEAN_REVERSION",
     "VOLUME_LEVELS",
     "FLOW_OI",
 )
