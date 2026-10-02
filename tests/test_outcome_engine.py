@@ -84,11 +84,46 @@ def test_outcome_engine_observes_real_session_horizons_idempotently():
 def test_neutral_direction_is_not_forced_into_binary_hit_metric():
     forecasts = DuckDBForecastJournal(":memory:")
     outcomes = DuckDBOutcomeJournal(":memory:")
-    forecasts.append(replace(record(), forecast_id="fcst_neutral", direction="NEUTRAL", control="BALANCE"))
+    neutral = replace(
+        record(),
+        forecast_id="fcst_neutral",
+        direction="NEUTRAL",
+        control="BALANCE",
+        horizons=tuple(
+            replace(item, direction="NEUTRAL")
+            for item in record().horizons
+        ),
+    )
+    forecasts.append(neutral)
     result = OutcomeService(Market(), forecasts, outcomes).evaluate(
         "fcst_neutral", evaluation_date="2026-09-30"
     )
     assert all(item.direction_hit is None for item in result.outcomes)
+
+
+def test_outcome_engine_uses_each_horizon_direction_independently():
+    forecasts = DuckDBForecastJournal(":memory:")
+    outcomes = DuckDBOutcomeJournal(":memory:")
+    mixed = replace(
+        record(),
+        forecast_id="fcst_mixed_horizons",
+        direction="NEUTRAL",
+        horizons=(
+            HorizonForecast(5, "UP", 0.5, None, None),
+            HorizonForecast(10, "DOWN", 0.5, None, None),
+            HorizonForecast(20, "NEUTRAL", 0.0, None, None),
+        ),
+    )
+    forecasts.append(mixed)
+
+    result = OutcomeService(Market(), forecasts, outcomes).evaluate(
+        "fcst_mixed_horizons", evaluation_date="2026-09-30"
+    )
+
+    by_horizon = {item.horizon_sessions: item for item in result.outcomes}
+    assert by_horizon[5].direction_hit is True
+    assert by_horizon[10].direction_hit is False
+    assert by_horizon[20].direction_hit is None
 
 
 def test_history_backed_outcome_recovers_exact_contract_without_live_resolution():
