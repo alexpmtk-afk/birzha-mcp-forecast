@@ -160,3 +160,22 @@ def test_direction_benchmark_uses_real_market_base_rate() -> None:
     assert item.always_up_hit_rate == 0.5
     assert item.always_down_hit_rate == 0.25
     assert item.majority_hit_rate == 0.5
+
+
+
+def test_method_forecast_record_uses_horizon_specific_scores() -> None:
+    signal = ForecastMethodSignal(
+        name="HORIZON_TEST",
+        role="DIRECTIONAL",
+        available=True,
+        score=0.0,
+        direction="NEUTRAL",
+        strength=0.5,
+        evidence=("horizon-specific",),
+        horizon_scores=((5, 0.8), (10, -0.6), (20, 0.05)),
+    )
+
+    record = build_method_forecast_record(_snapshot(), signal)
+    directions = {item.sessions: item.direction for item in record.horizons}
+
+    assert directions == {5: "UP", 10: "DOWN", 20: "NEUTRAL"}
