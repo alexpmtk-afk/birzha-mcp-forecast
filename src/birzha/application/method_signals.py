@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 
 
-METHOD_SET_VERSION = "BIRZHA_METHOD_SET_V2"
+METHOD_SET_VERSION = "BIRZHA_METHOD_SET_V3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +25,7 @@ class ForecastMethodSignal:
     strength: float | None
     evidence: tuple[str, ...]
     context_state: str | None = None
+    horizon_scores: tuple[tuple[int, float], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -36,6 +37,8 @@ def build_method_signals(snapshot: MarketSnapshot) -> tuple[ForecastMethodSignal
     return (
         _trend_momentum(snapshot),
         _timeframe_alignment(snapshot),
+        _horizon_momentum(snapshot),
+        _horizon_reversion(snapshot),
         _regime_trend(snapshot),
         _mean_reversion(snapshot),
         _volatility_regime(snapshot),
@@ -115,6 +118,75 @@ def _timeframe_alignment(snapshot: MarketSnapshot) -> ForecastMethodSignal:
     return _directional_signal("TIMEFRAME_ALIGNMENT", sum(votes) / len(votes), evidence)
 
 
+
+
+def _horizon_directional_signal(
+    name: str,
+    scores: dict[int, float],
+    evidence: list[str],
+) -> ForecastMethodSignal:
+    usable = {
+        int(sessions): round(_clamp(float(score)), 6)
+        for sessions, score in scores.items()
+    }
+    if not usable:
+        return ForecastMethodSignal(
+            name=name,
+            role="DIRECTIONAL",
+            available=False,
+            score=None,
+            direction="UNAVAILABLE",
+            strength=None,
+            evidence=tuple(evidence or ["no_horizon_scores"]),
+        )
+    average = sum(usable.values()) / len(usable)
+    return ForecastMethodSignal(
+        name=name,
+        role="DIRECTIONAL",
+        available=True,
+        score=round(_clamp(average), 6),
+        direction=_direction(average),
+        strength=round(sum(abs(v) for v in usable.values()) / len(usable), 6),
+        evidence=tuple(evidence),
+        horizon_scores=tuple(sorted(usable.items())),
+    )
+
+
+def _horizon_return_scores(snapshot: MarketSnapshot) -> tuple[dict[int, float], list[str]]:
+    scales = {5: 0.02, 10: 0.03, 20: 0.05}
+    values = {
+        5: snapshot.d1.return_5,
+        10: snapshot.d1.return_10,
+        20: snapshot.d1.return_20,
+    }
+    scores: dict[int, float] = {}
+    evidence: list[str] = []
+    for sessions in (5, 10, 20):
+        value = values[sessions]
+        evidence.append(f"D1:return{sessions}={_fmt(value)}")
+        if value is None:
+            continue
+        scores[sessions] = _clamp(value / scales[sessions])
+    return scores, evidence
+
+
+def _horizon_momentum(snapshot: MarketSnapshot) -> ForecastMethodSignal:
+    scores, evidence = _horizon_return_scores(snapshot)
+    return _horizon_directional_signal(
+        "HORIZON_MOMENTUM",
+        scores,
+        evidence + ["rule=continue_same_horizon_D1_move"],
+    )
+
+
+def _horizon_reversion(snapshot: MarketSnapshot) -> ForecastMethodSignal:
+    scores, evidence = _horizon_return_scores(snapshot)
+    reversed_scores = {sessions: -score for sessions, score in scores.items()}
+    return _horizon_directional_signal(
+        "HORIZON_REVERSION",
+        reversed_scores,
+        evidence + ["rule=reverse_same_horizon_D1_move"],
+    )
 
 def _regime_trend(snapshot: MarketSnapshot) -> ForecastMethodSignal:
     """Follow trend only when D1 price action is demonstrably efficient."""
