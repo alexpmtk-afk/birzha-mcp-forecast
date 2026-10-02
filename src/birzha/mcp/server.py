@@ -11,6 +11,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from birzha.application.backfill import HistoricalBackfillService
 from birzha.application.calibration import ModelCalibrationService, calibrate_across_symbols
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
@@ -69,6 +70,7 @@ else:
 
 _market = MarketDataService.default(control_plane=_upstream_control)
 _history = HistoricalDataService(market_data=_market, store=_historical_store)
+_validation_backfill = HistoricalBackfillService(history=_history)
 _analytics = MoexAnalyticsClient(control_plane=_upstream_control)
 _historical_flow = HistoricalFlowDataService(market_data=_market, analytics=_analytics, store=_historical_flow_store)
 _flow = MarketFlowService(market_data=_market, analytics=_analytics, historical=_historical_flow)
@@ -139,6 +141,34 @@ def history_sync_batch(symbols: list[str], timeframes: list[str], from_date: str
 @mcp.tool(name="history.sync_core", description="Sync the BIRZHA core research universe on D1/H1/M15, reusing already verified stored history.")
 def history_sync_core(from_date: str, till_date: str) -> dict[str, object]:
     return _history.sync_many(CORE_HISTORY_SYMBOLS, CORE_HISTORY_TIMEFRAMES, from_date=from_date, till_date=till_date)
+
+
+@mcp.tool(name="validation.backfill_intraday", description="Backfill stored H1/M15 history for one core market in bounded monthly windows for historical method validation. Local DuckDB only; returns the next month to continue from.")
+def validation_backfill_intraday(symbol: str, from_date: str, till_date: str, max_months: int = 1) -> dict[str, object]:
+    normalized = symbol.strip()
+    if normalized not in CORE_HISTORY_SYMBOLS:
+        return {"status":"ERROR","error":"symbol must be one of the six core markets","symbol":normalized}
+    if getattr(_historical_store, "storage_scope", "") != "local":
+        return {"status":"ERROR","error":"intraday validation backfill is allowed only on local DuckDB","symbol":normalized}
+    if max_months < 1 or max_months > 3:
+        return {"status":"ERROR","error":"max_months must be between 1 and 3","symbol":normalized}
+    try:
+        return _validation_backfill.run(
+            [normalized],
+            ["H1", "M15"],
+            from_date=from_date,
+            till_date=till_date,
+            max_windows=max_months,
+        ).to_dict()
+    except Exception as exc:
+        return {
+            "status":"ERROR",
+            "symbol":normalized,
+            "from_date":from_date,
+            "till_date":till_date,
+            "error_type":type(exc).__name__,
+            "error":str(exc)[:1500],
+        }
 
 
 @mcp.tool(name="history.flow_sync", description="Persist TradeStats Delta and applicable FUTOI history so repeated forecasts and validation can reuse stored analytical data.")
