@@ -45,6 +45,30 @@ DIRECTIONAL_METHODS = (
 
 
 @dataclass(frozen=True, slots=True)
+class DirectionBenchmark:
+    sessions: int
+    observations: int
+    up_moves: int
+    down_moves: int
+    flat_moves: int
+    always_up_hit_rate: float | None
+    always_down_hit_rate: float | None
+    majority_hit_rate: float | None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "sessions": self.sessions,
+            "observations": self.observations,
+            "up_moves": self.up_moves,
+            "down_moves": self.down_moves,
+            "flat_moves": self.flat_moves,
+            "always_up_hit_rate": self.always_up_hit_rate,
+            "always_down_hit_rate": self.always_down_hit_rate,
+            "majority_hit_rate": self.majority_hit_rate,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class MethodValidationItem:
     method: str
     available_points: int
@@ -66,15 +90,42 @@ class MethodValidationSuite:
     start_date: str
     end_date: str
     methods: tuple[MethodValidationItem, ...]
+    direction_benchmarks: tuple[DirectionBenchmark, ...]
     volatility_context_counts: tuple[tuple[str, int], ...]
     status: str
 
     def to_dict(self) -> dict[str, object]:
+        benchmark_by_horizon = {
+            item.sessions: item for item in self.direction_benchmarks
+        }
+        methods: list[dict[str, object]] = []
+        for item in self.methods:
+            payload = item.to_dict()
+            lift: dict[str, float | None] = {}
+            for metric in item.report.metrics:
+                benchmark = benchmark_by_horizon.get(metric.sessions)
+                if (
+                    benchmark is None
+                    or benchmark.majority_hit_rate is None
+                    or metric.direction_hit_rate is None
+                ):
+                    lift[str(metric.sessions)] = None
+                else:
+                    lift[str(metric.sessions)] = round(
+                        metric.direction_hit_rate - benchmark.majority_hit_rate,
+                        6,
+                    )
+            payload["lift_vs_majority_by_horizon"] = lift
+            methods.append(payload)
+
         return {
             "symbol": self.symbol,
             "start_date": self.start_date,
             "end_date": self.end_date,
-            "methods": [item.to_dict() for item in self.methods],
+            "methods": methods,
+            "direction_benchmarks": [
+                item.to_dict() for item in self.direction_benchmarks
+            ],
             "volatility_context_counts": {
                 key: value for key, value in self.volatility_context_counts
             },
@@ -110,6 +161,8 @@ class MethodWalkForwardValidator:
         candidates = tuple(eligible[::step_sessions])[:max_points]
 
         pairs: dict[str, list[tuple[ForecastRecord, HorizonOutcome]]] = defaultdict(list)
+        benchmark_pairs: list[tuple[str, HorizonOutcome]] = []
+        benchmarked_days: set[str] = set()
         failures: dict[str, list[str]] = defaultdict(list)
         completed: Counter[str] = Counter()
         available: Counter[str] = Counter()
@@ -170,6 +223,12 @@ class MethodWalkForwardValidator:
                             failures[method].append(f"{day}:incomplete_outcome")
                             continue
                         completed[method] += 1
+                        if day not in benchmarked_days:
+                            for horizon in VALIDATION_HORIZONS:
+                                benchmark_pairs.append(
+                                    (record.created_at_t0, by_horizon[horizon])
+                                )
+                            benchmarked_days.add(day)
                         for horizon in VALIDATION_HORIZONS:
                             pairs[method].append((record, by_horizon[horizon]))
                     except Exception as exc:
@@ -227,6 +286,10 @@ class MethodWalkForwardValidator:
             start_date=start.isoformat(),
             end_date=end.isoformat(),
             methods=tuple(items),
+            direction_benchmarks=_summarize_direction_benchmarks(
+                benchmark_pairs,
+                step_sessions=step_sessions,
+            ),
             volatility_context_counts=tuple(sorted(context_counts.items())),
             status=suite_status,
         )
@@ -340,3 +403,60 @@ def _method_status(
     if unavailable == requested and failures == 0:
         return "UNAVAILABLE"
     return "FAILED"
+
+
+
+def _summarize_direction_benchmarks(
+    pairs: list[tuple[str, HorizonOutcome]],
+    *,
+    step_sessions: int,
+) -> tuple[DirectionBenchmark, ...]:
+    if step_sessions <= 0:
+        raise ValueError("step_sessions must be > 0")
+
+    result: list[DirectionBenchmark] = []
+    horizons = sorted({outcome.horizon_sessions for _, outcome in pairs})
+    for sessions in horizons:
+        raw_subset = sorted(
+            (
+                (t0, outcome)
+                for t0, outcome in pairs
+                if outcome.horizon_sessions == sessions
+            ),
+            key=lambda item: item[0],
+        )
+        sampling_stride = max(
+            1,
+            (sessions + step_sessions - 1) // step_sessions,
+        )
+        subset = raw_subset[::sampling_stride]
+        returns = [item.actual_return_pct for _, item in subset]
+        up_moves = sum(1 for value in returns if value > 0)
+        down_moves = sum(1 for value in returns if value < 0)
+        flat_moves = sum(1 for value in returns if value == 0)
+        observations = len(returns)
+        result.append(
+            DirectionBenchmark(
+                sessions=sessions,
+                observations=observations,
+                up_moves=up_moves,
+                down_moves=down_moves,
+                flat_moves=flat_moves,
+                always_up_hit_rate=(
+                    round(up_moves / observations, 6)
+                    if observations
+                    else None
+                ),
+                always_down_hit_rate=(
+                    round(down_moves / observations, 6)
+                    if observations
+                    else None
+                ),
+                majority_hit_rate=(
+                    round(max(up_moves, down_moves) / observations, 6)
+                    if observations
+                    else None
+                ),
+            )
+        )
+    return tuple(result)
