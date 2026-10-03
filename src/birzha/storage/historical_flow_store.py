@@ -53,6 +53,18 @@ class DuckDBHistoricalFlowStore:
         self._connection.execute("ALTER TABLE historical_flow_rows ADD COLUMN IF NOT EXISTS observed_at VARCHAR")
         self._connection.execute("ALTER TABLE historical_flow_rows ADD COLUMN IF NOT EXISTS revision VARCHAR")
         self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS historical_flow_revisions (
+                dataset VARCHAR NOT NULL,
+                key_symbol VARCHAR NOT NULL,
+                row_key VARCHAR NOT NULL,
+                observed_at VARCHAR NOT NULL,
+                revision VARCHAR NOT NULL,
+                payload_json VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                PRIMARY KEY (dataset, key_symbol, row_key, revision)
+            )
+        """)
+        self._connection.execute("""
             CREATE TABLE IF NOT EXISTS historical_flow_verified (
                 dataset VARCHAR NOT NULL,
                 key_symbol VARCHAR NOT NULL,
@@ -75,15 +87,30 @@ class DuckDBHistoricalFlowStore:
             ])
         if not materialized:
             return 0
+        revision_rows = [
+            [
+                row[0], row[1], row[2], row[8], row[9], row[4], row[5],
+                row[0], row[1], row[2], row[9],
+            ]
+            for row in materialized
+        ]
         with self._lock:
+            self._connection.executemany("""
+                INSERT OR IGNORE INTO historical_flow_revisions
+                (dataset,key_symbol,row_key,observed_at,revision,payload_json,source)
+                SELECT ?,?,?,?,?,?,?
+                WHERE EXISTS (
+                    SELECT 1 FROM historical_flow_rows
+                    WHERE dataset=? AND key_symbol=? AND row_key=?
+                      AND revision IS NOT NULL AND revision<>?
+                )
+            """, revision_rows)
             self._connection.executemany("""
                 INSERT INTO historical_flow_rows
                 (dataset,key_symbol,row_key,trade_date,payload_json,source,
                  available_at,available_at_confidence,observed_at,revision)
                 VALUES (?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT (dataset,key_symbol,row_key) DO UPDATE SET
-                    payload_json=excluded.payload_json,
-                    source=excluded.source,
                     available_at=COALESCE(historical_flow_rows.available_at, excluded.available_at),
                     available_at_confidence=CASE
                         WHEN historical_flow_rows.available_at IS NOT NULL
@@ -91,7 +118,7 @@ class DuckDBHistoricalFlowStore:
                         ELSE excluded.available_at_confidence
                     END,
                     observed_at=COALESCE(historical_flow_rows.observed_at, excluded.observed_at),
-                    revision=excluded.revision
+                    revision=COALESCE(historical_flow_rows.revision, excluded.revision)
             """, materialized)
         return len(materialized)
 
