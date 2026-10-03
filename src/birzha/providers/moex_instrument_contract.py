@@ -38,3 +38,10 @@ def moex_data_capabilities(asset_class: AssetClass) -> tuple[str, ...]:
     if asset_class == "fx":
         return base + ("VOLUME", "TURNOVER")
     return base
+
+
+
+def moex_roll_policy(asset_class: AssetClass) -> str:
+    if asset_class == "future":
+        return "MOEX_CAUSAL_LIQUIDITY_AS_OF_DATE"
+    return "NOT_APPLICABLE"

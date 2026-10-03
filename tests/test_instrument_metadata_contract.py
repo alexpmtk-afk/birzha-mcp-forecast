@@ -64,6 +64,7 @@ def test_direct_equity_metadata_populates_tick_lot_and_currency() -> None:
         "TURNOVER",
         "TRADESTATS",
     )
+    assert instrument.roll_policy == "NOT_APPLICABLE"
 
 
 def test_active_future_metadata_populates_contract_terms() -> None:
@@ -108,6 +109,7 @@ def test_active_future_metadata_populates_contract_terms() -> None:
         "OPEN_INTEREST",
         "FUTOI",
     )
+    assert instrument.roll_policy == "MOEX_CAUSAL_LIQUIDITY_AS_OF_DATE"
 
 
 
