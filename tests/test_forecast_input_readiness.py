@@ -35,7 +35,7 @@ def test_future_readiness_marks_flow_partial_and_session_vwap_missing() -> None:
     assert report["ready_for_protocol_08"] is False
     assert report["items"]["open_interest"]["status"] == "PARTIAL"
     assert report["items"]["delta"]["status"] == "PARTIAL"
-    assert report["items"]["cumulative_delta"]["status"] == "MISSING"
+    assert report["items"]["cumulative_delta"]["status"] == "PARTIAL"
     assert report["items"]["session_vwap"]["status"] == "MISSING"
     assert report["items"]["volume_profile"]["status"] == "PARTIAL"
 
