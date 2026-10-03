@@ -8,6 +8,7 @@ from birzha.domain.market import AssetClass, Instrument
 from birzha.providers.moex_iss import MoexIssClient
 from birzha.providers.moex_instrument_contract import (
     moex_calendar_id,
+    moex_data_capabilities,
     moex_session_profile,
 )
 
@@ -91,6 +92,7 @@ class MoexDirectInstrumentResolver:
                 board=board,
             ),
             session_profile=moex_session_profile(asset_class),
+            data_capabilities=moex_data_capabilities(asset_class),
         )
 
     def _security_metadata(
