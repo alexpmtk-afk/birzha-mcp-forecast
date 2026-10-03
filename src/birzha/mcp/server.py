@@ -250,6 +250,24 @@ def data_flow_storage_coverage(dataset: str | None = None) -> dict[str, object]:
     }
 
 
+@mcp.tool(
+    name="data.flow_backfill_causal_availability",
+    description="Dry-run or apply a safe local backfill of inferred availability timestamps for stored TRADESTATS and PUBLIC_TRADES_RAW rows only. FUTOI is never modified.",
+)
+def data_flow_backfill_causal_availability(dry_run: bool = True) -> dict[str, object]:
+    backfill = getattr(_historical_flow_store, "backfill_causal_availability", None)
+    if backfill is None:
+        return {
+            "schema": "FLOW_CAUSAL_BACKFILL_V1",
+            "status": "UNSUPPORTED",
+            "dry_run": dry_run,
+        }
+    return {
+        "status": "PASS",
+        **backfill(dry_run=dry_run),
+    }
+
+
 @mcp.tool(name="forecast.build", description="Build an explainable ex-ante BIRZHA baseline forecast without persistence. Use forecast.create for an operational forecast that must enter the journal.")
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _forecast.build(symbol, as_of_date=as_of_date).to_dict()
