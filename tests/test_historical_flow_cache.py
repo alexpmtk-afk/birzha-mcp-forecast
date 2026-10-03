@@ -321,3 +321,41 @@ def test_flow_first_seen_payload_is_immutable_and_revision_is_recorded():
     ).fetchone()[0]
     assert revision_count == 1
     store.close()
+
+
+
+def test_flow_storage_coverage_summarizes_rows_and_causal_availability():
+    store = DuckDBHistoricalFlowStore(":memory:")
+    store.upsert_rows(
+        "TRADESTATS",
+        "SBER",
+        [
+            {
+                "tradedate": "2026-10-02",
+                "tradetime": "10:00:00",
+                "seqnum": 1,
+                "vol_b": 10,
+                "vol_s": 5,
+            },
+            {
+                "tradedate": "2026-10-03",
+                "tradetime": "10:05:00",
+                "seqnum": 2,
+                "vol_b": 12,
+                "vol_s": 7,
+            },
+        ],
+        "MOEX_TEST",
+    )
+
+    items = store.coverage("TRADESTATS")
+
+    assert len(items) == 1
+    item = items[0]
+    assert item["dataset"] == "TRADESTATS"
+    assert item["key"] == "SBER"
+    assert item["rows"] == 2
+    assert item["from_date"] == "2026-10-02"
+    assert item["till_date"] == "2026-10-03"
+    assert item["causal_rows"] == 2
+    store.close()

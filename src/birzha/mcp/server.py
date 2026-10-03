@@ -226,6 +226,30 @@ def data_forecast_input_readiness_core() -> dict[str, object]:
     }
 
 
+
+@mcp.tool(
+    name="data.flow_storage_coverage",
+    description="Summarize locally stored flow coverage by dataset/key without fetching MOEX data.",
+)
+def data_flow_storage_coverage(dataset: str | None = None) -> dict[str, object]:
+    coverage = getattr(_historical_flow_store, "coverage", None)
+    if coverage is None:
+        return {
+            "schema": "FLOW_STORAGE_COVERAGE_V1",
+            "storage_scope": getattr(_historical_flow_store, "storage_scope", "unknown"),
+            "status": "UNSUPPORTED",
+            "items": [],
+        }
+    items = coverage(dataset)
+    return {
+        "schema": "FLOW_STORAGE_COVERAGE_V1",
+        "storage_scope": getattr(_historical_flow_store, "storage_scope", "unknown"),
+        "status": "PASS",
+        "dataset": dataset,
+        "items": items,
+    }
+
+
 @mcp.tool(name="forecast.build", description="Build an explainable ex-ante BIRZHA baseline forecast without persistence. Use forecast.create for an operational forecast that must enter the journal.")
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _forecast.build(symbol, as_of_date=as_of_date).to_dict()
