@@ -156,6 +156,22 @@ class MarketFlowService:
                 f"ALGOPACK_TRADESTATS_UNAVAILABLE:{type(exc).__name__}:{exc}"
             )
 
+        raw_public_rows: list[dict[str, Any]] = []
+        if self.historical is not None and instrument.asset_class in {"future", "equity"}:
+            if cutoff_at is not None and hasattr(self.historical, "public_trades_causal"):
+                raw_public_rows = self.historical.public_trades_causal(
+                    instrument,
+                    from_date=start.isoformat(),
+                    till_date=till.isoformat(),
+                    cutoff_at=cutoff_at,
+                )
+            elif hasattr(self.historical, "public_trades"):
+                raw_public_rows = self.historical.public_trades(
+                    instrument,
+                    from_date=start.isoformat(),
+                    till_date=till.isoformat(),
+                )
+
         futoi_rows: list[dict[str, Any]] = []
         if instrument.asset_class == "future":
             try:
@@ -219,6 +235,10 @@ class MarketFlowService:
 
         ordered_trade_rows = sorted(trade_rows, key=_row_time_key)
         cumulative_delta = _latest_session_cumulative_delta(ordered_trade_rows)
+        session_vwap, session_vwap_source = _latest_session_vwap(
+            raw_public_rows,
+            ordered_trade_rows,
+        )
         first_open = _first_number(ordered_trade_rows, "pr_open")
         last_close = _last_number(ordered_trade_rows, "pr_close")
         price_change_pct = (
@@ -280,6 +300,8 @@ class MarketFlowService:
             warnings=tuple(warnings),
             cumulative_delta=_round_or_none(cumulative_delta),
             number_of_trades=_int_or_none(number_of_trades),
+            session_vwap=_round_or_none(session_vwap, 6),
+            session_vwap_source=session_vwap_source,
         )
 
 
@@ -433,3 +455,79 @@ def _latest_session_cumulative_delta(rows: list[dict[str, Any]]) -> float | None
         total += buy - sell
         found = True
     return total if found else None
+
+
+
+def _latest_session_vwap(
+    raw_public_rows: list[dict[str, Any]],
+    trade_rows: list[dict[str, Any]],
+) -> tuple[float | None, str | None]:
+    """Calculate latest-session VWAP on demand without persisting a derived fact."""
+
+    dated_raw = [
+        row
+        for row in raw_public_rows
+        if str(_first_present(row, "TRADEDATE", "tradedate") or "").strip()
+    ]
+    if dated_raw:
+        latest_date = max(
+            str(_first_present(row, "TRADEDATE", "tradedate") or "").strip()[:10]
+            for row in dated_raw
+        )
+        numerator = 0.0
+        denominator = 0.0
+        for row in dated_raw:
+            tradedate = str(
+                _first_present(row, "TRADEDATE", "tradedate") or ""
+            ).strip()[:10]
+            if tradedate != latest_date:
+                continue
+            offmarket = _int_or_none(
+                _first_present(row, "OFFMARKETDEAL", "offmarketdeal")
+            )
+            if offmarket not in {None, 0}:
+                continue
+            price = _number(_first_present(row, "PRICE", "price"))
+            quantity = _number(_first_present(row, "QUANTITY", "quantity"))
+            if price is None or quantity is None or quantity <= 0:
+                continue
+            numerator += price * quantity
+            denominator += quantity
+        if denominator > 0:
+            return numerator / denominator, "PUBLIC_TRADES_PRICE_QUANTITY"
+
+    dated_stats = [
+        row
+        for row in trade_rows
+        if str(_first_present(row, "tradedate", "TRADEDATE") or "").strip()
+    ]
+    if dated_stats:
+        latest_date = max(
+            str(_first_present(row, "tradedate", "TRADEDATE") or "").strip()[:10]
+            for row in dated_stats
+        )
+        numerator = 0.0
+        denominator = 0.0
+        for row in dated_stats:
+            tradedate = str(
+                _first_present(row, "tradedate", "TRADEDATE") or ""
+            ).strip()[:10]
+            if tradedate != latest_date:
+                continue
+            row_vwap = _number(
+                _first_present(row, "pr_vwap", "PR_VWAP", "vwap", "VWAP")
+            )
+            volume = _number(_first_present(row, "vol", "VOL"))
+            if volume is None:
+                volume = _add(
+                    _number(_first_present(row, "vol_b", "VOL_B")),
+                    _number(_first_present(row, "vol_s", "VOL_S")),
+                )
+            if row_vwap is None or volume is None or volume <= 0:
+                continue
+            numerator += row_vwap * volume
+            denominator += volume
+        if denominator > 0:
+            return numerator / denominator, "TRADESTATS_VWAP_WEIGHTED"
+
+    return None, None

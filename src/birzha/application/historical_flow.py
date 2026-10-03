@@ -93,6 +93,37 @@ class HistoricalFlowDataService:
             cutoff_at,
         )
 
+
+    def public_trades(
+        self, instrument: Instrument, *, from_date: str, till_date: str
+    ) -> list[dict[str, object]]:
+        if instrument.asset_class not in {"future", "equity"}:
+            return []
+        return self.store.read_rows(
+            PUBLIC_TRADES_RAW_DATASET,
+            instrument.secid,
+            from_date,
+            till_date,
+        )
+
+    def public_trades_causal(
+        self,
+        instrument: Instrument,
+        *,
+        from_date: str,
+        till_date: str,
+        cutoff_at: str,
+    ) -> list[dict[str, object]]:
+        if instrument.asset_class not in {"future", "equity"}:
+            return []
+        return self.store.read_rows_causal(
+            PUBLIC_TRADES_RAW_DATASET,
+            instrument.secid,
+            from_date,
+            till_date,
+            cutoff_at,
+        )
+
     def capture_public_recent_tradestats(self, symbol: str) -> dict[str, object]:
         """Capture public futures or equity trades with durable page-by-page resume.
 

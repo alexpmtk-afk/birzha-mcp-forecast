@@ -78,8 +78,10 @@ class ForecastInputReadinessService:
                 "ATR-based volatility feature is implemented for candle timeframes.",
             ),
             "session_vwap": self._item(
-                STATUS_MISSING,
-                "Current vwap_20 is a rolling candle VWAP, not the session VWAP required by Protocol 08.",
+                STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
+                "Session VWAP is calculated on demand from causal raw public trades (price×quantity) or an explicit TradeStats VWAP when available; it is never replaced by rolling vwap_20."
+                if supports_flow
+                else "Session VWAP is not claimed when the instrument has no applicable traded-volume flow.",
             ),
             "volume_profile": self._item(
                 STATUS_PARTIAL,
