@@ -87,6 +87,9 @@ def test_snapshot_t0_is_latest_completed_observation_not_oldest_timeframe_end() 
     assert by_tf["M15"].status == "DEGRADED"
     assert quality.flow_status == "NOT_REQUESTED"
     assert snapshot.data_quality == quality.status
+    assert snapshot.normalized_features is not None
+    assert snapshot.normalized_features.version == "NORMALIZED_FEATURES_V1"
+    assert snapshot.to_dict()["normalized_features"]["version"] == "NORMALIZED_FEATURES_V1"
     assert any(reason.startswith("H1: insufficient_history") for reason in quality.reasons)
 
 
