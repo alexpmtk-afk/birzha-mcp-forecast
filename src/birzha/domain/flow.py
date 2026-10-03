@@ -45,6 +45,8 @@ class MarketFlowSnapshot:
     warnings: tuple[str, ...]
     cumulative_delta: float | None = None
     number_of_trades: int | None = None
+    session_vwap: float | None = None
+    session_vwap_source: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -72,4 +74,6 @@ class MarketFlowSnapshot:
             "warnings": list(self.warnings),
             "cumulative_delta": self.cumulative_delta,
             "number_of_trades": self.number_of_trades,
+            "session_vwap": self.session_vwap,
+            "session_vwap_source": self.session_vwap_source,
         }
