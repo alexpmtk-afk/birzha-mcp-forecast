@@ -55,6 +55,8 @@ def test_direct_equity_metadata_populates_tick_lot_and_currency() -> None:
     assert instrument.tick_size == 0.01
     assert instrument.contract_multiplier == 10.0
     assert instrument.tick_value == 0.1
+    assert instrument.calendar_id == "MOEX:STOCK:SHARES:TQBR"
+    assert instrument.session_profile == "MOEX_EQUITIES"
 
 
 def test_active_future_metadata_populates_contract_terms() -> None:
@@ -88,3 +90,5 @@ def test_active_future_metadata_populates_contract_terms() -> None:
     assert instrument.contract_multiplier == 1000.0
     assert instrument.expiration_date == "2026-12-17"
     assert instrument.settlement_date == "2026-12-17"
+    assert instrument.calendar_id == "MOEX:FUTURES:FORTS:RFUD"
+    assert instrument.session_profile == "MOEX_FORTS"
