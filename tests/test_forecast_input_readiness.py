@@ -39,8 +39,9 @@ def test_future_readiness_marks_implemented_flow_ready_and_keeps_coverage_caveat
     assert report["items"]["session_vwap"]["status"] == "READY"
     assert report["items"]["number_of_trades"]["status"] == "READY"
     assert report["items"]["volume_profile"]["status"] == "READY"
-    assert report["items"]["normalized_features"]["status"] == "PARTIAL"
-    assert report["blocking_items"] == ["normalized_features"]
+    assert report["items"]["normalized_features"]["status"] == "READY"
+    assert report["blocking_items"] == []
+    assert report["ready_for_protocol_08"] is True
     assert len(report["coverage_caveats"]) == 2
 
 
@@ -63,7 +64,7 @@ def test_index_readiness_does_not_require_flow_or_open_interest() -> None:
     assert report["items"]["number_of_trades"]["status"] == "NOT_APPLICABLE"
     assert report["items"]["session_vwap"]["status"] == "NOT_APPLICABLE"
     assert report["items"]["volume_profile"]["status"] == "NOT_APPLICABLE"
-    assert report["items"]["normalized_features"]["status"] == "PARTIAL"
+    assert report["items"]["normalized_features"]["status"] == "READY"
 
 
 def test_equity_trade_features_are_implemented_but_normalized_layer_still_blocks() -> None:
@@ -91,4 +92,5 @@ def test_equity_trade_features_are_implemented_but_normalized_layer_still_blocks
     assert report["items"]["cumulative_delta"]["status"] == "READY"
     assert report["items"]["session_vwap"]["status"] == "READY"
     assert report["items"]["volume_profile"]["status"] == "READY"
-    assert report["blocking_items"] == ["normalized_features"]
+    assert report["blocking_items"] == []
+    assert report["ready_for_protocol_08"] is True
