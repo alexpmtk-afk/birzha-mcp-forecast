@@ -5,7 +5,12 @@ from dataclasses import replace
 import pytest
 
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
-from birzha.domain.forecast import LEGACY_FORECAST_RECORD_VERSION\nfrom birzha.storage.forecast_journal import (\n    DuckDBForecastJournal,\n    ForecastCollisionError,\n    _record_from_dict,\n)
+from birzha.domain.forecast import LEGACY_FORECAST_RECORD_VERSION
+from birzha.storage.forecast_journal import (
+    DuckDBForecastJournal,
+    ForecastCollisionError,
+    _record_from_dict,
+)
 
 
 def _record() -> ForecastRecord:
