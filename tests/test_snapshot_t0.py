@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from birzha.application.snapshot import MarketSnapshotService
+from birzha.application.snapshot import MarketSnapshotService, _cut_at
 from birzha.domain.market import Candle, CandleSeries, Instrument
 
 
@@ -88,3 +88,67 @@ def test_snapshot_t0_is_latest_completed_observation_not_oldest_timeframe_end() 
     assert quality.flow_status == "NOT_REQUESTED"
     assert snapshot.data_quality == quality.status
     assert any(reason.startswith("H1: insufficient_history") for reason in quality.reasons)
+
+
+
+def test_cut_at_excludes_observation_available_after_t0() -> None:
+    candle = Candle(
+        open=100.0,
+        close=101.0,
+        high=102.0,
+        low=99.0,
+        value=1000.0,
+        volume=10.0,
+        begin="2026-08-28 12:00:00",
+        end="2026-08-28 12:59:59",
+        completed=True,
+        available_at="2026-08-28T13:05:00+03:00",
+        available_at_confidence="EXACT",
+    )
+    series = CandleSeries(INSTRUMENT, "H1", (candle,))
+
+    result = _cut_at(series, "2026-08-28T13:00:00+03:00")
+
+    assert result.count == 0
+
+
+def test_cut_at_keeps_observation_available_by_t0() -> None:
+    candle = Candle(
+        open=100.0,
+        close=101.0,
+        high=102.0,
+        low=99.0,
+        value=1000.0,
+        volume=10.0,
+        begin="2026-08-28 12:00:00",
+        end="2026-08-28 12:59:59",
+        completed=True,
+        available_at="2026-08-28T12:59:59+03:00",
+        available_at_confidence="EXACT",
+    )
+    series = CandleSeries(INSTRUMENT, "H1", (candle,))
+
+    result = _cut_at(series, "2026-08-28T13:00:00+03:00")
+
+    assert result.count == 1
+
+
+def test_legacy_d1_row_without_available_at_is_conservatively_delayed() -> None:
+    candle = Candle(
+        open=100.0,
+        close=101.0,
+        high=102.0,
+        low=99.0,
+        value=1000.0,
+        volume=10.0,
+        begin="2026-08-28 10:00:00",
+        end="2026-08-28 20:37:34",
+        completed=True,
+    )
+    series = CandleSeries(INSTRUMENT, "D1", (candle,))
+
+    same_day = _cut_at(series, "2026-08-28T23:00:00+03:00")
+    next_day = _cut_at(series, "2026-08-29T00:00:00+03:00")
+
+    assert same_day.count == 0
+    assert next_day.count == 1
