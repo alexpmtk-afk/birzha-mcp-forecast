@@ -107,6 +107,7 @@ class DuckDBHistoricalCandleStore:
                 tick_size DOUBLE,
                 tick_value DOUBLE,
                 contract_multiplier DOUBLE,
+                lot_size DOUBLE,
                 expiration_date VARCHAR,
                 settlement_date VARCHAR,
                 calendar_id VARCHAR,
@@ -124,6 +125,7 @@ class DuckDBHistoricalCandleStore:
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS tick_size DOUBLE")
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS tick_value DOUBLE")
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS contract_multiplier DOUBLE")
+        self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS lot_size DOUBLE")
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS expiration_date VARCHAR")
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS settlement_date VARCHAR")
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS calendar_id VARCHAR")
@@ -187,6 +189,7 @@ class DuckDBHistoricalCandleStore:
                 series.instrument.tick_size,
                 series.instrument.tick_value,
                 series.instrument.contract_multiplier,
+                series.instrument.lot_size,
                 series.instrument.expiration_date,
                 series.instrument.settlement_date,
                 series.instrument.calendar_id,
@@ -225,10 +228,10 @@ class DuckDBHistoricalCandleStore:
                 (secid, symbol, root_symbol, board, engine, market, asset_class, timeframe,
                  begin, end_time, open, close, high, low, value, volume, completed, source,
                  available_at, available_at_confidence, observed_at, revision,
-                 currency, tick_size, tick_value, contract_multiplier, expiration_date,
+                 currency, tick_size, tick_value, contract_multiplier, lot_size, expiration_date,
                  settlement_date, calendar_id, session_profile, data_capabilities_json, roll_policy)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (secid, timeframe, begin) DO UPDATE SET
                     available_at=COALESCE(historical_candles.available_at, excluded.available_at),
                     available_at_confidence=CASE
@@ -336,7 +339,7 @@ class DuckDBHistoricalCandleStore:
             row = self._connection.execute(
                 """
                 SELECT symbol, root_symbol, board, engine, market, asset_class, source,
-                       currency, tick_size, tick_value, contract_multiplier,
+                       currency, tick_size, tick_value, contract_multiplier, lot_size,
                        expiration_date, settlement_date, calendar_id, session_profile,
                        data_capabilities_json, roll_policy
                 FROM historical_candles
@@ -361,14 +364,15 @@ class DuckDBHistoricalCandleStore:
             tick_size=float(row[8]) if row[8] is not None else None,
             tick_value=float(row[9]) if row[9] is not None else None,
             contract_multiplier=float(row[10]) if row[10] is not None else None,
-            expiration_date=str(row[11]) if row[11] is not None else None,
-            settlement_date=str(row[12]) if row[12] is not None else None,
-            calendar_id=str(row[13]) if row[13] is not None else None,
-            session_profile=str(row[14]) if row[14] is not None else None,
+            lot_size=float(row[11]) if row[11] is not None else None,
+            expiration_date=str(row[12]) if row[12] is not None else None,
+            settlement_date=str(row[13]) if row[13] is not None else None,
+            calendar_id=str(row[14]) if row[14] is not None else None,
+            session_profile=str(row[15]) if row[15] is not None else None,
             data_capabilities=tuple(
-                json.loads(str(row[15])) if row[15] is not None else []
+                json.loads(str(row[16])) if row[16] is not None else []
             ),
-            roll_policy=str(row[16]) if row[16] is not None else None,
+            roll_policy=str(row[17]) if row[17] is not None else None,
         )
 
     def is_session_range_verified(self, symbol: str, from_date: str, till_date: str) -> bool:
