@@ -79,7 +79,7 @@ class ForecastInputReadinessService:
             ),
             "session_vwap": self._item(
                 STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
-                "Session VWAP is calculated on demand from causal raw public trades (price×quantity) or an explicit TradeStats VWAP when available; it is never replaced by rolling vwap_20."
+                "Session VWAP is calculated on demand from causal raw public trades (price*quantity) or an explicit TradeStats VWAP when available; it is never replaced by rolling vwap_20."
                 if supports_flow
                 else "Session VWAP is not claimed when the instrument has no applicable traded-volume flow.",
             ),
