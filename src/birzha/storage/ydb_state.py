@@ -17,7 +17,7 @@ import ydb.iam
 
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.domain.outcome import HorizonOutcome
-from birzha.storage.forecast_journal import ForecastCollisionError, JournalAppendResult
+from birzha.storage.forecast_journal import (\n    ForecastCollisionError,\n    JournalAppendResult,\n    _record_from_dict,\n)
 from birzha.storage.outcome_journal import OutcomeCollisionError
 
 
@@ -321,33 +321,7 @@ def _safe_table_name(value: str) -> str:
 
 
 def _forecast_from_dict(payload: dict[str, object]) -> ForecastRecord:
-    horizons_raw = payload.get("horizons") or []
-    horizons = tuple(
-        HorizonForecast(
-            sessions=int(item["sessions"]),
-            direction=str(item["direction"]),
-            signal_strength=float(item["signal_strength"]),
-            expected_move_pct=float(item["expected_move_pct"]) if item.get("expected_move_pct") is not None else None,
-            adverse_move_pct=float(item["adverse_move_pct"]) if item.get("adverse_move_pct") is not None else None,
-        )
-        for item in horizons_raw
-    )
-    reference_raw = payload.get("reference_price")
-    return ForecastRecord(
-        forecast_id=str(payload["forecast_id"]), symbol=str(payload["symbol"]), secid=str(payload["secid"]),
-        created_at_t0=str(payload["created_at_t0"]), engine_version=str(payload["engine_version"]),
-        direction=str(payload["direction"]), signal_strength=float(payload["signal_strength"]),
-        control=str(payload["control"]), route=str(payload["route"]), horizons=horizons,
-        reasons=tuple(str(item) for item in (payload.get("reasons") or [])),
-        warnings=tuple(str(item) for item in (payload.get("warnings") or [])),
-        validation_status=str(payload["validation_status"]),
-        reference_price=float(reference_raw) if reference_raw is not None else None,
-        primary_scenario=str(payload["primary_scenario"]) if payload.get("primary_scenario") is not None else None,
-        alternative_scenario=str(payload["alternative_scenario"]) if payload.get("alternative_scenario") is not None else None,
-        confirmation_level=float(payload["confirmation_level"]) if payload.get("confirmation_level") is not None else None,
-        invalidation_level=float(payload["invalidation_level"]) if payload.get("invalidation_level") is not None else None,
-        key_levels=tuple(float(item) for item in (payload.get("key_levels") or [])),
-    )
+    return _record_from_dict(payload)
 
 
 def _outcome_from_dict(data: dict[str, object]) -> HorizonOutcome:
