@@ -258,3 +258,44 @@ def test_candle_first_seen_value_is_immutable_and_revision_is_recorded():
     ).fetchone()[0]
     assert revision_count == 1
     store.close()
+
+
+
+def test_instrument_contract_metadata_round_trips_through_duckdb():
+    instrument = Instrument(
+        symbol="Si",
+        secid="SiU6",
+        board="RFUD",
+        engine="futures",
+        market="forts",
+        asset_class="future",
+        root_symbol="Si",
+        last_trade_date="2026-09-17",
+        currency="RUB",
+        tick_size=1.0,
+        tick_value=1.0,
+        contract_multiplier=1000.0,
+        expiration_date="2026-09-17",
+        settlement_date="2026-09-18",
+        calendar_id="MOEX:futures:forts:RFUD",
+        session_profile="MOEX_SECURITY_CALENDAR",
+        data_capabilities=("CANDLES", "TRADES", "OPEN_INTEREST"),
+        roll_policy="LIQUID_CONTRACT_CAUSAL",
+    )
+    store = DuckDBHistoricalCandleStore(":memory:")
+    store.upsert_series(_d1(instrument, "2026-09-01"))
+
+    loaded = store.stored_instrument("SiU6")
+
+    assert loaded is not None
+    assert loaded.currency == "RUB"
+    assert loaded.tick_size == 1.0
+    assert loaded.tick_value == 1.0
+    assert loaded.contract_multiplier == 1000.0
+    assert loaded.expiration_date == "2026-09-17"
+    assert loaded.settlement_date == "2026-09-18"
+    assert loaded.calendar_id == "MOEX:futures:forts:RFUD"
+    assert loaded.session_profile == "MOEX_SECURITY_CALENDAR"
+    assert loaded.data_capabilities == ("CANDLES", "TRADES", "OPEN_INTEREST")
+    assert loaded.roll_policy == "LIQUID_CONTRACT_CAUSAL"
+    store.close()
