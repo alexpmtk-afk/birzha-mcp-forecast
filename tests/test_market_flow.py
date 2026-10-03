@@ -104,6 +104,7 @@ def test_market_flow_aggregates_real_contract_semantics() -> None:
     assert flow.buy_volume == 180.0
     assert flow.sell_volume == 100.0
     assert flow.volume_delta == 80.0
+    assert flow.cumulative_delta == 80.0
     assert flow.volume_delta_ratio == round(80 / 280, 6)
     assert flow.value_delta == 6_400_000.0
     assert flow.price_change_pct == 0.5
@@ -295,3 +296,49 @@ def test_index_market_flow_is_explicitly_not_applicable() -> None:
     assert flow.legal_entities is None
     assert flow.data_quality == "PASS"
     assert flow.warnings == ()
+
+
+
+@dataclass
+class FakeHistoricalTwoSessions:
+    def tradestats(self, instrument: Instrument, *, from_date: str, till_date: str):
+        assert instrument is INSTRUMENT
+        return [
+            {
+                "tradedate": "2026-08-27",
+                "tradetime": "18:00:00",
+                "vol_b": 1000,
+                "vol_s": 0,
+                "_source": PUBLIC_TRADESTATS_SOURCE,
+            },
+            {
+                "tradedate": "2026-08-28",
+                "tradetime": "10:05:00",
+                "vol_b": 100,
+                "vol_s": 60,
+                "_source": PUBLIC_TRADESTATS_SOURCE,
+            },
+            {
+                "tradedate": "2026-08-28",
+                "tradetime": "10:10:00",
+                "vol_b": 80,
+                "vol_s": 40,
+                "_source": PUBLIC_TRADESTATS_SOURCE,
+            },
+        ]
+
+    def futoi(self, instrument: Instrument, *, from_date: str, till_date: str):
+        return []
+
+
+def test_cumulative_delta_resets_to_latest_session() -> None:
+    service = MarketFlowService(
+        market_data=FakeMarketData(),
+        analytics=FakeAnalytics(),
+        historical=FakeHistoricalTwoSessions(),
+    )  # type: ignore[arg-type]
+
+    flow = service.build("Si", from_date="2026-08-27", till_date="2026-08-28")
+
+    assert flow.volume_delta == 1080.0
+    assert flow.cumulative_delta == 80.0
