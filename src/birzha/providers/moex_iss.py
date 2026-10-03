@@ -128,7 +128,10 @@ class MoexIssClient:
             {
                 "iss.meta": "off",
                 "iss.only": "securities,marketdata",
-                "securities.columns": "SECID,SHORTNAME,NAME,BOARDID,LASTTRADEDATE,ASSETCODE",
+                "securities.columns": (
+                    "SECID,SHORTNAME,NAME,BOARDID,LASTTRADEDATE,ASSETCODE,"
+                    "MINSTEP,STEPPRICE,LOTVOLUME,CURRENCYID,LASTDELDATE"
+                ),
                 "marketdata.columns": "SECID,LAST,VALTODAY,OPENPOSITION,NUMTRADES",
             },
         ).json()
@@ -172,6 +175,12 @@ class MoexIssClient:
             name=str(row.get("NAME") or row.get("SHORTNAME") or secid),
             root_symbol=root,
             last_trade_date=str(row.get("LASTTRADEDATE") or "")[:10] or None,
+            currency=str(row.get("CURRENCYID") or "").strip() or None,
+            tick_size=_float_or_none(row.get("MINSTEP")),
+            tick_value=_float_or_none(row.get("STEPPRICE")),
+            contract_multiplier=_float_or_none(row.get("LOTVOLUME")),
+            expiration_date=str(row.get("LASTTRADEDATE") or "")[:10] or None,
+            settlement_date=str(row.get("LASTDELDATE") or "")[:10] or None,
         )
 
     @staticmethod
