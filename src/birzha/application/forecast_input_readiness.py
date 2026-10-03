@@ -66,8 +66,8 @@ class ForecastInputReadinessService:
                 else "Delta flow is not claimed for this instrument type.",
             ),
             "cumulative_delta": self._item(
-                STATUS_MISSING if supports_flow else STATUS_NOT_APPLICABLE,
-                "Cumulative Delta is not yet implemented as a Forecast Protocol feature."
+                STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
+                "Latest-session Cumulative Delta is calculated on demand from causal TradeStats/public-trade rows; availability follows the underlying Delta coverage."
                 if supports_flow
                 else "Cumulative Delta is not applicable without Delta flow.",
             ),
