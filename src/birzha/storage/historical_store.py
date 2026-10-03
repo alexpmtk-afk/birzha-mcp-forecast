@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
@@ -108,6 +111,18 @@ class DuckDBHistoricalCandleStore:
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS observed_at VARCHAR")
         self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS revision VARCHAR")
         self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS historical_candle_revisions (
+                secid VARCHAR NOT NULL,
+                timeframe VARCHAR NOT NULL,
+                begin VARCHAR NOT NULL,
+                observed_at VARCHAR NOT NULL,
+                revision VARCHAR NOT NULL,
+                payload_json VARCHAR NOT NULL,
+                source VARCHAR NOT NULL,
+                PRIMARY KEY (secid, timeframe, begin, revision)
+            )
+        """)
+        self._connection.execute("""
             CREATE TABLE IF NOT EXISTS historical_verified_ranges (symbol VARCHAR NOT NULL, timeframe VARCHAR NOT NULL, from_date VARCHAR NOT NULL, till_date VARCHAR NOT NULL, PRIMARY KEY (symbol, timeframe, from_date, till_date))
         """)
         self._connection.execute("""
@@ -118,8 +133,14 @@ class DuckDBHistoricalCandleStore:
         """)
 
     def upsert_series(self, series: CandleSeries) -> int:
-        rows = [
-            [
+        rows = []
+        revision_rows = []
+        fallback_observed_at = datetime.now(timezone.utc).isoformat()
+        for candle in series.candles:
+            source = candle.source or series.source
+            revision, payload_json = _candle_revision(candle, source)
+            observed_at = candle.observed_at or fallback_observed_at
+            rows.append([
                 series.instrument.secid,
                 series.instrument.symbol,
                 series.instrument.root_symbol,
@@ -137,17 +158,38 @@ class DuckDBHistoricalCandleStore:
                 candle.value,
                 candle.volume,
                 candle.completed,
-                candle.source or series.source,
+                source,
                 candle.available_at,
                 candle.available_at_confidence,
-                candle.observed_at,
-                candle.revision,
-            ]
-            for candle in series.candles
-        ]
+                observed_at,
+                candle.revision or revision,
+            ])
+            revision_rows.append([
+                series.instrument.secid,
+                series.timeframe,
+                candle.begin,
+                observed_at,
+                candle.revision or revision,
+                payload_json,
+                source,
+                series.instrument.secid,
+                series.timeframe,
+                candle.begin,
+                candle.revision or revision,
+            ])
         if not rows:
             return 0
         with self._lock:
+            self._connection.executemany("""
+                INSERT OR IGNORE INTO historical_candle_revisions
+                (secid, timeframe, begin, observed_at, revision, payload_json, source)
+                SELECT ?, ?, ?, ?, ?, ?, ?
+                WHERE EXISTS (
+                    SELECT 1 FROM historical_candles
+                    WHERE secid=? AND timeframe=? AND begin=?
+                      AND revision IS NOT NULL AND revision<>?
+                )
+            """, revision_rows)
             self._connection.executemany("""
                 INSERT INTO historical_candles
                 (secid, symbol, root_symbol, board, engine, market, asset_class, timeframe,
@@ -155,21 +197,6 @@ class DuckDBHistoricalCandleStore:
                  available_at, available_at_confidence, observed_at, revision)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (secid, timeframe, begin) DO UPDATE SET
-                    symbol=excluded.symbol,
-                    root_symbol=excluded.root_symbol,
-                    board=excluded.board,
-                    engine=excluded.engine,
-                    market=excluded.market,
-                    asset_class=excluded.asset_class,
-                    end_time=excluded.end_time,
-                    open=excluded.open,
-                    close=excluded.close,
-                    high=excluded.high,
-                    low=excluded.low,
-                    value=excluded.value,
-                    volume=excluded.volume,
-                    completed=excluded.completed,
-                    source=excluded.source,
                     available_at=COALESCE(historical_candles.available_at, excluded.available_at),
                     available_at_confidence=CASE
                         WHEN historical_candles.available_at IS NOT NULL
@@ -177,7 +204,7 @@ class DuckDBHistoricalCandleStore:
                         ELSE excluded.available_at_confidence
                     END,
                     observed_at=COALESCE(historical_candles.observed_at, excluded.observed_at),
-                    revision=COALESCE(excluded.revision, historical_candles.revision)
+                    revision=COALESCE(historical_candles.revision, excluded.revision)
             """, rows)
         return len(rows)
 
@@ -320,3 +347,27 @@ def _exclusive_upper_bound(till_date: str) -> str:
     if len(till_date) == 10:
         return till_date + "T23:59:59.999999"
     return till_date
+
+
+
+def _candle_revision(candle: Candle, source: str) -> tuple[str, str]:
+    payload = {
+        "begin": candle.begin,
+        "end": candle.end,
+        "open": candle.open,
+        "close": candle.close,
+        "high": candle.high,
+        "low": candle.low,
+        "value": candle.value,
+        "volume": candle.volume,
+        "completed": candle.completed,
+        "source": source,
+    }
+    payload_json = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest(), payload_json
