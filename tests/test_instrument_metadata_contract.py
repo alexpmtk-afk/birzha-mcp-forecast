@@ -57,6 +57,13 @@ def test_direct_equity_metadata_populates_tick_lot_and_currency() -> None:
     assert instrument.tick_value == 0.1
     assert instrument.calendar_id == "MOEX:STOCK:SHARES:TQBR"
     assert instrument.session_profile == "MOEX_EQUITIES"
+    assert instrument.data_capabilities == (
+        "CANDLES",
+        "TRADING_CALENDAR",
+        "VOLUME",
+        "TURNOVER",
+        "TRADESTATS",
+    )
 
 
 def test_active_future_metadata_populates_contract_terms() -> None:
@@ -92,3 +99,24 @@ def test_active_future_metadata_populates_contract_terms() -> None:
     assert instrument.settlement_date == "2026-12-17"
     assert instrument.calendar_id == "MOEX:FUTURES:FORTS:RFUD"
     assert instrument.session_profile == "MOEX_FORTS"
+    assert instrument.data_capabilities == (
+        "CANDLES",
+        "TRADING_CALENDAR",
+        "VOLUME",
+        "TURNOVER",
+        "TRADESTATS",
+        "OPEN_INTEREST",
+        "FUTOI",
+    )
+
+
+
+def test_index_capabilities_do_not_claim_flow_or_open_interest() -> None:
+    from birzha.providers.moex_instrument_contract import moex_data_capabilities
+
+    capabilities = moex_data_capabilities("index")
+
+    assert capabilities == ("CANDLES", "TRADING_CALENDAR")
+    assert "OPEN_INTEREST" not in capabilities
+    assert "FUTOI" not in capabilities
+    assert "TRADESTATS" not in capabilities
