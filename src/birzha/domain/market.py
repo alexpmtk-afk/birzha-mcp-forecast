@@ -11,6 +11,7 @@ from typing import Literal
 
 
 AssetClass = Literal["future", "equity", "index", "fx", "commodity", "unknown"]
+AvailabilityConfidence = Literal["EXACT", "DOCUMENTED", "INFERRED", "UNKNOWN"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +42,11 @@ class Candle:
     begin: str
     end: str
     completed: bool = True
+    available_at: str | None = None
+    available_at_confidence: AvailabilityConfidence = "UNKNOWN"
+    observed_at: str | None = None
+    revision: str | None = None
+    source: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
