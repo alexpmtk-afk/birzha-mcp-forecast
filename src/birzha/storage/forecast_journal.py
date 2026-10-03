@@ -15,7 +15,11 @@ from pathlib import Path
 
 import duckdb
 
-from birzha.domain.forecast import ForecastRecord, HorizonForecast
+from birzha.domain.forecast import (
+    LEGACY_FORECAST_RECORD_VERSION,
+    ForecastRecord,
+    HorizonForecast,
+)
 
 
 class ForecastCollisionError(RuntimeError):
@@ -135,4 +139,63 @@ def _record_from_dict(payload: dict[str, object]) -> ForecastRecord:
         confirmation_level=float(payload["confirmation_level"]) if payload.get("confirmation_level") is not None else None,
         invalidation_level=float(payload["invalidation_level"]) if payload.get("invalidation_level") is not None else None,
         key_levels=tuple(float(item) for item in (payload.get("key_levels") or [])),
+        record_version=str(
+            payload.get("record_version") or LEGACY_FORECAST_RECORD_VERSION
+        ),
+        snapshot_id=(
+            str(payload["snapshot_id"])
+            if payload.get("snapshot_id") is not None
+            else None
+        ),
+        snapshot_contract_version=(
+            str(payload["snapshot_contract_version"])
+            if payload.get("snapshot_contract_version") is not None
+            else None
+        ),
+        prediction_contract_id=(
+            str(payload["prediction_contract_id"])
+            if payload.get("prediction_contract_id") is not None
+            else None
+        ),
+        prediction_contract_version=(
+            str(payload["prediction_contract_version"])
+            if payload.get("prediction_contract_version") is not None
+            else None
+        ),
+        market_state=(
+            str(payload["market_state"])
+            if payload.get("market_state") is not None
+            else None
+        ),
+        location=(
+            str(payload["location"])
+            if payload.get("location") is not None
+            else None
+        ),
+        pressure=(
+            str(payload["pressure"])
+            if payload.get("pressure") is not None
+            else None
+        ),
+        alignment=(
+            str(payload["alignment"])
+            if payload.get("alignment") is not None
+            else None
+        ),
+        entry_levels=tuple(
+            float(item) for item in (payload.get("entry_levels") or [])
+        ),
+        stop_level=(
+            float(payload["stop_level"])
+            if payload.get("stop_level") is not None
+            else None
+        ),
+        target_levels=tuple(
+            float(item) for item in (payload.get("target_levels") or [])
+        ),
+        reversal_condition=(
+            str(payload["reversal_condition"])
+            if payload.get("reversal_condition") is not None
+            else None
+        ),
     )

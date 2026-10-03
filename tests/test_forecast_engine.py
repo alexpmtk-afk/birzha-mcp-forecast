@@ -1,4 +1,5 @@
 from birzha.application.forecast import build_forecast_from_snapshot
+from birzha.domain.forecast import FORECAST_RECORD_CONTRACT_VERSION
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 
 
@@ -41,6 +42,18 @@ def test_forecast_up_when_timeframes_align():
     assert all(h.expected_move_pct is not None and h.expected_move_pct > 0 for h in forecast.horizons)
     assert forecast.validation_status == "UNVALIDATED_BASELINE"
     assert forecast.forecast_id.startswith("fcst_")
+    assert forecast.record_version == FORECAST_RECORD_CONTRACT_VERSION
+    assert forecast.snapshot_id is not None
+    assert forecast.snapshot_id.startswith("snap_")
+    assert forecast.snapshot_contract_version == "MARKET_SNAPSHOT_V2"
+    assert forecast.prediction_contract_id is not None
+    assert forecast.prediction_contract_id.startswith("pred_")
+    payload = forecast.to_dict()
+    assert payload["as_of"] == snapshot.as_of
+    assert payload["instrument"] == {"symbol": "Si", "contract_id": "SiU6"}
+    assert payload["field_availability"]["market_state"] == "UNAVAILABLE"
+    assert payload["field_availability"]["entries"] == "UNAVAILABLE"
+    assert payload["versions"]["forecast_record"] == FORECAST_RECORD_CONTRACT_VERSION
 
 
 def test_forecast_identity_is_deterministic():

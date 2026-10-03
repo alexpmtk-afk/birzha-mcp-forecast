@@ -12,9 +12,14 @@ import json
 import math
 from dataclasses import dataclass
 
+from birzha.application.prediction import build_prediction_contract
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
-from birzha.domain.forecast import ForecastRecord, HorizonForecast
+from birzha.domain.forecast import (
+    FORECAST_RECORD_CONTRACT_VERSION,
+    ForecastRecord,
+    HorizonForecast,
+)
 from birzha.domain.snapshot import MarketSnapshot
 
 
@@ -100,11 +105,30 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
             )
         )
 
+    prediction = None
+    try:
+        prediction = build_prediction_contract(snapshot)
+    except ValueError:
+        prediction = None
+
+    snapshot_payload = json.dumps(
+        snapshot.to_dict(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    snapshot_id = "snap_" + hashlib.sha256(
+        snapshot_payload.encode("utf-8")
+    ).hexdigest()[:24]
+
     identity_payload = {
+        "record_version": FORECAST_RECORD_CONTRACT_VERSION,
         "symbol": snapshot.symbol,
         "secid": snapshot.secid,
         "t0": snapshot.as_of,
         "engine": ENGINE_VERSION,
+        "snapshot_id": snapshot_id,
         "horizons": [5, 10, 20],
     }
     if parameters != DEFAULT_FORECAST_PARAMETERS:
@@ -142,6 +166,15 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         confirmation_level=confirmation,
         invalidation_level=invalidation,
         key_levels=levels,
+        record_version=FORECAST_RECORD_CONTRACT_VERSION,
+        snapshot_id=snapshot_id,
+        snapshot_contract_version=snapshot.contract_version,
+        prediction_contract_id=(
+            prediction.contract_id if prediction is not None else None
+        ),
+        prediction_contract_version=(
+            prediction.version if prediction is not None else None
+        ),
     )
 
 
