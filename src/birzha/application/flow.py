@@ -215,6 +215,7 @@ class MarketFlowService:
         )
 
         ordered_trade_rows = sorted(trade_rows, key=_row_time_key)
+        cumulative_delta = _latest_session_cumulative_delta(ordered_trade_rows)
         first_open = _first_number(ordered_trade_rows, "pr_open")
         last_close = _last_number(ordered_trade_rows, "pr_close")
         price_change_pct = (
@@ -274,6 +275,7 @@ class MarketFlowService:
             legal_entities=legal_entities,
             data_quality=quality,
             warnings=tuple(warnings),
+            cumulative_delta=_round_or_none(cumulative_delta),
         )
 
 
@@ -394,3 +396,36 @@ def _client_oi(row: dict[str, Any] | None, group: str) -> ClientOpenInterest | N
 
 def _round_or_none(value: float | None, digits: int = 3) -> float | None:
     return round(value, digits) if value is not None else None
+
+
+
+def _latest_session_cumulative_delta(rows: list[dict[str, Any]]) -> float | None:
+    """Return cumulative aggressive-volume Delta for the latest session only.
+
+    Rows are already causal-filtered by the caller.  The calculation is derived
+    on demand and is never persisted as a historical fact, matching Protocol 08.
+    """
+    dated = [
+        row
+        for row in rows
+        if str(_first_present(row, "tradedate", "TRADEDATE") or "").strip()
+    ]
+    if not dated:
+        return None
+    latest_date = max(
+        str(_first_present(row, "tradedate", "TRADEDATE") or "").strip()
+        for row in dated
+    )
+    total = 0.0
+    found = False
+    for row in dated:
+        tradedate = str(_first_present(row, "tradedate", "TRADEDATE") or "").strip()
+        if tradedate != latest_date:
+            continue
+        buy = _number(_first_present(row, "vol_b", "VOL_B"))
+        sell = _number(_first_present(row, "vol_s", "VOL_S"))
+        if buy is None or sell is None:
+            continue
+        total += buy - sell
+        found = True
+    return total if found else None

@@ -101,6 +101,7 @@ def test_flow_cutoff_removes_future_rows_and_preserves_real_zero() -> None:
     assert flow.buy_volume == 0.0
     assert flow.sell_volume == 20.0
     assert flow.volume_delta == -20.0
+    assert flow.cumulative_delta == -20.0
     assert flow.volume_delta_ratio == -1.0
     assert flow.individuals is not None
     assert flow.individuals.net_position == 0.0

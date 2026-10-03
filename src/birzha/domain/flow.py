@@ -43,6 +43,7 @@ class MarketFlowSnapshot:
     legal_entities: ClientOpenInterest | None
     data_quality: str
     warnings: tuple[str, ...]
+    cumulative_delta: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -68,4 +69,5 @@ class MarketFlowSnapshot:
             "legal_entities": self.legal_entities.to_dict() if self.legal_entities else None,
             "data_quality": self.data_quality,
             "warnings": list(self.warnings),
+            "cumulative_delta": self.cumulative_delta,
         }
