@@ -13,6 +13,7 @@ from birzha.application.market_data import MarketDataService
 from birzha.application.public_tradestats import PUBLIC_TRADESTATS_SOURCE
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
+from birzha.application.volume_profile import profile_from_public_trades
 from birzha.domain.flow import ClientOpenInterest, MarketFlowSnapshot
 from birzha.domain.market import Instrument
 from birzha.providers.moex_analytics import MoexAnalyticsClient, MoexAnalyticsError
@@ -239,6 +240,10 @@ class MarketFlowService:
             raw_public_rows,
             ordered_trade_rows,
         )
+        trade_volume_profile = profile_from_public_trades(
+            raw_public_rows,
+            bins=24,
+        )
         first_open = _first_number(ordered_trade_rows, "pr_open")
         last_close = _last_number(ordered_trade_rows, "pr_close")
         price_change_pct = (
@@ -302,6 +307,7 @@ class MarketFlowService:
             number_of_trades=_int_or_none(number_of_trades),
             session_vwap=_round_or_none(session_vwap, 6),
             session_vwap_source=session_vwap_source,
+            volume_profile=trade_volume_profile,
         )
 
 

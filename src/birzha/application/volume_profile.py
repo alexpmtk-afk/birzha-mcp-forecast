@@ -112,3 +112,44 @@ def profile_from_candles(series, *, bins: int = 24):
     if not points:
         return None
     return VolumeProfileEngine(bins=bins, method="CANDLE_TYPICAL_PRICE_VOLUME_PROXY_V1").build(points)
+
+
+
+def profile_from_public_trades(rows, *, bins: int = 24):
+    """Build an exact latest-session profile from raw public trade price/quantity."""
+
+    dated = []
+    for row in rows:
+        tradedate = str(row.get("TRADEDATE") or row.get("tradedate") or "").strip()[:10]
+        if not tradedate:
+            continue
+        try:
+            offmarket = int(float(row.get("OFFMARKETDEAL") or row.get("offmarketdeal") or 0))
+        except (TypeError, ValueError):
+            offmarket = 0
+        if offmarket != 0:
+            continue
+        try:
+            price = float(row.get("PRICE") if row.get("PRICE") is not None else row.get("price"))
+            quantity = float(row.get("QUANTITY") if row.get("QUANTITY") is not None else row.get("quantity"))
+        except (TypeError, ValueError):
+            continue
+        if quantity <= 0:
+            continue
+        dated.append((tradedate, price, quantity))
+
+    if not dated:
+        return None
+
+    latest_date = max(item[0] for item in dated)
+    points = [
+        PriceVolumePoint(price=price, volume=quantity)
+        for tradedate, price, quantity in dated
+        if tradedate == latest_date
+    ]
+    if not points:
+        return None
+    return VolumeProfileEngine(
+        bins=bins,
+        method="PUBLIC_TRADES_PRICE_QUANTITY_V1",
+    ).build(points)

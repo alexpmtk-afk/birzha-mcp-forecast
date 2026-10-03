@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from birzha.domain.volume_profile import VolumeProfileResult
+
 
 @dataclass(frozen=True, slots=True)
 class ClientOpenInterest:
@@ -47,6 +49,7 @@ class MarketFlowSnapshot:
     number_of_trades: int | None = None
     session_vwap: float | None = None
     session_vwap_source: str | None = None
+    volume_profile: VolumeProfileResult | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -76,4 +79,5 @@ class MarketFlowSnapshot:
             "number_of_trades": self.number_of_trades,
             "session_vwap": self.session_vwap,
             "session_vwap_source": self.session_vwap_source,
+            "volume_profile": self.volume_profile.to_dict() if self.volume_profile else None,
         }
