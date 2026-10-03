@@ -52,10 +52,10 @@ def test_public_recent_trades_uses_public_iss_and_start_pagination() -> None:
             "RECNO,TRADENO,TRADEDATE,TRADETIME,PRICE,QUANTITY,"
             "OPENPOSITION,BUYSELL,OFFMARKETDEAL"
         )
-        assert params["limit"] == 500
+        assert params["limit"] == 100
         start = int(params["start"])
         starts.append(start)
-        count = 500 if start == 0 else 2
+        count = 100 if start == 0 else 2
         payload = {
             "trades": {
                 "columns": ["RECNO", "TRADEDATE", "TRADETIME"],
@@ -75,11 +75,11 @@ def test_public_recent_trades_uses_public_iss_and_start_pagination() -> None:
 
     rows = client.fetch_public_recent_trades(INSTRUMENT, max_pages=3)
 
-    assert len(rows) == 502
-    assert starts == [0, 500]
+    assert len(rows) == 102
+    assert starts == [0, 100]
     assert bases == [ISS_BASE, ISS_BASE]
     assert rows[0]["RECNO"] == 0
-    assert rows[-1]["RECNO"] == 501
+    assert rows[-1]["RECNO"] == 101
 
 
 class _FakeHttpResponse:
@@ -124,7 +124,7 @@ def test_public_recent_trades_retries_direct_read_timeout() -> None:
     def opener(request, timeout):
         nonlocal attempts
         attempts += 1
-        assert timeout == 60.0
+        assert timeout == 20.0
         if attempts == 1:
             raise TimeoutError("The read operation timed out")
         return _FakeHttpResponse(_two_trade_payload())
