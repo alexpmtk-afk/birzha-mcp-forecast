@@ -50,8 +50,10 @@ class ForecastInputReadinessService:
                 else "Turnover is not claimed for this instrument type.",
             ),
             "number_of_trades": self._item(
-                STATUS_MISSING,
-                "MOEX can expose trade counts in some datasets, but BIRZHA does not yet persist/use them as a Forecast Protocol input.",
+                STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
+                "Trade count is implemented from TradeStats/public-trade trades_b+trades_s when those fields are available; otherwise it remains NULL as required by Protocol 08."
+                if supports_flow
+                else "Trade count is not claimed for this instrument type.",
             ),
             "open_interest": self._item(
                 STATUS_PARTIAL if is_future else STATUS_NOT_APPLICABLE,
