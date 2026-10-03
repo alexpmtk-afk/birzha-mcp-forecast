@@ -175,14 +175,40 @@ def _timestamp(value: str) -> datetime:
     return parsed.astimezone(MOEX_TIMEZONE)
 
 
+def _available_at(candle: Candle, timeframe: str) -> datetime:
+    """Return the earliest conservative time this observation could be used.
+
+    New rows carry explicit availability metadata. Legacy rows predate the
+    causal contract, so they fail safe to an inferred availability time rather
+    than being treated as known at bar start.
+    """
+    if candle.available_at:
+        return _timestamp(candle.available_at)
+    end = _timestamp(candle.end)
+    if timeframe.upper() == "D1":
+        return datetime.combine(
+            end.date() + timedelta(days=1),
+            datetime.min.time(),
+            tzinfo=MOEX_TIMEZONE,
+        )
+    return end
+
+
 def _cut_at(series: CandleSeries, t0: str) -> CandleSeries:
     boundary = _timestamp(t0)
     candles = tuple(
         candle
         for candle in series.candles
-        if candle.completed and _timestamp(candle.end) <= boundary
+        if candle.completed
+        and _timestamp(candle.end) <= boundary
+        and _available_at(candle, series.timeframe) <= boundary
     )
-    return CandleSeries(instrument=series.instrument, timeframe=series.timeframe, candles=candles)
+    return CandleSeries(
+        instrument=series.instrument,
+        timeframe=series.timeframe,
+        candles=candles,
+        source=series.source,
+    )
 
 
 def _state(series: CandleSeries) -> TimeframeState:
