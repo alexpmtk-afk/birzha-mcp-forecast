@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 import json
 from pathlib import Path
 
+from birzha.application.market_data import MOEX_TIMEZONE
 from birzha.application.validation import WalkForwardValidator
 from birzha.providers.moex_analytics import MoexAnalyticsClient
 
@@ -114,7 +115,7 @@ def _gold_resolution_evidence(validator: WalkForwardValidator) -> dict[str, obje
 def _gold_public_tail_evidence(
     validator: WalkForwardValidator,
 ) -> dict[str, object]:
-    today = date.today()
+    today = datetime.now(MOEX_TIMEZONE).date()
     instrument = validator.market_data.resolve("GOLD", as_of=today)
     client = MoexAnalyticsClient(bearer_token="")
     rows, checkpoint, complete = client.fetch_public_recent_trade_page(
@@ -123,6 +124,20 @@ def _gold_public_tail_evidence(
         page_limit=10,
     )
     if not rows:
+        if today.weekday() >= 5:
+            evidence = {
+                "date": today.isoformat(),
+                "secid": instrument.secid,
+                "rows": 0,
+                "checkpoint_recno": checkpoint,
+                "complete": complete,
+                "status": "SKIP_NON_TRADING_WEEKEND",
+            }
+            print(
+                "GOLD_PUBLIC_TAIL=SKIP_NON_TRADING_WEEKEND "
+                f"secid={instrument.secid} date={today.isoformat()}"
+            )
+            return evidence
         raise RuntimeError(
             "GOLD_PUBLIC_TAIL_FAIL: public ISS returned no delayed trades"
         )
