@@ -171,3 +171,47 @@ def test_rolling_future_stored_session_requires_current_verified_calendar():
     with pytest.raises(RuntimeError, match="stored futures session is not verified"):
         view.resolve("GOLD", as_of=date(2025, 1, 10))
     store.close()
+
+
+
+def test_duckdb_round_trips_causal_metadata_and_preserves_first_observation():
+    store = DuckDBHistoricalCandleStore(":memory:")
+    first = CandleSeries(
+        INST,
+        "H1",
+        (
+            Candle(
+                100, 101, 102, 99, 1000, 10,
+                "2026-09-01T10:00:00", "2026-09-01T10:59:59", True,
+                available_at="2026-09-01T10:59:59+03:00",
+                available_at_confidence="INFERRED",
+                observed_at="2026-09-01T11:00:05+03:00",
+                source="MOEX_ISS",
+            ),
+        ),
+    )
+    store.upsert_series(first)
+
+    second = CandleSeries(
+        INST,
+        "H1",
+        (
+            Candle(
+                100, 101, 102, 99, 1000, 10,
+                "2026-09-01T10:00:00", "2026-09-01T10:59:59", True,
+                available_at="2026-09-01T11:00:10+03:00",
+                available_at_confidence="INFERRED",
+                observed_at="2026-09-02T12:00:00+03:00",
+                source="MOEX_ISS",
+            ),
+        ),
+    )
+    store.upsert_series(second)
+
+    loaded = store.read(INST, "H1", "2026-09-01", "2026-09-01")
+    candle = loaded.candles[0]
+    assert candle.available_at == "2026-09-01T10:59:59+03:00"
+    assert candle.observed_at == "2026-09-01T11:00:05+03:00"
+    assert candle.available_at_confidence == "INFERRED"
+    assert candle.source == "MOEX_ISS"
+    store.close()
