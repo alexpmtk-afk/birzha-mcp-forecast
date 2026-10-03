@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -148,10 +148,20 @@ def _normalize_completion(
         observed_now = observed_now.replace(tzinfo=MOEX_TIMEZONE)
     else:
         observed_now = observed_now.astimezone(MOEX_TIMEZONE)
+    observed_at = candle.observed_at or observed_now.isoformat()
     try:
         end = datetime.fromisoformat(candle.end.replace("Z", "+00:00"))
     except ValueError:
-        return replace(candle, completed=False)
+        return replace(
+            candle,
+            completed=False,
+            observed_at=observed_at,
+            available_at_confidence=(
+                candle.available_at_confidence
+                if candle.available_at is not None
+                else "UNKNOWN"
+            ),
+        )
     if end.tzinfo is None:
         end = end.replace(tzinfo=MOEX_TIMEZONE)
     else:
@@ -161,8 +171,33 @@ def _normalize_completion(
     # timestamp can be earlier than wall-clock ``now``.  It is therefore not a
     # final daily observation until the exchange date has rolled over.  Fail
     # closed here rather than leaking a forming D1 candle into an ex-ante T0.
+    inferred_available_at = candle.available_at
+    inferred_confidence = candle.available_at_confidence
+    if inferred_available_at is None:
+        if timeframe == "D1":
+            inferred_available_at = datetime.combine(
+                end.date() + timedelta(days=1),
+                time.min,
+                tzinfo=MOEX_TIMEZONE,
+            ).isoformat()
+        else:
+            inferred_available_at = end.isoformat()
+        inferred_confidence = "INFERRED"
+
     if timeframe == "D1" and end.date() >= observed_now.date():
-        return replace(candle, completed=False)
+        return replace(
+            candle,
+            completed=False,
+            observed_at=observed_at,
+            available_at=inferred_available_at,
+            available_at_confidence=inferred_confidence,
+        )
 
     completed = bool(candle.completed and end <= observed_now)
-    return replace(candle, completed=completed)
+    return replace(
+        candle,
+        completed=completed,
+        observed_at=observed_at,
+        available_at=inferred_available_at,
+        available_at_confidence=inferred_confidence,
+    )
