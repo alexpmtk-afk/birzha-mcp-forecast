@@ -125,11 +125,31 @@ class MarketFlowService:
 
         warnings: list[str] = []
         try:
-            trade_rows = (
-                self.historical.tradestats(instrument, from_date=start.isoformat(), till_date=till.isoformat())
-                if self.historical is not None
-                else self.analytics.fetch_tradestats(instrument, from_date=start.isoformat(), till_date=till.isoformat())
-            )
+            if (
+                self.historical is not None
+                and cutoff_at is not None
+                and hasattr(self.historical, "tradestats_causal")
+            ):
+                trade_rows = self.historical.tradestats_causal(
+                    instrument,
+                    from_date=start.isoformat(),
+                    till_date=till.isoformat(),
+                    cutoff_at=cutoff_at,
+                )
+            else:
+                trade_rows = (
+                    self.historical.tradestats(
+                        instrument,
+                        from_date=start.isoformat(),
+                        till_date=till.isoformat(),
+                    )
+                    if self.historical is not None
+                    else self.analytics.fetch_tradestats(
+                        instrument,
+                        from_date=start.isoformat(),
+                        till_date=till.isoformat(),
+                    )
+                )
         except (MoexAnalyticsError, JSONDecodeError, TimeoutError, UpstreamRateLimited, UpstreamRequestBudgetExceeded) as exc:
             trade_rows = []
             warnings.append(
@@ -139,11 +159,31 @@ class MarketFlowService:
         futoi_rows: list[dict[str, Any]] = []
         if instrument.asset_class == "future":
             try:
-                futoi_rows = (
-                    self.historical.futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
-                    if self.historical is not None
-                    else self.analytics.fetch_futoi(instrument, from_date=start.isoformat(), till_date=till.isoformat())
-                )
+                if (
+                    self.historical is not None
+                    and cutoff_at is not None
+                    and hasattr(self.historical, "futoi_causal")
+                ):
+                    futoi_rows = self.historical.futoi_causal(
+                        instrument,
+                        from_date=start.isoformat(),
+                        till_date=till.isoformat(),
+                        cutoff_at=cutoff_at,
+                    )
+                else:
+                    futoi_rows = (
+                        self.historical.futoi(
+                            instrument,
+                            from_date=start.isoformat(),
+                            till_date=till.isoformat(),
+                        )
+                        if self.historical is not None
+                        else self.analytics.fetch_futoi(
+                            instrument,
+                            from_date=start.isoformat(),
+                            till_date=till.isoformat(),
+                        )
+                    )
             except (MoexAnalyticsError, JSONDecodeError, TimeoutError, UpstreamRateLimited, UpstreamRequestBudgetExceeded) as exc:
                 futoi_rows = []
                 warnings.append(f"FUTOI_UNAVAILABLE:{type(exc).__name__}:{exc}")

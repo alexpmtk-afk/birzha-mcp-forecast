@@ -75,6 +75,24 @@ class HistoricalFlowDataService:
             )
         return self.store.read_rows(dataset, key, from_date, till_date)
 
+    def tradestats_causal(
+        self,
+        instrument: Instrument,
+        *,
+        from_date: str,
+        till_date: str,
+        cutoff_at: str,
+    ) -> list[dict[str, object]]:
+        if instrument.asset_class not in TRADESTATS_ASSET_CLASSES:
+            return []
+        return self.store.read_rows_causal(
+            "TRADESTATS",
+            instrument.secid,
+            from_date,
+            till_date,
+            cutoff_at,
+        )
+
     def capture_public_recent_tradestats(self, symbol: str) -> dict[str, object]:
         """Capture public futures or equity trades with durable page-by-page resume.
 
@@ -231,6 +249,30 @@ class HistoricalFlowDataService:
                 verification_dataset, key, from_date, till_date
             )
         return self.store.read_rows(dataset, key, from_date, till_date)
+
+    def futoi_causal(
+        self,
+        instrument: Instrument,
+        *,
+        from_date: str,
+        till_date: str,
+        cutoff_at: str,
+    ) -> list[dict[str, object]]:
+        if instrument.asset_class != "future":
+            return []
+        key = (instrument.root_symbol or instrument.symbol).strip()
+        verification_dataset = _verification_dataset("FUTOI")
+        if not self.store.is_verified(
+            verification_dataset, key, from_date, till_date
+        ):
+            return []
+        return self.store.read_rows_causal(
+            "FUTOI",
+            key,
+            from_date,
+            till_date,
+            cutoff_at,
+        )
 
     def sync(self, symbol: str, *, from_date: str, till_date: str) -> dict[str, object]:
         if self.read_only:
