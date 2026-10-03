@@ -90,8 +90,8 @@ class ForecastInputReadinessService:
                 else "Trade-volume profile is not claimed for an index without traded-volume flow.",
             ),
             "normalized_features": self._item(
-                STATUS_PARTIAL,
-                "ATR%, volume ratio and Delta ratio exist; the full normalized feature layer is not complete.",
+                STATUS_READY,
+                "Minimal Protocol 08 normalized layer is implemented: ATR-scaled returns/distances, price location, relative volume, Delta/Volume and OI change ratio with honest NULL semantics.",
             ),
             "quality_status": self._item(
                 STATUS_READY,

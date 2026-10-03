@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 from birzha.domain.flow import MarketFlowSnapshot
+from birzha.domain.normalized_features import NormalizedFeatureSet
 from birzha.domain.volume_profile import VolumeProfileResult
 
 
@@ -78,6 +79,7 @@ class MarketSnapshot:
     flow: MarketFlowSnapshot | None = None
     quality_contract: DataQualityContract | None = None
     volume_profile: VolumeProfileResult | None = None
+    normalized_features: NormalizedFeatureSet | None = None
     contract_version: str = MARKET_SNAPSHOT_CONTRACT_VERSION
 
     def to_dict(self) -> dict[str, object]:
@@ -92,6 +94,7 @@ class MarketSnapshot:
             "m15": self.m15.to_dict(),
             "flow": self.flow.to_dict() if self.flow else None,
             "volume_profile": self.volume_profile.to_dict() if self.volume_profile else None,
+            "normalized_features": self.normalized_features.to_dict() if self.normalized_features else None,
             "data_quality": self.data_quality,
             "quality_contract": self.quality_contract.to_dict() if self.quality_contract else None,
             "warnings": list(self.warnings),
