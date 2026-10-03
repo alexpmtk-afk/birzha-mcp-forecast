@@ -29,6 +29,7 @@ class Instrument:
     tick_size: float | None = None
     tick_value: float | None = None
     contract_multiplier: float | None = None
+    lot_size: float | None = None
     expiration_date: str | None = None
     settlement_date: str | None = None
     calendar_id: str | None = None
