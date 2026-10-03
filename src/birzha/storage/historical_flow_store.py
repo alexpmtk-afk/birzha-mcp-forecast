@@ -20,6 +20,7 @@ class HistoricalFlowStore(Protocol):
     def is_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> bool: ...
     def mark_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> None: ...
     def coverage(self, dataset: str | None = None) -> list[dict[str, object]]: ...
+    def backfill_causal_availability(self, *, dry_run: bool = True) -> dict[str, object]: ...
 
 
 class DuckDBHistoricalFlowStore:
@@ -220,6 +221,78 @@ class DuckDBHistoricalFlowStore:
             }
             for row in rows
         ]
+
+    def backfill_causal_availability(self, *, dry_run: bool = True) -> dict[str, object]:
+        """Backfill inferred availability only for trade-derived datasets.
+
+        Safe scope is intentionally narrow: TRADESTATS and PUBLIC_TRADES_RAW.
+        FUTOI and operational checkpoint rows are never modified because their
+        market-event time is not proof of publication availability.
+        """
+        allowed = ("TRADESTATS", "PUBLIC_TRADES_RAW")
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT dataset,key_symbol,row_key,payload_json,source
+                FROM historical_flow_rows
+                WHERE available_at IS NULL
+                  AND dataset IN ('TRADESTATS','PUBLIC_TRADES_RAW')
+                ORDER BY dataset,key_symbol,row_key
+                """
+            ).fetchall()
+
+        updates: list[list[object]] = []
+        by_dataset: dict[str, int] = {}
+        by_key: dict[str, int] = {}
+        skipped = 0
+        for dataset, key_symbol, row_key, payload_json, source in rows:
+            try:
+                payload = json.loads(str(payload_json))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                skipped += 1
+                continue
+            available_at, confidence = _availability(
+                str(dataset),
+                payload,
+                str(source),
+            )
+            if available_at is None:
+                skipped += 1
+                continue
+            updates.append([
+                available_at,
+                confidence,
+                str(dataset),
+                str(key_symbol),
+                str(row_key),
+            ])
+            by_dataset[str(dataset)] = by_dataset.get(str(dataset), 0) + 1
+            key = f"{dataset}:{key_symbol}"
+            by_key[key] = by_key.get(key, 0) + 1
+
+        if not dry_run and updates:
+            with self._lock:
+                self._connection.executemany(
+                    """
+                    UPDATE historical_flow_rows
+                    SET available_at=?, available_at_confidence=?
+                    WHERE dataset=? AND key_symbol=? AND row_key=?
+                      AND available_at IS NULL
+                    """,
+                    updates,
+                )
+
+        return {
+            "schema": "FLOW_CAUSAL_BACKFILL_V1",
+            "dry_run": dry_run,
+            "allowed_datasets": list(allowed),
+            "candidate_rows": len(rows),
+            "backfillable_rows": len(updates),
+            "skipped_rows": skipped,
+            "updated_rows": 0 if dry_run else len(updates),
+            "by_dataset": by_dataset,
+            "by_key": by_key,
+        }
 
     def close(self) -> None:
         with self._lock:

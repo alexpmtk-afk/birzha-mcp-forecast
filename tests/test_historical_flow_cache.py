@@ -359,3 +359,66 @@ def test_flow_storage_coverage_summarizes_rows_and_causal_availability():
     assert item["till_date"] == "2026-10-03"
     assert item["causal_rows"] == 2
     store.close()
+
+
+
+def test_flow_causal_backfill_only_updates_trade_derived_rows():
+    store = DuckDBHistoricalFlowStore(":memory:")
+    tradestats = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "seqnum": 1,
+        "vol_b": 10,
+        "vol_s": 5,
+    }]
+    futoi = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "clgroup": "FIZ",
+        "pos": 100,
+    }]
+    store.upsert_rows("TRADESTATS", "SiU6", tradestats, "MOEX_ALGOPACK")
+    store.upsert_rows("FUTOI", "Si", futoi, "MOEX_FUTOI")
+
+    store._connection.execute(
+        "UPDATE historical_flow_rows SET available_at=NULL, available_at_confidence='UNKNOWN'"
+    )
+
+    preview = store.backfill_causal_availability(dry_run=True)
+    assert preview["backfillable_rows"] == 1
+    assert preview["updated_rows"] == 0
+    assert preview["by_dataset"] == {"TRADESTATS": 1}
+
+    applied = store.backfill_causal_availability(dry_run=False)
+    assert applied["updated_rows"] == 1
+
+    causal_trade = store.read_rows_causal(
+        "TRADESTATS", "SiU6", "2026-09-01", "2026-09-01",
+        "2026-09-01T10:00:00+03:00",
+    )
+    causal_oi = store.read_rows_causal(
+        "FUTOI", "Si", "2026-09-01", "2026-09-01",
+        "2026-09-01T23:59:59+03:00",
+    )
+    assert causal_trade == tradestats
+    assert causal_oi == []
+    store.close()
+
+
+def test_flow_causal_backfill_does_not_overwrite_existing_availability():
+    store = DuckDBHistoricalFlowStore(":memory:")
+    rows = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "seqnum": 1,
+        "available_at": "2026-09-01T10:05:00+03:00",
+        "vol_b": 10,
+        "vol_s": 5,
+    }]
+    store.upsert_rows("TRADESTATS", "SiU6", rows, "MOEX_ALGOPACK")
+
+    preview = store.backfill_causal_availability(dry_run=True)
+
+    assert preview["candidate_rows"] == 0
+    assert preview["backfillable_rows"] == 0
+    store.close()
