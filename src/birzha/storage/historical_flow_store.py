@@ -17,32 +17,6 @@ class HistoricalFlowStore(Protocol):
     def upsert_rows(self, dataset: str, key: str, rows: list[dict[str, object]], source: str) -> int: ...
     def read_rows(self, dataset: str, key: str, from_date: str, till_date: str) -> list[dict[str, object]]: ...
     def read_rows_causal(self, dataset: str, key: str, from_date: str, till_date: str, cutoff_at: str) -> list[dict[str, object]]: ...
-    def read_rows_causal(
-        self,
-        dataset: str,
-        key: str,
-        from_date: str,
-        till_date: str,
-        cutoff_at: str,
-    ) -> list[dict[str, object]]:
-        cutoff=_parse_time(cutoff_at)
-        if cutoff is None:
-            raise ValueError("cutoff_at must be a parseable timestamp")
-        with self._lock:
-            rows=self._connection.execute("""
-                SELECT payload_json, available_at
-                FROM historical_flow_rows
-                WHERE dataset=? AND key_symbol=? AND trade_date>=? AND trade_date<=?
-                ORDER BY trade_date,row_key
-            """,[dataset,key,from_date,till_date]).fetchall()
-        result=[]
-        for payload_json, available_at in rows:
-            available=_parse_time(str(available_at)) if available_at is not None else None
-            if available is None or available > cutoff:
-                continue
-            result.append(json.loads(str(payload_json)))
-        return result
-
     def is_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> bool: ...
     def mark_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> None: ...
 
@@ -129,6 +103,32 @@ class DuckDBHistoricalFlowStore:
                 ORDER BY trade_date,row_key
             """,[dataset,key,from_date,till_date]).fetchall()
         return [json.loads(str(row[0])) for row in rows]
+
+    def read_rows_causal(
+        self,
+        dataset: str,
+        key: str,
+        from_date: str,
+        till_date: str,
+        cutoff_at: str,
+    ) -> list[dict[str, object]]:
+        cutoff=_parse_time(cutoff_at)
+        if cutoff is None:
+            raise ValueError("cutoff_at must be a parseable timestamp")
+        with self._lock:
+            rows=self._connection.execute("""
+                SELECT payload_json, available_at
+                FROM historical_flow_rows
+                WHERE dataset=? AND key_symbol=? AND trade_date>=? AND trade_date<=?
+                ORDER BY trade_date,row_key
+            """,[dataset,key,from_date,till_date]).fetchall()
+        result=[]
+        for payload_json, available_at in rows:
+            available=_parse_time(str(available_at)) if available_at is not None else None
+            if available is None or available > cutoff:
+                continue
+            result.append(json.loads(str(payload_json)))
+        return result
 
     def is_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> bool:
         with self._lock:
