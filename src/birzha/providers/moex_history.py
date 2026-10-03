@@ -7,6 +7,10 @@ from typing import Any
 
 from birzha.domain.market import Instrument
 from birzha.providers.moex_iss import MoexIssClient, MoexIssError
+from birzha.providers.moex_instrument_contract import (
+    moex_calendar_id,
+    moex_session_profile,
+)
 
 
 class MoexHistoricalFutureResolver:
@@ -121,6 +125,12 @@ def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Inst
         name=_text(row, "SHORTNAME") or secid,
         root_symbol=root,
         last_trade_date=_text(row, "LASTTRADEDATE")[:10] or None,
+        calendar_id=moex_calendar_id(
+            engine="futures",
+            market="forts",
+            board=_text(row, "BOARDID") or "RFUD",
+        ),
+        session_profile=moex_session_profile("future"),
         source="MOEX_ISS_HISTORY",
     )
 
