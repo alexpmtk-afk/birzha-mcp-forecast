@@ -15,7 +15,11 @@ from pathlib import Path
 
 import duckdb
 
-from birzha.domain.forecast import (\n    LEGACY_FORECAST_RECORD_VERSION,\n    ForecastRecord,\n    HorizonForecast,\n)
+from birzha.domain.forecast import (
+    LEGACY_FORECAST_RECORD_VERSION,
+    ForecastRecord,
+    HorizonForecast,
+)
 
 
 class ForecastCollisionError(RuntimeError):
