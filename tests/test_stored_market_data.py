@@ -215,3 +215,46 @@ def test_duckdb_round_trips_causal_metadata_and_preserves_first_observation():
     assert candle.available_at_confidence == "INFERRED"
     assert candle.source == "MOEX_ISS"
     store.close()
+
+
+
+def test_candle_first_seen_value_is_immutable_and_revision_is_recorded():
+    store = DuckDBHistoricalCandleStore(":memory:")
+    first = CandleSeries(
+        INST,
+        "H1",
+        (
+            Candle(
+                100, 101, 102, 99, 1000, 10,
+                "2026-09-01T10:00:00", "2026-09-01T10:59:59", True,
+                available_at="2026-09-01T10:59:59+03:00",
+                observed_at="2026-09-01T11:00:05+03:00",
+                source="MOEX_ISS",
+            ),
+        ),
+    )
+    revised = CandleSeries(
+        INST,
+        "H1",
+        (
+            Candle(
+                100, 999, 1000, 99, 5000, 50,
+                "2026-09-01T10:00:00", "2026-09-01T10:59:59", True,
+                available_at="2026-09-01T10:59:59+03:00",
+                observed_at="2026-09-02T12:00:00+03:00",
+                source="MOEX_ISS",
+            ),
+        ),
+    )
+
+    store.upsert_series(first)
+    store.upsert_series(revised)
+
+    loaded = store.read(INST, "H1", "2026-09-01", "2026-09-01")
+    assert loaded.candles[0].close == 101
+    assert loaded.candles[0].volume == 10
+    revision_count = store._connection.execute(
+        "SELECT count(*) FROM historical_candle_revisions"
+    ).fetchone()[0]
+    assert revision_count == 1
+    store.close()
