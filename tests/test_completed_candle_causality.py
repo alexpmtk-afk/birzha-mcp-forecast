@@ -100,3 +100,33 @@ def test_completed_only_excludes_current_forming_bar() -> None:
 
     assert len(result.candles) == 1
     assert result.candles[0].end == "2026-08-30 12:59:59"
+
+
+
+def test_causal_metadata_is_stamped_on_completed_h1_candle() -> None:
+    now = datetime(2026, 8, 30, 14, 0, tzinfo=MOSCOW)
+    normalized = _normalize_completion(
+        _candle("2026-08-30 13:59:59"),
+        timeframe="H1",
+        now=now,
+    )
+
+    assert normalized.completed is True
+    assert normalized.available_at is not None
+    assert "13:59:59" in normalized.available_at
+    assert normalized.available_at_confidence == "INFERRED"
+    assert normalized.observed_at == now.isoformat()
+
+
+def test_d1_available_at_is_conservatively_next_day() -> None:
+    now = datetime(2026, 9, 16, 10, 0, tzinfo=MOSCOW)
+    normalized = _normalize_completion(
+        _candle("2026-09-15 20:37:34"),
+        timeframe="D1",
+        now=now,
+    )
+
+    assert normalized.completed is True
+    assert normalized.available_at is not None
+    assert normalized.available_at.startswith("2026-09-16T00:00:00")
+    assert normalized.available_at_confidence == "INFERRED"
