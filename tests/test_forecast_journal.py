@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
-from birzha.storage.forecast_journal import DuckDBForecastJournal, ForecastCollisionError
+from birzha.domain.forecast import LEGACY_FORECAST_RECORD_VERSION\nfrom birzha.storage.forecast_journal import (\n    DuckDBForecastJournal,\n    ForecastCollisionError,\n    _record_from_dict,\n)
 
 
 def _record() -> ForecastRecord:
@@ -77,3 +77,36 @@ def test_canonical_hash_changes_when_immutable_payload_changes() -> None:
     _, first_hash = DuckDBForecastJournal.canonical_payload(record)
     _, second_hash = DuckDBForecastJournal.canonical_payload(replace(record, signal_strength=0.61))
     assert first_hash != second_hash
+
+
+def test_legacy_payload_without_stage_f_fields_remains_readable() -> None:
+    payload = _record().to_dict()
+    for key in (
+        "record_version",
+        "as_of",
+        "instrument",
+        "snapshot_id",
+        "snapshot_contract_version",
+        "prediction_contract_id",
+        "prediction_contract_version",
+        "market_state",
+        "location",
+        "pressure",
+        "alignment",
+        "entry_levels",
+        "stop_level",
+        "target_levels",
+        "reversal_condition",
+        "scenario",
+        "execution_plan",
+        "versions",
+        "field_availability",
+    ):
+        payload.pop(key, None)
+
+    restored = _record_from_dict(payload)
+
+    assert restored.forecast_id == "fcst_test_001"
+    assert restored.record_version == LEGACY_FORECAST_RECORD_VERSION
+    assert restored.snapshot_id is None
+    assert restored.prediction_contract_id is None
