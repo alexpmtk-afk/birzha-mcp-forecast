@@ -87,6 +87,20 @@ class DuckDBHistoricalFlowStore:
             ])
         if not materialized:
             return 0
+        if dataset.upper() == "PUBLIC_TRADES_CHECKPOINT":
+            with self._lock:
+                self._connection.executemany("""
+                    INSERT INTO historical_flow_rows
+                    (dataset,key_symbol,row_key,trade_date,payload_json,source,
+                     available_at,available_at_confidence,observed_at,revision)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT (dataset,key_symbol,row_key) DO UPDATE SET
+                        payload_json=excluded.payload_json,
+                        source=excluded.source,
+                        observed_at=excluded.observed_at,
+                        revision=excluded.revision
+                """, materialized)
+            return len(materialized)
         revision_rows = [
             [
                 row[0], row[1], row[2], row[8], row[9], row[4], row[5],
