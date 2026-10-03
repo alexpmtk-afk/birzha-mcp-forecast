@@ -50,26 +50,26 @@ class ForecastInputReadinessService:
                 else "Turnover is not claimed for this instrument type.",
             ),
             "number_of_trades": self._item(
-                STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
-                "Trade count is implemented from TradeStats/public-trade trades_b+trades_s when those fields are available; otherwise it remains NULL as required by Protocol 08."
+                STATUS_READY if supports_flow else STATUS_NOT_APPLICABLE,
+                "Trade count calculation is implemented. At a specific T0 it may be NULL when the source does not provide a real count."
                 if supports_flow
                 else "Trade count is not claimed for this instrument type.",
             ),
             "open_interest": self._item(
-                STATUS_PARTIAL if is_future else STATUS_NOT_APPLICABLE,
-                "FUTOI/OI pipeline exists, but availability/coverage can be delayed or missing."
+                STATUS_READY if is_future else STATUS_NOT_APPLICABLE,
+                "OI/FUTOI handling is implemented with causal fail-closed semantics. A specific T0 may still have OI unavailable when publication timing is not provable."
                 if is_future
                 else "Open interest is not applicable to this instrument type.",
             ),
             "delta": self._item(
-                STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
-                "TradeStats/public-trade Delta pipeline exists, but historical coverage is not guaranteed."
+                STATUS_READY if supports_flow else STATUS_NOT_APPLICABLE,
+                "TradeStats/public-trade Delta calculation is implemented; per-T0 availability is reported by snapshot quality/coverage."
                 if supports_flow
                 else "Delta flow is not claimed for this instrument type.",
             ),
             "cumulative_delta": self._item(
-                STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
-                "Latest-session Cumulative Delta is calculated on demand from causal TradeStats/public-trade rows; availability follows the underlying Delta coverage."
+                STATUS_READY if supports_flow else STATUS_NOT_APPLICABLE,
+                "Latest-session Cumulative Delta is implemented on demand from causal TradeStats/public-trade rows."
                 if supports_flow
                 else "Cumulative Delta is not applicable without Delta flow.",
             ),
@@ -78,14 +78,16 @@ class ForecastInputReadinessService:
                 "ATR-based volatility feature is implemented for candle timeframes.",
             ),
             "session_vwap": self._item(
-                STATUS_PARTIAL if supports_flow else STATUS_NOT_APPLICABLE,
-                "Session VWAP is calculated on demand from causal raw public trades (price*quantity) or an explicit TradeStats VWAP when available; it is never replaced by rolling vwap_20."
+                STATUS_READY if supports_flow else STATUS_NOT_APPLICABLE,
+                "Session VWAP is implemented on demand from causal raw public trades or an explicit TradeStats VWAP; it is never replaced by rolling vwap_20."
                 if supports_flow
                 else "Session VWAP is not claimed when the instrument has no applicable traded-volume flow.",
             ),
             "volume_profile": self._item(
-                STATUS_PARTIAL,
-                "Exact POC/VAL/VAH/HVN/LVN is implemented from causal raw public trades when available; Snapshot falls back to an explicitly labeled candle proxy when exact trade coverage is absent.",
+                STATUS_NOT_APPLICABLE if is_index else STATUS_READY,
+                "Exact POC/VAL/VAH/HVN/LVN is implemented from causal raw public trades; when exact trade coverage is absent the snapshot may expose an explicitly labeled approximate fallback."
+                if not is_index
+                else "Trade-volume profile is not claimed for an index without traded-volume flow.",
             ),
             "normalized_features": self._item(
                 STATUS_PARTIAL,
@@ -102,13 +104,24 @@ class ForecastInputReadinessService:
             for key, value in items.items()
             if value["status"] in {STATUS_MISSING, STATUS_PARTIAL}
         ]
+        coverage_caveats: list[str] = []
+        if supports_flow:
+            coverage_caveats.append(
+                "Trade-derived inputs can be UNAVAILABLE at a specific T0 when no causal stored flow exists."
+            )
+        if is_future:
+            coverage_caveats.append(
+                "FUTOI/OI can be UNAVAILABLE at a specific T0 when publication time is delayed or not provable."
+            )
+
         return {
-            "schema": "FORECAST_INPUT_READINESS_V1",
+            "schema": "FORECAST_INPUT_READINESS_V2",
             "scope": "IMPLEMENTATION_READINESS",
             "symbol": symbol,
             "instrument": instrument.to_dict(),
             "items": items,
             "blocking_items": blocking,
+            "coverage_caveats": coverage_caveats,
             "ready_for_protocol_08": not blocking,
         }
 
