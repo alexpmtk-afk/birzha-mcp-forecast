@@ -85,7 +85,7 @@ class ForecastInputReadinessService:
             ),
             "volume_profile": self._item(
                 STATUS_PARTIAL,
-                "POC/VAL/VAH/HVN/LVN exist, but the current snapshot uses an approximate candle-price/volume proxy.",
+                "Exact POC/VAL/VAH/HVN/LVN is implemented from causal raw public trades when available; Snapshot falls back to an explicitly labeled candle proxy when exact trade coverage is absent.",
             ),
             "normalized_features": self._item(
                 STATUS_PARTIAL,
