@@ -19,6 +19,7 @@ from birzha.upstream.moex import MOEX_ISS_PUBLIC_POLICY
 from birzha.providers.moex_instrument_contract import (
     moex_calendar_id,
     moex_data_capabilities,
+    moex_roll_policy,
     moex_session_profile,
 )
 
@@ -193,6 +194,7 @@ class MoexIssClient:
             ),
             session_profile=moex_session_profile("future"),
             data_capabilities=moex_data_capabilities("future"),
+            roll_policy=moex_roll_policy("future"),
         )
 
     @staticmethod
