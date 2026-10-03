@@ -8,6 +8,7 @@ from datetime import date, datetime, timedelta
 from birzha.application.features import TimeframeFeatureEngine
 from birzha.application.flow import MarketFlowService
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
+from birzha.application.normalized_features import NormalizedFeatureEngine
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.application.volume_profile import profile_from_candles
 from birzha.domain.flow import MarketFlowSnapshot
@@ -140,16 +141,27 @@ class MarketSnapshotService:
             if flow_snapshot is None or flow_snapshot.source == "NOT_APPLICABLE_FOR_INDEX"
             else "MOEX_ISS+ALGOPACK+FUTOI"
         )
+        d1_state = _state(d1)
+        h1_state = _state(h1)
+        m15_state = _state(m15)
+        normalized_features = NormalizedFeatureEngine().build(
+            d1=d1_state,
+            h1=h1_state,
+            m15=m15_state,
+            flow=flow_snapshot,
+            volume_profile=volume_profile,
+        )
         return MarketSnapshot(
             symbol=symbol,
             secid=instrument.secid,
             as_of=causal_t0,
             source=source,
-            d1=_state(d1),
-            h1=_state(h1),
-            m15=_state(m15),
+            d1=d1_state,
+            h1=h1_state,
+            m15=m15_state,
             flow=flow_snapshot,
             volume_profile=volume_profile,
+            normalized_features=normalized_features,
             data_quality=quality,
             quality_contract=quality_contract,
             warnings=tuple(warnings),
