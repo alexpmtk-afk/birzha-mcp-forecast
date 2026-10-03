@@ -19,6 +19,7 @@ class HistoricalFlowStore(Protocol):
     def read_rows_causal(self, dataset: str, key: str, from_date: str, till_date: str, cutoff_at: str) -> list[dict[str, object]]: ...
     def is_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> bool: ...
     def mark_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> None: ...
+    def coverage(self, dataset: str | None = None) -> list[dict[str, object]]: ...
 
 
 class DuckDBHistoricalFlowStore:
@@ -182,6 +183,43 @@ class DuckDBHistoricalFlowStore:
     def mark_verified(self, dataset: str, key: str, from_date: str, till_date: str) -> None:
         with self._lock:
             self._connection.execute("INSERT OR IGNORE INTO historical_flow_verified VALUES (?,?,?,?)",[dataset,key,from_date,till_date])
+
+    def coverage(self, dataset: str | None = None) -> list[dict[str, object]]:
+        where = ""
+        params: list[object] = []
+        if dataset is not None:
+            where = "WHERE dataset=?"
+            params.append(dataset)
+        with self._lock:
+            rows = self._connection.execute(
+                f"""
+                SELECT
+                    dataset,
+                    key_symbol,
+                    count(*) AS rows,
+                    min(NULLIF(trade_date,'')) AS from_date,
+                    max(NULLIF(trade_date,'')) AS till_date,
+                    count(available_at) AS causal_rows,
+                    count(DISTINCT source) AS source_count
+                FROM historical_flow_rows
+                {where}
+                GROUP BY dataset,key_symbol
+                ORDER BY dataset,key_symbol
+                """,
+                params,
+            ).fetchall()
+        return [
+            {
+                "dataset": str(row[0]),
+                "key": str(row[1]),
+                "rows": int(row[2]),
+                "from_date": str(row[3]) if row[3] is not None else None,
+                "till_date": str(row[4]) if row[4] is not None else None,
+                "causal_rows": int(row[5]),
+                "source_count": int(row[6]),
+            }
+            for row in rows
+        ]
 
     def close(self) -> None:
         with self._lock:
