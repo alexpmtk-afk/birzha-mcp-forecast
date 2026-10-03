@@ -14,6 +14,7 @@ from starlette.responses import JSONResponse
 from birzha.application.calibration import ModelCalibrationService, calibrate_across_symbols
 from birzha.application.flow import MarketFlowService
 from birzha.application.forecast import ForecastService
+from birzha.application.forecast_input_readiness import ForecastInputReadinessService
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.journal import ForecastJournalService
@@ -74,6 +75,7 @@ _historical_flow = HistoricalFlowDataService(market_data=_market, analytics=_ana
 _flow = MarketFlowService(market_data=_market, analytics=_analytics, historical=_historical_flow)
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
+_forecast_input_readiness = ForecastInputReadinessService(market_data=_market)
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
 _analysis = MarketAnalysisService(history=_history, journal=_journal)
 _outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
@@ -194,6 +196,34 @@ def market_flow(symbol: str, from_date: str | None = None, till_date: str | None
 @mcp.tool(name="market.snapshot", description="Build a causal D1/H1/M15 Market Snapshot from real MOEX price, volume, ALGOPACK Delta and applicable OI data at one forecast T0.")
 def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _snapshot.build(symbol, as_of_date=as_of_date).to_dict()
+
+
+@mcp.tool(
+    name="data.forecast_input_readiness",
+    description="Audit implementation readiness of Protocol 08 forecast inputs for one supported market. Reports READY/PARTIAL/MISSING/NOT_APPLICABLE without claiming historical coverage.",
+)
+def data_forecast_input_readiness(symbol: str) -> dict[str, object]:
+    return _forecast_input_readiness.audit(symbol)
+
+
+@mcp.tool(
+    name="data.forecast_input_readiness_core",
+    description="Audit Protocol 08 forecast-input implementation readiness for all six BIRZHA core markets.",
+)
+def data_forecast_input_readiness_core() -> dict[str, object]:
+    reports = {
+        symbol: _forecast_input_readiness.audit(symbol)
+        for symbol in CORE_HISTORY_SYMBOLS
+    }
+    return {
+        "schema": "FORECAST_INPUT_READINESS_CORE_V1",
+        "markets": reports,
+        "ready_markets": [
+            symbol
+            for symbol, report in reports.items()
+            if report["ready_for_protocol_08"]
+        ],
+    }
 
 
 @mcp.tool(name="forecast.build", description="Build an explainable ex-ante BIRZHA baseline forecast without persistence. Use forecast.create for an operational forecast that must enter the journal.")
