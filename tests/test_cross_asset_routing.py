@@ -121,7 +121,12 @@ def test_algopack_route_is_asset_class_based_not_symbol_based() -> None:
 
 
 class FakeResponse:
+    def __init__(self, payload=None):
+        self.payload = payload
+
     def json(self):
+        if self.payload is not None:
+            return self.payload
         return {
             "boards": {
                 "columns": [
@@ -137,8 +142,15 @@ class FakeResponse:
 
 class FakeIssClient:
     def _request(self, path, params):
-        assert path == "/securities/SBER.json"
-        return FakeResponse()
+        if path == "/securities/SBER.json":
+            return FakeResponse()
+        assert path == "/engines/stock/markets/shares/boards/TQBR/securities/SBER.json"
+        return FakeResponse({
+            "securities": {
+                "columns": ["SECID","SHORTNAME","SECNAME","LOTSIZE","MINSTEP","CURRENCYID"],
+                "data": [["SBER","Sberbank","Sberbank",10,0.01,"SUR"]],
+            }
+        })
 
     @staticmethod
     def _table(payload, name):
@@ -181,9 +193,19 @@ class FakeIndexIssClient:
         self.board = board
 
     def _request(self, path, params):
-        assert path == f"/securities/{self.secid}.json"
-        assert params["iss.only"] == "boards"
-        return FakeIndexResponse(self.secid, self.board)
+        if path == f"/securities/{self.secid}.json":
+            assert params["iss.only"] == "boards"
+            return FakeIndexResponse(self.secid, self.board)
+        assert path == (
+            f"/engines/stock/markets/index/boards/{self.board}/"
+            f"securities/{self.secid}.json"
+        )
+        return FakeResponse({
+            "securities": {
+                "columns": ["SECID","SHORTNAME","SECNAME","LOTSIZE","MINSTEP","CURRENCYID"],
+                "data": [[self.secid,self.secid,"MOEX Index",None,0.01,"SUR"]],
+            }
+        })
 
     @staticmethod
     def _table(payload, name):
