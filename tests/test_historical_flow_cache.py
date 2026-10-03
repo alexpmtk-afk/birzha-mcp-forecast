@@ -204,3 +204,88 @@ def test_bounded_futoi_marks_whole_range_after_all_chunks():
         _verification_dataset("FUTOI"), "Si", "2026-01-01", "2026-05-01"
     ) is True
     store.close()
+
+
+
+def test_causal_tradestats_read_uses_availability_time():
+    store = DuckDBHistoricalFlowStore(":memory:")
+    rows = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "seqnum": 1,
+        "vol_b": 10,
+        "vol_s": 5,
+    }]
+    store.upsert_rows("TRADESTATS", "SiU6", rows, "MOEX_ALGOPACK")
+
+    before = store.read_rows_causal(
+        "TRADESTATS",
+        "SiU6",
+        "2026-09-01",
+        "2026-09-01",
+        "2026-09-01T09:59:59+03:00",
+    )
+    after = store.read_rows_causal(
+        "TRADESTATS",
+        "SiU6",
+        "2026-09-01",
+        "2026-09-01",
+        "2026-09-01T10:00:00+03:00",
+    )
+
+    assert before == []
+    assert after == rows
+    store.close()
+
+
+def test_causal_futoi_without_proven_availability_is_excluded():
+    store = DuckDBHistoricalFlowStore(":memory:")
+    rows = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "clgroup": "FIZ",
+        "pos": 100,
+    }]
+    store.upsert_rows("FUTOI", "Si", rows, "MOEX_FUTOI")
+
+    causal = store.read_rows_causal(
+        "FUTOI",
+        "Si",
+        "2026-09-01",
+        "2026-09-01",
+        "2026-09-01T23:59:59+03:00",
+    )
+
+    assert causal == []
+    store.close()
+
+
+def test_causal_futoi_with_documented_publish_time_is_allowed():
+    store = DuckDBHistoricalFlowStore(":memory:")
+    rows = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "systime": "2026-09-01T10:02:00+03:00",
+        "clgroup": "FIZ",
+        "pos": 100,
+    }]
+    store.upsert_rows("FUTOI", "Si", rows, "MOEX_FUTOI")
+
+    before = store.read_rows_causal(
+        "FUTOI",
+        "Si",
+        "2026-09-01",
+        "2026-09-01",
+        "2026-09-01T10:01:59+03:00",
+    )
+    after = store.read_rows_causal(
+        "FUTOI",
+        "Si",
+        "2026-09-01",
+        "2026-09-01",
+        "2026-09-01T10:02:00+03:00",
+    )
+
+    assert before == []
+    assert after == rows
+    store.close()
