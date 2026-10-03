@@ -289,3 +289,35 @@ def test_causal_futoi_with_documented_publish_time_is_allowed():
     assert before == []
     assert after == rows
     store.close()
+
+
+
+def test_flow_first_seen_payload_is_immutable_and_revision_is_recorded():
+    store = DuckDBHistoricalFlowStore(":memory:")
+    first = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "seqnum": 1,
+        "vol_b": 10,
+        "vol_s": 5,
+    }]
+    revised = [{
+        "tradedate": "2026-09-01",
+        "tradetime": "10:00:00",
+        "seqnum": 1,
+        "vol_b": 999,
+        "vol_s": 5,
+    }]
+
+    store.upsert_rows("TRADESTATS", "SiU6", first, "MOEX_ALGOPACK")
+    store.upsert_rows("TRADESTATS", "SiU6", revised, "MOEX_ALGOPACK")
+
+    loaded = store.read_rows(
+        "TRADESTATS", "SiU6", "2026-09-01", "2026-09-01"
+    )
+    assert loaded == first
+    revision_count = store._connection.execute(
+        "SELECT count(*) FROM historical_flow_revisions"
+    ).fetchone()[0]
+    assert revision_count == 1
+    store.close()
