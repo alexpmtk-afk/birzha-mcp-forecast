@@ -10,7 +10,7 @@ class _MarketData:
         return self.instrument
 
 
-def test_future_readiness_marks_flow_partial_and_session_vwap_missing() -> None:
+def test_future_readiness_marks_implemented_flow_ready_and_keeps_coverage_caveats() -> None:
     instrument = Instrument(
         symbol="Si",
         secid="SiZ6",
@@ -33,12 +33,15 @@ def test_future_readiness_marks_flow_partial_and_session_vwap_missing() -> None:
     report = ForecastInputReadinessService(_MarketData(instrument)).audit("Si")
 
     assert report["ready_for_protocol_08"] is False
-    assert report["items"]["open_interest"]["status"] == "PARTIAL"
-    assert report["items"]["delta"]["status"] == "PARTIAL"
-    assert report["items"]["cumulative_delta"]["status"] == "PARTIAL"
-    assert report["items"]["session_vwap"]["status"] == "PARTIAL"
-    assert report["items"]["number_of_trades"]["status"] == "PARTIAL"
-    assert report["items"]["volume_profile"]["status"] == "PARTIAL"
+    assert report["items"]["open_interest"]["status"] == "READY"
+    assert report["items"]["delta"]["status"] == "READY"
+    assert report["items"]["cumulative_delta"]["status"] == "READY"
+    assert report["items"]["session_vwap"]["status"] == "READY"
+    assert report["items"]["number_of_trades"]["status"] == "READY"
+    assert report["items"]["volume_profile"]["status"] == "READY"
+    assert report["items"]["normalized_features"]["status"] == "PARTIAL"
+    assert report["blocking_items"] == ["normalized_features"]
+    assert len(report["coverage_caveats"]) == 2
 
 
 def test_index_readiness_does_not_require_flow_or_open_interest() -> None:
@@ -59,9 +62,11 @@ def test_index_readiness_does_not_require_flow_or_open_interest() -> None:
     assert report["items"]["cumulative_delta"]["status"] == "NOT_APPLICABLE"
     assert report["items"]["number_of_trades"]["status"] == "NOT_APPLICABLE"
     assert report["items"]["session_vwap"]["status"] == "NOT_APPLICABLE"
+    assert report["items"]["volume_profile"]["status"] == "NOT_APPLICABLE"
+    assert report["items"]["normalized_features"]["status"] == "PARTIAL"
 
 
-def test_equity_turnover_is_ready_but_trade_count_is_not_yet_implemented() -> None:
+def test_equity_trade_features_are_implemented_but_normalized_layer_still_blocks() -> None:
     instrument = Instrument(
         symbol="SBER",
         secid="SBER",
@@ -81,5 +86,9 @@ def test_equity_turnover_is_ready_but_trade_count_is_not_yet_implemented() -> No
     report = ForecastInputReadinessService(_MarketData(instrument)).audit("SBER")
 
     assert report["items"]["turnover"]["status"] == "READY"
-    assert report["items"]["number_of_trades"]["status"] == "PARTIAL"
-    assert "number_of_trades" in report["blocking_items"]
+    assert report["items"]["number_of_trades"]["status"] == "READY"
+    assert report["items"]["delta"]["status"] == "READY"
+    assert report["items"]["cumulative_delta"]["status"] == "READY"
+    assert report["items"]["session_vwap"]["status"] == "READY"
+    assert report["items"]["volume_profile"]["status"] == "READY"
+    assert report["blocking_items"] == ["normalized_features"]
