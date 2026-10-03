@@ -18,6 +18,7 @@ from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.upstream.moex import MOEX_ISS_PUBLIC_POLICY
 from birzha.providers.moex_instrument_contract import (
     moex_calendar_id,
+    moex_data_capabilities,
     moex_session_profile,
 )
 
@@ -191,6 +192,7 @@ class MoexIssClient:
                 board=str(row.get("BOARDID") or "RFUD"),
             ),
             session_profile=moex_session_profile("future"),
+            data_capabilities=moex_data_capabilities("future"),
         )
 
     @staticmethod
