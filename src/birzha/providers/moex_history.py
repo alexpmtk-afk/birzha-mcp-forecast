@@ -10,6 +10,7 @@ from birzha.providers.moex_iss import MoexIssClient, MoexIssError
 from birzha.providers.moex_instrument_contract import (
     moex_calendar_id,
     moex_data_capabilities,
+    moex_roll_policy,
     moex_session_profile,
 )
 
@@ -31,7 +32,7 @@ class MoexHistoricalFutureResolver:
                 "history.columns": (
                     "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
                     "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,"
-                    "LASTTRADEDATE,LASTDELDATE"
+                    "LASTTRADEDATE,LASTDELDATE,MINSTEP,STEPPRICE,LOTVOLUME,CURRENCYID"
                 ),
                 "date": as_of.isoformat(),
                 "assetcode": root,
@@ -139,6 +140,10 @@ def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Inst
         last_trade_date=_text(row, "LASTTRADEDATE")[:10] or None,
         expiration_date=_text(row, "LASTTRADEDATE")[:10] or None,
         settlement_date=_text(row, "LASTDELDATE")[:10] or None,
+        currency=_text(row, "CURRENCYID") or None,
+        tick_size=_number(row, "MINSTEP"),
+        tick_value=_number(row, "STEPPRICE"),
+        contract_multiplier=_number(row, "LOTVOLUME"),
         calendar_id=moex_calendar_id(
             engine="futures",
             market="forts",
@@ -146,6 +151,7 @@ def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Inst
         ),
         session_profile=moex_session_profile("future"),
         data_capabilities=moex_data_capabilities("future"),
+        roll_policy=moex_roll_policy("future"),
         source="MOEX_ISS_HISTORY",
     )
 
