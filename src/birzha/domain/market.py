@@ -25,6 +25,16 @@ class Instrument:
     name: str | None = None
     root_symbol: str | None = None
     last_trade_date: str | None = None
+    currency: str | None = None
+    tick_size: float | None = None
+    tick_value: float | None = None
+    contract_multiplier: float | None = None
+    expiration_date: str | None = None
+    settlement_date: str | None = None
+    calendar_id: str | None = None
+    session_profile: str | None = None
+    data_capabilities: tuple[str, ...] = ()
+    roll_policy: str | None = None
     source: str = "MOEX_ISS"
 
     def to_dict(self) -> dict[str, object]:
