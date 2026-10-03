@@ -9,6 +9,7 @@ from birzha.providers.moex_iss import MoexIssClient
 from birzha.providers.moex_instrument_contract import (
     moex_calendar_id,
     moex_data_capabilities,
+    moex_roll_policy,
     moex_session_profile,
 )
 
@@ -93,6 +94,7 @@ class MoexDirectInstrumentResolver:
             ),
             session_profile=moex_session_profile(asset_class),
             data_capabilities=moex_data_capabilities(asset_class),
+            roll_policy=moex_roll_policy(asset_class),
         )
 
     def _security_metadata(
