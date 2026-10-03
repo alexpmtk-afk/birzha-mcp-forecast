@@ -17,7 +17,11 @@ import ydb.iam
 
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.domain.outcome import HorizonOutcome
-from birzha.storage.forecast_journal import (\n    ForecastCollisionError,\n    JournalAppendResult,\n    _record_from_dict,\n)
+from birzha.storage.forecast_journal import (
+    ForecastCollisionError,
+    JournalAppendResult,
+    _record_from_dict,
+)
 from birzha.storage.outcome_journal import OutcomeCollisionError
 
 
