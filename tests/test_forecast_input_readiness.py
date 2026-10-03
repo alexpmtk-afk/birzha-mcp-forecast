@@ -32,7 +32,7 @@ def test_future_readiness_marks_implemented_flow_ready_and_keeps_coverage_caveat
     )
     report = ForecastInputReadinessService(_MarketData(instrument)).audit("Si")
 
-    assert report["ready_for_protocol_08"] is False
+    assert report["ready_for_protocol_08"] is True
     assert report["items"]["open_interest"]["status"] == "READY"
     assert report["items"]["delta"]["status"] == "READY"
     assert report["items"]["cumulative_delta"]["status"] == "READY"
