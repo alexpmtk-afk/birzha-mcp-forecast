@@ -6,6 +6,10 @@ from typing import Any
 
 from birzha.domain.market import AssetClass, Instrument
 from birzha.providers.moex_iss import MoexIssClient
+from birzha.providers.moex_instrument_contract import (
+    moex_calendar_id,
+    moex_session_profile,
+)
 
 
 class MoexDirectInstrumentResolver:
@@ -81,6 +85,12 @@ class MoexDirectInstrumentResolver:
             tick_size=tick_size,
             tick_value=tick_value,
             contract_multiplier=lot_size if asset_class == "equity" else None,
+            calendar_id=moex_calendar_id(
+                engine=engine,
+                market=market,
+                board=board,
+            ),
+            session_profile=moex_session_profile(asset_class),
         )
 
     def _security_metadata(

@@ -16,6 +16,10 @@ import httpx
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.upstream.moex import MOEX_ISS_PUBLIC_POLICY
+from birzha.providers.moex_instrument_contract import (
+    moex_calendar_id,
+    moex_session_profile,
+)
 
 
 ISS_BASE = "https://iss.moex.com/iss"
@@ -181,6 +185,12 @@ class MoexIssClient:
             contract_multiplier=_float_or_none(row.get("LOTVOLUME")),
             expiration_date=str(row.get("LASTTRADEDATE") or "")[:10] or None,
             settlement_date=str(row.get("LASTDELDATE") or "")[:10] or None,
+            calendar_id=moex_calendar_id(
+                engine="futures",
+                market="forts",
+                board=str(row.get("BOARDID") or "RFUD"),
+            ),
+            session_profile=moex_session_profile("future"),
         )
 
     @staticmethod
