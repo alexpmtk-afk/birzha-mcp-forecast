@@ -23,6 +23,7 @@ from birzha.application.market_analysis import MarketAnalysisService
 from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.method_validation import MethodWalkForwardValidator
 from birzha.application.outcome import OutcomeService
+from birzha.application.outcome_contract import OutcomeContractService
 from birzha.application.prediction import PredictionContractService
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -77,6 +78,11 @@ _flow = MarketFlowService(market_data=_market, analytics=_analytics, historical=
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
 _forecast = ForecastService(snapshots=_snapshot)
 _prediction_contract = PredictionContractService(snapshots=_snapshot)
+_outcome_contract = OutcomeContractService(
+    market_data=_market,
+    prediction_contracts=_prediction_contract,
+    analytics=_analytics,
+)
 _forecast_input_readiness = ForecastInputReadinessService(market_data=_market)
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
 _analysis = MarketAnalysisService(history=_history, journal=_journal)
@@ -206,6 +212,26 @@ def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, obj
 )
 def prediction_contract(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _prediction_contract.build(symbol, as_of_date=as_of_date).to_dict()
+
+
+@mcp.tool(
+    name="outcome.contract",
+    description=(
+        "Evaluate the formal Protocol 08 first-touch Outcome Contract for a "
+        "Prediction Contract: UP_FIRST / DOWN_FIRST / NEITHER / AMBIGUOUS, "
+        "hit timing and direction-neutral MFE/MAE."
+    ),
+)
+def outcome_contract(
+    symbol: str,
+    as_of_date: str | None = None,
+    evaluation_date: str | None = None,
+) -> dict[str, object]:
+    return _outcome_contract.evaluate(
+        symbol,
+        as_of_date=as_of_date,
+        evaluation_date=evaluation_date,
+    ).to_dict()
 
 
 
