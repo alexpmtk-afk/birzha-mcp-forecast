@@ -18,3 +18,23 @@ def moex_session_profile(asset_class: AssetClass) -> str:
         "commodity": "MOEX_COMMODITIES",
     }
     return mapping.get(asset_class, "MOEX_GENERIC")
+
+
+
+def moex_data_capabilities(asset_class: AssetClass) -> tuple[str, ...]:
+    base = ("CANDLES", "TRADING_CALENDAR")
+    if asset_class == "equity":
+        return base + ("VOLUME", "TURNOVER", "TRADESTATS")
+    if asset_class == "future":
+        return base + (
+            "VOLUME",
+            "TURNOVER",
+            "TRADESTATS",
+            "OPEN_INTEREST",
+            "FUTOI",
+        )
+    if asset_class == "index":
+        return base
+    if asset_class == "fx":
+        return base + ("VOLUME", "TURNOVER")
+    return base
