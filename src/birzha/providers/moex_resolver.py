@@ -50,17 +50,65 @@ class MoexDirectInstrumentResolver:
         if not engine or not market or not board:
             return None
 
+        metadata = self._security_metadata(
+            secid=secid,
+            engine=engine,
+            market=market,
+            board=board,
+        )
+        asset_class = _asset_class(engine, market)
+        tick_size = _number(metadata, "MINSTEP")
+        lot_size = _number(metadata, "LOTSIZE")
+        tick_value = (
+            tick_size * lot_size
+            if asset_class == "equity"
+            and tick_size is not None
+            and lot_size is not None
+            else None
+        )
+
         return Instrument(
             symbol=secid,
             secid=secid,
             board=board,
             engine=engine,
             market=market,
-            asset_class=_asset_class(engine, market),
-            name=_text(row, "title") or secid,
+            asset_class=asset_class,
+            name=_text(row, "title") or _text(metadata, "SECNAME") or secid,
             root_symbol=None,
             last_trade_date=_text(row, "listed_till")[:10] or None,
+            currency=_text(metadata, "CURRENCYID") or None,
+            tick_size=tick_size,
+            tick_value=tick_value,
+            contract_multiplier=lot_size if asset_class == "equity" else None,
         )
+
+    def _security_metadata(
+        self,
+        *,
+        secid: str,
+        engine: str,
+        market: str,
+        board: str,
+    ) -> dict[str, Any]:
+        payload = self._client._request(  # noqa: SLF001
+            (
+                f"/engines/{engine}/markets/{market}/boards/{board}/"
+                f"securities/{secid}.json"
+            ),
+            {
+                "iss.meta": "off",
+                "iss.only": "securities",
+                "securities.columns": (
+                    "SECID,SHORTNAME,SECNAME,LOTSIZE,MINSTEP,CURRENCYID"
+                ),
+            },
+        ).json()
+        rows = self._client._table(payload, "securities")  # noqa: SLF001
+        for item in rows:
+            if _text(item, "SECID") == secid:
+                return item
+        return {}
 
 
 def _first(row: dict[str, Any], key: str) -> object | None:
@@ -73,6 +121,14 @@ def _first(row: dict[str, Any], key: str) -> object | None:
 def _text(row: dict[str, Any], key: str) -> str:
     value = _first(row, key)
     return str(value).strip() if value is not None else ""
+
+
+def _number(row: dict[str, Any], key: str) -> float | None:
+    value = _first(row, key)
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _integer(row: dict[str, Any], key: str) -> int | None:
