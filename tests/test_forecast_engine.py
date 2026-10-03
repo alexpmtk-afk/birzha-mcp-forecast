@@ -1,5 +1,6 @@
 from birzha.application.forecast import build_forecast_from_snapshot
-from birzha.domain.forecast import FORECAST_RECORD_CONTRACT_VERSION\nfrom birzha.domain.snapshot import MarketSnapshot, TimeframeState
+from birzha.domain.forecast import FORECAST_RECORD_CONTRACT_VERSION
+from birzha.domain.snapshot import MarketSnapshot, TimeframeState
 
 
 def _state(tf: str, trend: float, ret5: float, atr: float | None = None) -> TimeframeState:
