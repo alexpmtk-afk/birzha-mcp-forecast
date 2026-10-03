@@ -9,6 +9,7 @@ from birzha.domain.market import Instrument
 from birzha.providers.moex_iss import MoexIssClient, MoexIssError
 from birzha.providers.moex_instrument_contract import (
     moex_calendar_id,
+    moex_data_capabilities,
     moex_session_profile,
 )
 
@@ -144,6 +145,7 @@ def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Inst
             board=_text(row, "BOARDID") or "RFUD",
         ),
         session_profile=moex_session_profile("future"),
+        data_capabilities=moex_data_capabilities("future"),
         source="MOEX_ISS_HISTORY",
     )
 
