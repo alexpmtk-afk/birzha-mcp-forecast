@@ -205,6 +205,9 @@ class MarketFlowService:
         sell_volume = _sum_field(trade_rows, "vol_s")
         buy_value = _sum_field(trade_rows, "val_b")
         sell_value = _sum_field(trade_rows, "val_s")
+        buy_trades = _sum_field(trade_rows, "trades_b")
+        sell_trades = _sum_field(trade_rows, "trades_s")
+        number_of_trades = _add(buy_trades, sell_trades)
         volume_delta = _difference(buy_volume, sell_volume)
         value_delta = _difference(buy_value, sell_value)
         total_aggressive_volume = _add(buy_volume, sell_volume)
@@ -276,6 +279,7 @@ class MarketFlowService:
             data_quality=quality,
             warnings=tuple(warnings),
             cumulative_delta=_round_or_none(cumulative_delta),
+            number_of_trades=_int_or_none(number_of_trades),
         )
 
 
