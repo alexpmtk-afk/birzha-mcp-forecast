@@ -124,6 +124,20 @@ def _gold_public_tail_evidence(
         page_limit=10,
     )
     if not rows:
+        if today.weekday() >= 5:
+            evidence = {
+                "date": today.isoformat(),
+                "secid": instrument.secid,
+                "rows": 0,
+                "checkpoint_recno": checkpoint,
+                "complete": complete,
+                "status": "SKIP_NON_TRADING_WEEKEND",
+            }
+            print(
+                "GOLD_PUBLIC_TAIL=SKIP_NON_TRADING_WEEKEND "
+                f"secid={instrument.secid} date={today.isoformat()}"
+            )
+            return evidence
         raise RuntimeError(
             "GOLD_PUBLIC_TAIL_FAIL: public ISS returned no delayed trades"
         )
