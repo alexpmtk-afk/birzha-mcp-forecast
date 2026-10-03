@@ -96,9 +96,17 @@ class DuckDBHistoricalCandleStore:
                 volume DOUBLE,
                 completed BOOLEAN NOT NULL,
                 source VARCHAR NOT NULL,
+                available_at VARCHAR,
+                available_at_confidence VARCHAR NOT NULL DEFAULT 'UNKNOWN',
+                observed_at VARCHAR,
+                revision VARCHAR,
                 PRIMARY KEY (secid, timeframe, begin)
             )
         """)
+        self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS available_at VARCHAR")
+        self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS available_at_confidence VARCHAR DEFAULT 'UNKNOWN'")
+        self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS observed_at VARCHAR")
+        self._connection.execute("ALTER TABLE historical_candles ADD COLUMN IF NOT EXISTS revision VARCHAR")
         self._connection.execute("""
             CREATE TABLE IF NOT EXISTS historical_verified_ranges (symbol VARCHAR NOT NULL, timeframe VARCHAR NOT NULL, from_date VARCHAR NOT NULL, till_date VARCHAR NOT NULL, PRIMARY KEY (symbol, timeframe, from_date, till_date))
         """)
@@ -129,7 +137,11 @@ class DuckDBHistoricalCandleStore:
                 candle.value,
                 candle.volume,
                 candle.completed,
-                series.source,
+                candle.source or series.source,
+                candle.available_at,
+                candle.available_at_confidence,
+                candle.observed_at,
+                candle.revision,
             ]
             for candle in series.candles
         ]
@@ -137,10 +149,35 @@ class DuckDBHistoricalCandleStore:
             return 0
         with self._lock:
             self._connection.executemany("""
-                INSERT OR REPLACE INTO historical_candles
+                INSERT INTO historical_candles
                 (secid, symbol, root_symbol, board, engine, market, asset_class, timeframe,
-                 begin, end_time, open, close, high, low, value, volume, completed, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 begin, end_time, open, close, high, low, value, volume, completed, source,
+                 available_at, available_at_confidence, observed_at, revision)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (secid, timeframe, begin) DO UPDATE SET
+                    symbol=excluded.symbol,
+                    root_symbol=excluded.root_symbol,
+                    board=excluded.board,
+                    engine=excluded.engine,
+                    market=excluded.market,
+                    asset_class=excluded.asset_class,
+                    end_time=excluded.end_time,
+                    open=excluded.open,
+                    close=excluded.close,
+                    high=excluded.high,
+                    low=excluded.low,
+                    value=excluded.value,
+                    volume=excluded.volume,
+                    completed=excluded.completed,
+                    source=excluded.source,
+                    available_at=COALESCE(historical_candles.available_at, excluded.available_at),
+                    available_at_confidence=CASE
+                        WHEN historical_candles.available_at IS NOT NULL
+                        THEN historical_candles.available_at_confidence
+                        ELSE excluded.available_at_confidence
+                    END,
+                    observed_at=COALESCE(historical_candles.observed_at, excluded.observed_at),
+                    revision=COALESCE(excluded.revision, historical_candles.revision)
             """, rows)
         return len(rows)
 
@@ -158,7 +195,8 @@ class DuckDBHistoricalCandleStore:
     def read(self, instrument: Instrument, timeframe: str, from_date: str, till_date: str) -> CandleSeries:
         with self._lock:
             rows = self._connection.execute("""
-                SELECT open, close, high, low, value, volume, begin, end_time, completed, source
+                SELECT open, close, high, low, value, volume, begin, end_time, completed, source,
+                       available_at, available_at_confidence, observed_at, revision
                 FROM historical_candles
                 WHERE secid = ? AND timeframe = ?
                   AND begin >= ? AND begin < ?
@@ -167,6 +205,13 @@ class DuckDBHistoricalCandleStore:
         candles = tuple(Candle(
             open=row[0], close=row[1], high=row[2], low=row[3], value=row[4], volume=row[5],
             begin=str(row[6]), end=str(row[7]), completed=bool(row[8]),
+            source=str(row[9]) if row[9] is not None else None,
+            available_at=str(row[10]) if row[10] is not None else None,
+            available_at_confidence=(
+                str(row[11]) if row[11] is not None else "UNKNOWN"
+            ),
+            observed_at=str(row[12]) if row[12] is not None else None,
+            revision=str(row[13]) if row[13] is not None else None,
         ) for row in rows)
         source = str(rows[0][9]) if rows else instrument.source
         return CandleSeries(instrument=instrument, timeframe=timeframe, candles=candles, source=source)
