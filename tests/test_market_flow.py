@@ -44,6 +44,8 @@ class FakeAnalytics:
                 "val_s": 4_800_000,
                 "oi_open": 1_000_000,
                 "oi_close": 1_020_000,
+                "trades_b": 3,
+                "trades_s": 2,
             },
             {
                 "tradedate": "2026-08-28",
@@ -56,6 +58,8 @@ class FakeAnalytics:
                 "val_s": 3_200_000,
                 "oi_open": 1_020_000,
                 "oi_close": 1_050_000,
+                "trades_b": 4,
+                "trades_s": 1,
             },
         ]
 
@@ -105,6 +109,7 @@ def test_market_flow_aggregates_real_contract_semantics() -> None:
     assert flow.sell_volume == 100.0
     assert flow.volume_delta == 80.0
     assert flow.cumulative_delta == 80.0
+    assert flow.number_of_trades == 10
     assert flow.volume_delta_ratio == round(80 / 280, 6)
     assert flow.value_delta == 6_400_000.0
     assert flow.price_change_pct == 0.5
@@ -169,6 +174,7 @@ def test_market_flow_keeps_persisted_trade_analysis_when_optional_futoi_is_unava
     assert flow.volume_delta == 80.0
     assert flow.price_change_pct == 0.5
     assert flow.source == "MOEX_ISS_PUBLIC_TRADES_DERIVED+FUTOI"
+    assert flow.number_of_trades is None
     assert flow.data_quality == "DEGRADED"
     assert any(item.startswith("FUTOI_UNAVAILABLE:UpstreamRateLimited:") for item in flow.warnings)
     assert "FUTOI_EMPTY" in flow.warnings
@@ -207,6 +213,8 @@ class FakeEquityHistorical:
                 "vol_s": 60,
                 "val_b": 31_500.0,
                 "val_s": 18_900.0,
+                "trades_b": 3,
+                "trades_s": 2,
                 "_source": PUBLIC_TRADESTATS_SOURCE,
             },
             {
@@ -218,6 +226,8 @@ class FakeEquityHistorical:
                 "vol_s": 40,
                 "val_b": 25_240.0,
                 "val_s": 12_640.0,
+                "trades_b": 4,
+                "trades_s": 1,
                 "_source": PUBLIC_TRADESTATS_SOURCE,
             },
         ]
@@ -242,6 +252,7 @@ def test_equity_market_flow_uses_public_trades_without_futoi() -> None:
     assert flow.value_delta == 25_200.0
     assert flow.price_change_pct == round((316.0 / 315.0 - 1.0) * 100.0, 6)
     assert flow.source == "MOEX_ISS_PUBLIC_TRADES_DERIVED"
+    assert flow.number_of_trades == 10
     assert flow.individuals is None
     assert flow.legal_entities is None
     assert flow.data_quality == "PASS"
@@ -292,6 +303,7 @@ def test_index_market_flow_is_explicitly_not_applicable() -> None:
     assert flow.intervals == 0
     assert flow.buy_volume is None
     assert flow.sell_volume is None
+    assert flow.number_of_trades is None
     assert flow.individuals is None
     assert flow.legal_entities is None
     assert flow.data_quality == "PASS"

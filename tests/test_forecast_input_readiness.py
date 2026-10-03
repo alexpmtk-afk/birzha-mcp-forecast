@@ -37,6 +37,7 @@ def test_future_readiness_marks_flow_partial_and_session_vwap_missing() -> None:
     assert report["items"]["delta"]["status"] == "PARTIAL"
     assert report["items"]["cumulative_delta"]["status"] == "PARTIAL"
     assert report["items"]["session_vwap"]["status"] == "MISSING"
+    assert report["items"]["number_of_trades"]["status"] == "PARTIAL"
     assert report["items"]["volume_profile"]["status"] == "PARTIAL"
 
 
@@ -56,7 +57,7 @@ def test_index_readiness_does_not_require_flow_or_open_interest() -> None:
     assert report["items"]["open_interest"]["status"] == "NOT_APPLICABLE"
     assert report["items"]["delta"]["status"] == "NOT_APPLICABLE"
     assert report["items"]["cumulative_delta"]["status"] == "NOT_APPLICABLE"
-    assert report["items"]["number_of_trades"]["status"] == "MISSING"
+    assert report["items"]["number_of_trades"]["status"] == "NOT_APPLICABLE"
     assert report["items"]["session_vwap"]["status"] == "MISSING"
 
 
@@ -80,5 +81,5 @@ def test_equity_turnover_is_ready_but_trade_count_is_not_yet_implemented() -> No
     report = ForecastInputReadinessService(_MarketData(instrument)).audit("SBER")
 
     assert report["items"]["turnover"]["status"] == "READY"
-    assert report["items"]["number_of_trades"]["status"] == "MISSING"
+    assert report["items"]["number_of_trades"]["status"] == "PARTIAL"
     assert "number_of_trades" in report["blocking_items"]
