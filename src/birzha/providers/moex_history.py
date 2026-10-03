@@ -24,7 +24,17 @@ class MoexHistoricalFutureResolver:
             raise ValueError("root_symbol must be non-empty")
         payload = self._client._request(  # noqa: SLF001 - provider-internal collaboration
             "/history/engines/futures/markets/forts/securities.json",
-            {"iss.meta": "off", "date": as_of.isoformat(), "assetcode": root},
+            {
+                "iss.meta": "off",
+                "iss.only": "history",
+                "history.columns": (
+                    "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
+                    "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,"
+                    "LASTTRADEDATE,LASTDELDATE"
+                ),
+                "date": as_of.isoformat(),
+                "assetcode": root,
+            },
         ).json()
         rows = self._client._table(payload, "history")  # noqa: SLF001
         return _pick_instrument(root, as_of, rows)
@@ -64,7 +74,8 @@ class MoexHistoricalFutureResolver:
                     "iss.only": "history",
                     "history.columns": (
                         "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
-                        "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,LASTTRADEDATE"
+                        "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,"
+                        "LASTTRADEDATE,LASTDELDATE"
                     ),
                     "date": day.isoformat(),
                     "assetcode": root,
@@ -125,6 +136,8 @@ def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Inst
         name=_text(row, "SHORTNAME") or secid,
         root_symbol=root,
         last_trade_date=_text(row, "LASTTRADEDATE")[:10] or None,
+        expiration_date=_text(row, "LASTTRADEDATE")[:10] or None,
+        settlement_date=_text(row, "LASTDELDATE")[:10] or None,
         calendar_id=moex_calendar_id(
             engine="futures",
             market="forts",
