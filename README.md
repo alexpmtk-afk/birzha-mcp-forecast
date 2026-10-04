@@ -13,6 +13,7 @@ The current `main` line contains working application code for:
 - historical futures contract resolution for causal replay;
 - SBER/equity and futures-root routing without symbol-specific domain logic;
 - D1/H1/M15 causal Market Snapshot;
+- capability-aware `MARKET_STATE_VECTOR_V0` exposing causal features and availability without assigning market-state labels;
 - ALGOPACK TradeStats Delta and FUTOI/Open Interest as optional causal flow evidence;
 - explainable baseline Forecast Engine for 5/10/20 exchange sessions;
 - immutable Forecast Journal reference backend;
@@ -32,6 +33,7 @@ Current MCP surface includes:
 - `market.recent_candles`
 - `market.flow`
 - `market.snapshot`
+- `market.state` (causal normalized evidence vector with per-feature availability; no regime classification)
 - `forecast.build`
 - `forecast.create`
 - `forecast.get`
