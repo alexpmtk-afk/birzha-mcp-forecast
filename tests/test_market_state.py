@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from birzha.application.market_state import build_market_state_vector
+from birzha.domain.flow import MarketFlowSnapshot
 from birzha.domain.market import Instrument
 from birzha.domain.normalized_features import NormalizedFeatureSet
 from birzha.domain.snapshot import (
@@ -106,6 +109,44 @@ def _availability(vector: dict[str, object], name: str) -> dict[str, object]:
     return vector["availability"][name]  # type: ignore[index,return-value]
 
 
+def _flow(
+    data_quality: str,
+    warnings: tuple[str, ...] = (),
+    *,
+    session_vwap_source: str = "PUBLIC_TRADES_PRICE_QUANTITY",
+) -> MarketFlowSnapshot:
+    return MarketFlowSnapshot(
+        symbol="TEST",
+        secid="TEST1",
+        from_date="2026-09-27",
+        till_date="2026-10-01",
+        as_of="2026-10-01T18:00:00+03:00",
+        source="TEST",
+        intervals=1,
+        buy_volume=100.0,
+        sell_volume=90.0,
+        volume_delta=10.0,
+        volume_delta_ratio=0.15,
+        buy_value=1000.0,
+        sell_value=900.0,
+        value_delta=100.0,
+        price_change_pct=0.1,
+        algopack_oi_open=1000.0,
+        algopack_oi_close=1010.0,
+        algopack_oi_change=10.0,
+        individuals=None,
+        legal_entities=None,
+        data_quality=data_quality,
+        warnings=warnings,
+        session_vwap=99.5,
+        session_vwap_source=session_vwap_source,
+    )
+
+
+def _with_flow(snapshot: MarketSnapshot, flow: MarketFlowSnapshot) -> MarketSnapshot:
+    return replace(snapshot, flow=flow)
+
+
 def test_market_state_vector_marks_unsupported_index_features_not_applicable() -> None:
     snapshot = _snapshot()
     vector = build_market_state_vector(
@@ -126,7 +167,7 @@ def test_market_state_vector_marks_unsupported_index_features_not_applicable() -
 
 def test_market_state_vector_keeps_approximate_profile_explicit() -> None:
     vector = build_market_state_vector(
-        _snapshot(),
+        _with_flow(_snapshot(), _flow("PASS")),
         _instrument("equity", "CANDLES", "VOLUME", "TRADESTATS"),
     ).to_dict()
 
@@ -138,6 +179,69 @@ def test_market_state_vector_keeps_approximate_profile_explicit() -> None:
     }
     assert _availability(vector, "profile_is_exact")["status"] == "AVAILABLE"
     assert vector["features"]["profile_is_exact"] is False
+
+
+def test_flow_pass_keeps_flow_derived_evidence_available() -> None:
+    vector = build_market_state_vector(
+        _with_flow(_snapshot(), _flow("PASS")),
+        _instrument("future", "CANDLES", "VOLUME", "TRADESTATS", "OPEN_INTEREST"),
+    ).to_dict()
+
+    assert _availability(vector, "delta_volume_ratio")["status"] == "AVAILABLE"
+    assert _availability(vector, "distance_to_session_vwap_atr")["status"] == "AVAILABLE"
+
+
+def test_tradestats_degradation_masks_values_from_that_source() -> None:
+    flow = _flow("DEGRADED", ("ALGOPACK_TRADESTATS_UNAVAILABLE:TimeoutError",),
+                 session_vwap_source="TRADESTATS_VWAP_WEIGHTED")
+    vector = build_market_state_vector(
+        _with_flow(_snapshot(), flow),
+        _instrument("future", "CANDLES", "VOLUME", "TRADESTATS", "OPEN_INTEREST"),
+    ).to_dict()
+
+    assert _availability(vector, "delta_volume_ratio") == {
+        "status": "UNAVAILABLE",
+        "reason": "flow_tradestats_degraded",
+    }
+    assert vector["features"]["delta_volume_ratio"] is None
+    assert _availability(vector, "distance_to_session_vwap_atr")["status"] == "UNAVAILABLE"
+    assert _availability(vector, "oi_change_ratio")["status"] == "UNAVAILABLE"
+
+
+def test_degraded_flow_with_missing_tradestats_delta_stays_unavailable() -> None:
+    snapshot = _snapshot()
+    assert snapshot.normalized_features is not None
+    flow = replace(
+        _flow("DEGRADED", ("ALGOPACK_TRADESTATS_EMPTY",)),
+        volume_delta_ratio=None,
+    )
+    incomplete = replace(
+        snapshot,
+        flow=flow,
+        normalized_features=replace(
+            snapshot.normalized_features,
+            delta_volume_ratio=None,
+        ),
+    )
+
+    vector = build_market_state_vector(
+        incomplete,
+        _instrument("future", "CANDLES", "VOLUME", "TRADESTATS", "OPEN_INTEREST"),
+    ).to_dict()
+
+    assert _availability(vector, "delta_volume_ratio")["status"] == "UNAVAILABLE"
+    assert vector["features"]["delta_volume_ratio"] is None
+
+
+def test_futoi_only_degradation_does_not_mask_independent_delta_evidence() -> None:
+    vector = build_market_state_vector(
+        _with_flow(_snapshot(), _flow("DEGRADED", ("FUTOI_EMPTY",))),
+        _instrument("future", "CANDLES", "VOLUME", "TRADESTATS", "OPEN_INTEREST"),
+    ).to_dict()
+
+    assert _availability(vector, "delta_volume_ratio")["status"] == "AVAILABLE"
+    assert vector["features"]["delta_volume_ratio"] == 0.15
+    assert _availability(vector, "distance_to_session_vwap_atr")["status"] == "AVAILABLE"
 
 
 def test_approximate_profile_requires_minimum_h1_history() -> None:

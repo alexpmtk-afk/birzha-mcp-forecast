@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields, replace
 from typing import TYPE_CHECKING
 
+from birzha.domain.flow import MarketFlowSnapshot
 from birzha.domain.market import Instrument
 from birzha.domain.market_state import (
     FeatureAvailability,
@@ -63,6 +64,16 @@ _PROFILE_VALUE_FEATURES = frozenset(
 )
 _CANDLE_FEATURES = frozenset({"current_price", *_TIMEFRAMES_BY_FEATURE})
 _MINIMUM_CANDLES = 50
+_TRADESTATS_FAILURE_WARNINGS = (
+    "ALGOPACK_TRADESTATS_UNAVAILABLE:",
+    "ALGOPACK_TRADESTATS_EMPTY",
+    "PUBLIC_TRADESTATS_CAPTURE_EMPTY",
+)
+_KNOWN_FLOW_WARNINGS = (
+    *_TRADESTATS_FAILURE_WARNINGS,
+    "FUTOI_UNAVAILABLE:",
+    "FUTOI_EMPTY",
+)
 
 
 @dataclass(slots=True)
@@ -109,6 +120,7 @@ def build_market_state_vector(
             timeframe_states=timeframe_states,
             timeframe_quality=timeframe_quality,
             profile_is_exact=normalized.profile_is_exact,
+            flow=snapshot.flow,
         )
         availability.append((name, FeatureAvailability(status, reason)))
         if status not in {"AVAILABLE", "AVAILABLE_APPROXIMATE"}:
@@ -176,6 +188,7 @@ def _feature_status(
     timeframe_states: dict[str, TimeframeState],
     timeframe_quality: dict[str, tuple[int, str]],
     profile_is_exact: bool | None,
+    flow: MarketFlowSnapshot | None,
 ) -> tuple[FeatureStatus, str | None]:
     if name in _CANDLE_FEATURES and "CANDLES" not in capabilities:
         return "NOT_APPLICABLE", "instrument_does_not_declare_CANDLES"
@@ -201,6 +214,57 @@ def _feature_status(
 
     if value is None:
         return "UNAVAILABLE", "causal_value_not_available_at_snapshot_T0"
+    flow_reason = _flow_evidence_unavailable_reason(name, flow)
+    if flow_reason is not None:
+        return "UNAVAILABLE", flow_reason
     if name in _PROFILE_VALUE_FEATURES and profile_is_exact is False:
         return "AVAILABLE_APPROXIMATE", "candle_volume_proxy_profile"
     return "AVAILABLE", None
+
+
+def _flow_evidence_unavailable_reason(
+    name: str,
+    flow: MarketFlowSnapshot | None,
+) -> str | None:
+    if name not in {
+        "distance_to_session_vwap_atr",
+        "delta_volume_ratio",
+        "oi_change_ratio",
+    }:
+        return None
+    if flow is None:
+        return "flow_snapshot_missing"
+
+    if name == "delta_volume_ratio":
+        if flow.volume_delta_ratio is None:
+            return "flow_delta_missing"
+        uses_tradestats = True
+    elif name == "oi_change_ratio":
+        if flow.algopack_oi_open is None or flow.algopack_oi_change is None:
+            return "flow_open_interest_missing"
+        uses_tradestats = True
+    else:
+        if flow.session_vwap is None:
+            return "flow_session_vwap_missing"
+        if flow.session_vwap_source == "TRADESTATS_VWAP_WEIGHTED":
+            uses_tradestats = True
+        elif flow.session_vwap_source == "PUBLIC_TRADES_PRICE_QUANTITY":
+            uses_tradestats = False
+        else:
+            return "flow_session_vwap_source_unknown"
+
+    warnings = flow.warnings
+    if uses_tradestats and any(
+        warning.startswith(_TRADESTATS_FAILURE_WARNINGS) for warning in warnings
+    ):
+        return "flow_tradestats_degraded"
+    if flow.data_quality not in {"PASS", "DEGRADED"}:
+        return "flow_quality_unknown"
+    if any(
+        not warning.startswith(_KNOWN_FLOW_WARNINGS)
+        for warning in warnings
+    ):
+        return "flow_quality_degraded_without_evidence_scope"
+    if flow.data_quality == "DEGRADED" and not warnings:
+        return "flow_quality_degraded_without_evidence_scope"
+    return None
