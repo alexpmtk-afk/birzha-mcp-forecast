@@ -120,6 +120,38 @@ def test_complete_d1_sequence_passes() -> None:
     assert result.missing_intervals == ()
 
 
+def test_d1_actual_last_trade_end_does_not_create_false_gap() -> None:
+    windows = (
+        _interval(
+            "SBER",
+            "2026-09-01 00:00:00",
+            "2026-09-01 23:59:59",
+            trade_date="2026-09-01",
+        ),
+    )
+    result = audit_candle_sequence(
+        instrument=SBER,
+        timeframe="D1",
+        period_start=date(2026, 9, 1),
+        period_end=date(2026, 9, 1),
+        candle_series=_series(
+            SBER,
+            "D1",
+            (_candle("2026-09-01 00:00:00", "2026-09-01 18:39:42"),),
+        ),
+        schedule_evidence=_evidence(
+            "SBER",
+            "D1",
+            windows,
+            coverage_from="2026-09-01",
+            coverage_till="2026-09-01",
+        ),
+    )
+
+    assert result.status == "PASS"
+    assert result.expected_count == result.observed_count == result.matched_count == 1
+
+
 def test_missing_d1_is_degraded_only_when_activity_proves_bar_expected() -> None:
     windows = (
         _interval("SBER", "2026-09-01 00:00:00", "2026-09-01 23:59:59", trade_date="2026-09-01"),

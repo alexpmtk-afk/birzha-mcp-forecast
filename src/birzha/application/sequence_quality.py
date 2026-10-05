@@ -73,7 +73,14 @@ def audit_candle_sequence(
             series_by_contract[contract].append(item)
             observed_count += item.count
             for candle in item.candles:
-                key = (contract, candle.begin, candle.end)
+                key = _observation_key(
+                    tf,
+                    CandleIntervalKey(
+                        contract_secid=item.instrument.secid,
+                        begin=candle.begin,
+                        end=candle.end,
+                    ),
+                )
                 actual_counts[key] += 1
                 actual_objects[key] = CandleIntervalKey(
                     contract_secid=item.instrument.secid,
@@ -117,7 +124,7 @@ def audit_candle_sequence(
         if not evidence.source or not evidence.version or not evidence.timezone:
             reasons.add("SCHEDULE_PROVENANCE_INCOMPLETE")
         for window in in_period:
-            key = _evidence_key(window)
+            key = _evidence_key(window, tf)
             window_groups[key].append(window)
 
     for key, grouped in window_groups.items():
@@ -188,18 +195,18 @@ def audit_candle_sequence(
 
     missing: list[SequenceWindowEvidence] = []
     matched_count: int | None = None if series is None else 0
-    observed_schedule_keys = {_evidence_key(window) for window in valid_windows}
-    expected_keys = {_evidence_key(window) for window in required}
+    observed_schedule_keys = {_evidence_key(window, tf) for window in valid_windows}
+    expected_keys = {_evidence_key(window, tf) for window in required}
     no_bar_keys = {
-        _evidence_key(window)
+        _evidence_key(window, tf)
         for window in valid_windows
         if window.disposition == "NO_BAR_EXPECTED"
     }
-    unverified_keys = {_evidence_key(window) for window in unverified}
+    unverified_keys = {_evidence_key(window, tf) for window in unverified}
 
     if series is not None:
         for window in required:
-            key = _evidence_key(window)
+            key = _evidence_key(window, tf)
             contract = window.interval.contract_secid.upper()
             if contract not in series_by_contract:
                 continue
@@ -346,11 +353,32 @@ def _schedule_covers_period(
     return coverage_from <= start and coverage_till >= end
 
 
-def _evidence_key(window: SequenceWindowEvidence) -> tuple[str, str, str]:
+def _evidence_key(
+    window: SequenceWindowEvidence, timeframe: str
+) -> tuple[str, str, str]:
+    return _interval_key(timeframe, window.interval)
+
+
+def _observation_key(
+    timeframe: str, interval: CandleIntervalKey
+) -> tuple[str, str, str]:
+    return _interval_key(timeframe, interval)
+
+
+def _interval_key(
+    timeframe: str, interval: CandleIntervalKey
+) -> tuple[str, str, str]:
+    """Return the comparison identity for one provider interval.
+
+    MOEX D1 rows use the actual last-trade timestamp as end. That value is
+    not a stable schedule boundary and may differ across sessions, so D1
+    completeness is keyed by contract and begin date. Intraday bars retain the
+    exact begin/end identity required by their session evidence.
+    """
     return (
-        window.interval.contract_secid.upper(),
-        window.interval.begin,
-        window.interval.end,
+        interval.contract_secid.upper(),
+        interval.begin[:10] if timeframe == "D1" else interval.begin,
+        "" if timeframe == "D1" else interval.end,
     )
 
 
