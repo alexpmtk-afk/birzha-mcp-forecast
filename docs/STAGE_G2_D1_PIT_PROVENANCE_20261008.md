@@ -27,3 +27,26 @@ Output STRICT historical T0 is always NOT_PROVEN. Even modern schema columns are
 2. Review separate event time and decision knowledge cutoff contract for prospective collection; do not patch snapshot T0 one line at a time.
 3. After frozen definitions and Development ledger, develop exact-contract D1 research features and temporal folds. No threshold/model/OOS study on reserved holdout before independently confirming its status.
 4. No merge, deployment, HOME or production DB modifications.
+
+## Research feature admission matrix (not an actual forecast acceptance)
+
+| Source / field | Reconstructed Development eligibility | Strict historical T0 on current archive | Main constraint |
+| --- | --- | --- | --- |
+| Exact SECID completed D1 OHLC | Conditional research-only with 21 verified exact-session same-SECID candles; current V2 manifest covers BR/Si/GOLD audited root windows | NOT PROVEN | No historical receipt or vintage |
+| D1 return5 / return20 / ER20 | Conditional research-only with 6/21 complete closes respectively | NOT PROVEN | features.py compresses missing closes; incomplete input must be excluded before feature calculation |
+| ATR14 price fraction | Conditional with 15 consecutive finite OHLC candles and positive valid close/ATR | NOT PROVEN | Current implementation uses simple average true range, not Wilder smoothing |
+| SMA20 / SMA50 / trend_score | SMA20 needs 20 and SMA50 needs 50; **the audited 21 bars cannot certify SMA50 or the full three-part trend_score** | NOT PROVEN | Never label an incomplete 50-bar feature as admitted by the 21-bar gate |
+| D1 volume_ratio20 / vwap20 | Separately conditional on 21 usable volume bars and positive denominator; existing vwap20 is candle typical-price/volume proxy | NOT PROVEN | This is **not** exact session trade VWAP; missing volume can compress windows |
+| Price location / support / resistance20 | Conditional with consecutive 20 completed D1 bars and valid endpoints | NOT PROVEN | Do not allow missing high/low to silently shrink the range |
+| H1/M15 derived fields | UNVERIFIED in this acceptance chain | NOT PROVEN | No approved exact intraday sequence/knowledge-time evidence |
+| Delta/OI/FUTOI/session exact VWAP/profile | UNVERIFIED for this historical D1-only gate | NOT PROVEN | Independently validate source publication timing and raw trade/profile completeness |
+| Active-root contract identity at T0 | Research use limited to verified active calendar, exact contract and after-session context | NOT PROVEN for historical intraday T0 | End-of-session ranking cannot select contract before session ends |
+
+**Crucial distinction:** The V2 4955/4955 result means D1 candle-window eligibility, not that every existing normalized feature is fully defined on every window. In particular 21 is shorter than the 50 observations required for SMA50.
+
+## Time and holdout acceptance
+
+- Event/candle-end time, inferred available_at, actual source publication, local first-observed time and decision knowledge T0 are five different facts. The current archive does not preserve all of them; none may be silently substituted for another.
+- For reconstructed Development only, register every viewed period and change of feature/policy/code version. Never label 2023–2024 untouched purely because M23 reserved it.
+- A historical strict T0 claim needs independently attested source payload versions and receipts before a separately specified decision knowledge cutoff, plus point-in-time contract selection. The presence of metadata fields in a newer DB is insufficient.
+- Prospective tests can begin capturing an immutable receipt ledger now, but that does not retroactively make archival 2020–2026 prices known at their respective dates.
