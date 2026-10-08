@@ -17,7 +17,7 @@ import json
 import shutil
 import tempfile
 from collections import Counter, defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +35,7 @@ from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
 ROOTS = ("BR", "Si", "GOLD")
 ROOT_SESSION_SUFFIX = "ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V2_ACTIVITY"
+AUDIT_REPORT_SCHEMA_VERSION = "D1_RECONSTRUCTED_WARMUP_AUDIT_V2"
 
 
 def _sha256(path: Path) -> str:
@@ -161,8 +162,15 @@ def audit_copy(
                 load_verified_d1_warmup_evidence(store, secid, evidence_key)
                 if evidence_key else None
             )
+            # Serialize the actual verified generation before the scratch DB
+            # disappears. A count by itself cannot reproduce MOEX's exact dates.
+            # Empty evidence must remain explicit, never inferred from markers.
             preactive[secid] = {
                 "status": status,
+                "first_active_date": dates[0],
+                "origin": warmup.origin if warmup else None,
+                "evidence_key": warmup.evidence_key if warmup else None,
+                "expected_dates": list(warmup.expected_dates) if warmup else [],
                 "expected_count": len(warmup.expected_dates) if warmup else 0,
             }
             if warmup is None and evidence_key:
@@ -220,6 +228,8 @@ def run(source: Path, *, roots: tuple[str, ...] = ROOTS) -> dict[str, Any]:
     if not source.is_file():
         raise FileNotFoundError(source)
     before = _sha256(source)
+    audit_started_at_utc = datetime.now(timezone.utc).isoformat()
+    audit_script_sha256 = _sha256(Path(__file__).resolve())
     with tempfile.TemporaryDirectory(prefix="birzha-reconstructed-audit-") as tmp:
         scratch = Path(tmp) / "working_copy.duckdb"
         shutil.copyfile(source, scratch)
@@ -233,7 +243,30 @@ def run(source: Path, *, roots: tuple[str, ...] = ROOTS) -> dict[str, Any]:
     after = _sha256(source)
     if before != after:
         raise RuntimeError("original archive changed during audit")
+    # The checksum covers the exact per-contract expected dates and immutable
+    # generation key. It is stable across reruns if the calendars are unchanged.
+    manifest = {
+        root: {
+            secid: {
+                "first_active_date": record["first_active_date"],
+                "origin": record["origin"],
+                "evidence_key": record["evidence_key"],
+                "expected_dates": record["expected_dates"],
+            }
+            for secid, record in market.get("per_contract", {}).items()
+        }
+        for root, market in report.items()
+    }
+    manifest_sha256 = hashlib.sha256(
+        json.dumps(
+            manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
+    ).hexdigest()
     return {
+        "report_schema_version": AUDIT_REPORT_SCHEMA_VERSION,
+        "audit_started_at_utc": audit_started_at_utc,
+        "audit_script_sha256": audit_script_sha256,
+        "evidence_manifest_sha256": manifest_sha256,
         "source_sha256_before": before,
         "source_sha256_after": after,
         "original_unchanged": True,

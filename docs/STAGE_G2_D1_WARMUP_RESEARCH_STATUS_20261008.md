@@ -33,3 +33,11 @@ PR #128 saves exact warmup session dates under immutable generation keys in exis
 2. Design safe nonproduction generation/backfill of reconstructed expected warmup session lists (not automatic promotion of marker-only ranges).
 3. Run real six-market D1 dataset eligibility on a copied archive, report BR coverage and missing/unknown evidence.
 4. Only after reproducible dataset quality: Research Development feature distributions; no classifier/threshold/OOS claim until accepted.
+
+## Local archival execution and provenance-report upgrade (2026-10-08)
+
+- Actual local Codex report independently reviewed from uploaded JSON: BR 1651/1651, Si 1652/1652, GOLD 1652/1652, total **4955/4955 eligible** across **133 exact-SECID contracts**. Original archive SHA-256 before/after matches (`8dcd4bbf560d1123575403b0c63d0c21891c4d152abbadc7a3bf9434ccbe68e1`).
+- The original JSON preserved only `expected_count=20` for each SECID; the dates and evidence key were lost when the disposable DuckDB was deleted.
+- PR #130 now exports per-contract `first_active_date`, `origin`, `expected_dates` (all twenty ISO dates), `evidence_key`, and `expected_count`; and adds `report_schema_version`, UTC audit start, audit script SHA-256, and deterministic `evidence_manifest_sha256`. The exact dates and keys are from the already-verified temporary generation, not inferred from legacy range markers.
+- **Next**: CI of this report-only update; repeat the same safe read-only archival run against a scratch source to generate V2 JSON; independently review the resulting manifest and rerun deterministic hash. No production/deploy/merge or research classifier changes.
+- `RECONSTRUCTED_MOEX_CURRENT_QUERY` is not as-known-at-T0 and does not establish historical point-in-time price knowledge. A valid research-only sample is not predictive edge or OOS validation.
