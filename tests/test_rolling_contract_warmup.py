@@ -328,3 +328,30 @@ def test_bad_warmup_candle_has_no_verified_session_evidence(monkeypatch, issue) 
     key = warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-09"))
     assert not store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
     store.close()
+
+
+def test_failed_evidence_write_does_not_mark_legacy_or_prevent_retry(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    service = _RollingHistory(market_data=_Market(), store=store)  # type: ignore[arg-type]
+    original_record = store.record_sessions
+
+    def reject_session_write(symbol, secid, trade_dates):
+        raise RuntimeError("simulated session persistence failure")
+
+    monkeypatch.setattr(store, "record_sessions", reject_session_write)
+    with pytest.raises(RuntimeError, match="session persistence failure"):
+        service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    legacy = "GDM5#CONTRACT_WARMUP_V2_ACTIVITY"
+    key = warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-09"))
+    assert not store.is_verified(legacy, "D1", "2025-01-08", "2025-01-09")
+    assert not store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+
+    monkeypatch.setattr(store, "record_sessions", original_record)
+    service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    assert store.is_verified(legacy, "D1", "2025-01-08", "2025-01-09")
+    assert store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+    store.close()
