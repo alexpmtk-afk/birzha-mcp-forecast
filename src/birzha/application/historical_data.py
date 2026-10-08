@@ -424,12 +424,6 @@ class HistoricalDataService:
                         f"contract warmup D1 values incomplete for {instrument.secid} "
                         f"{left.isoformat()}..{right.isoformat()}"
                     )
-            self.store.mark_verified(
-                verification_symbol,
-                timeframe,
-                left.isoformat(),
-                right.isoformat(),
-            )
             if evidence_dates:
                 evidence_key = warmup_d1_evidence_key(
                     instrument.secid, evidence_dates
@@ -451,6 +445,14 @@ class HistoricalDataService:
                 self.store.mark_session_range_verified(
                     evidence_key, left.isoformat(), right.isoformat()
                 )
+            # Legacy price-range readiness comes last: a failed session
+            # evidence write must not suppress a safe retry on next sync.
+            self.store.mark_verified(
+                verification_symbol,
+                timeframe,
+                left.isoformat(),
+                right.isoformat(),
+            )
         return fetched
 
     def _sync_contract(
