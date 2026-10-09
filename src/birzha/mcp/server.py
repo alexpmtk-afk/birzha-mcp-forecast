@@ -19,6 +19,7 @@ from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
+from birzha.application.market_state import MarketStateService
 from birzha.application.market_analysis import MarketAnalysisService
 from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.method_validation import MethodWalkForwardValidator
@@ -76,6 +77,7 @@ _analytics = MoexAnalyticsClient(control_plane=_upstream_control)
 _historical_flow = HistoricalFlowDataService(market_data=_market, analytics=_analytics, store=_historical_flow_store)
 _flow = MarketFlowService(market_data=_market, analytics=_analytics, historical=_historical_flow)
 _snapshot = MarketSnapshotService(market_data=_market, flow=_flow)
+_market_state = MarketStateService(snapshots=_snapshot)
 _forecast = ForecastService(snapshots=_snapshot)
 _prediction_contract = PredictionContractService(snapshots=_snapshot)
 _outcome_contract = OutcomeContractService(
@@ -204,6 +206,18 @@ def market_flow(symbol: str, from_date: str | None = None, till_date: str | None
 @mcp.tool(name="market.snapshot", description="Build a causal D1/H1/M15 Market Snapshot from real MOEX price, volume, ALGOPACK Delta and applicable OI data at one forecast T0.")
 def market_snapshot(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _snapshot.build(symbol, as_of_date=as_of_date).to_dict()
+
+
+@mcp.tool(
+    name="market.state",
+    description=(
+        "Build a causal, capability-aware MARKET_STATE_VECTOR_V0 from one snapshot. "
+        "Returns normalized evidence and availability; it does not classify market "
+        "regimes or create forecasts."
+    ),
+)
+def market_state(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
+    return _market_state.build(symbol, as_of_date=as_of_date)
 
 
 @mcp.tool(

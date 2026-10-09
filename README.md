@@ -1,20 +1,22 @@
 # BIRZHA MCP Forecast System
 
-Universal MCP backend for causal MOEX market analysis, forecasting, immutable forecast journaling, outcome evaluation and historical walk-forward validation.
+Universal MCP backend for causal MOEX market data, forecasting, immutable forecast journaling, outcome evaluation and historical validation.
 
 ## Current implemented scope
 
-The current `main` line contains working application code for:
+The repository contains working application code for:
 
 - MCP Streamable HTTP endpoint `/mcp` and liveness `/healthz`;
 - Docker runtime and transport-security controls;
 - mandatory outbound MOEX/ALGOPACK request governor with bounded retries, conservative pacing and strict `Retry-After` handling;
 - real MOEX ISS candles and instrument resolution;
 - historical futures contract resolution for causal replay;
-- SBER/equity and futures-root routing without symbol-specific domain logic;
+- configured core instruments SBER, Si, BR, GOLD, IMOEX and RTSI, through shared instrument and futures-root routing;
 - D1/H1/M15 causal Market Snapshot;
-- ALGOPACK TradeStats Delta and FUTOI/Open Interest as optional causal flow evidence;
-- explainable baseline Forecast Engine for 5/10/20 exchange sessions;
+- capability-aware MARKET_STATE_VECTOR_V0 evidence, without regime classification;
+- ALGOPACK TradeStats Delta and applicable FUTOI/Open Interest, plus persisted TradeStats-compatible rows derived from public MOEX trades where supported;
+- explainable technical baseline forecast for 5/10/20 exchange sessions;
+- Prediction Contract and Outcome Contract tools;
 - immutable Forecast Journal reference backend;
 - append-only Outcome Journal and 5/10/20-session outcome evaluation;
 - causal historical walk-forward validation and real-MOEX end-to-end validation evidence.
@@ -25,20 +27,13 @@ The baseline forecast is **not yet statistically calibrated or accepted as a pro
 
 Current MCP surface includes:
 
-- `system.version`
-- `market.resolve_instrument`
-- `market.resolve_active_future`
-- `market.candles`
-- `market.recent_candles`
-- `market.flow`
-- `market.snapshot`
-- `forecast.build`
-- `forecast.create`
-- `forecast.get`
-- `forecast.list`
-- `outcome.evaluate`
-- `outcome.list`
-- `validation.walk_forward`
+- System: `system.version`.
+- Market: `market.resolve_instrument`, `market.resolve_active_future`, `market.candles`, `market.recent_candles`, `market.flow`, `market.snapshot`, `market.state` (availability-aware, not calibrated).
+- History: `history.sync`, `history.sync_batch`, `history.sync_core`, `history.flow_sync`, `history.flow_capture_public_trades`, `history.coverage`.
+- Readiness: `data.forecast_input_readiness`, `data.forecast_input_readiness_core`, `data.flow_storage_coverage`, `data.flow_backfill_causal_availability`.
+- Contracts and records: `prediction.contract`, `outcome.contract`, `forecast.build`, `forecast.create`, `forecast.get`, `forecast.list`.
+- Outcomes and validation: `outcome.evaluate`, `outcome.list`, `validation.walk_forward`, `validation.methods_walk_forward`, `validation.assess_model`, `validation.development_holdout`, `validation.calibrate_model`, `validation.calibrate_core`.
+- Analysis and workflows: `analysis.run_core`, `workflow.start_core_validation`, `workflow.status`, `workflow.list`, `workflow.approve`
 
 MCP remains a thin adapter. Domain, provider, forecast, persistence, outcome and validation logic lives outside the MCP package.
 
@@ -71,9 +66,9 @@ Process-local coordination is not sufficient for arbitrary multi-instance remote
 
 ## Persistence status
 
-DuckDB is the current local/reference Forecast and Outcome backend. It proves immutability, idempotency, collision detection, reopen persistence and append-only behavior, but `/tmp` in a serverless container is **not** accepted as production durable storage.
+DuckDB is the current HOME backend for the Birzha state and market-history stores. The source also has configurable local/container defaults, including `/tmp` paths; those defaults are not evidence of durable HOME configuration. HOME acceptance requires separate installation and runtime verification.
 
-A separate experimental `m11-ydb-durable-state` branch exists, but it is not part of `main` and is not considered accepted until it is rebased, tested and formally promoted.
+YDB-related adapters remain in the repository for compatibility; DuckDB is the current HOME state/history backend.
 
 ## Local run
 
