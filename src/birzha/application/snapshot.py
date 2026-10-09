@@ -9,6 +9,7 @@ from birzha.application.features import TimeframeFeatureEngine
 from birzha.application.flow import MarketFlowService
 from birzha.application.market_data import MOEX_TIMEZONE, MarketDataService
 from birzha.application.normalized_features import NormalizedFeatureEngine
+from birzha.application.stored_market_data import StoredMarketDataView
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.application.volume_profile import profile_from_candles
 from birzha.domain.flow import MarketFlowSnapshot
@@ -49,8 +50,13 @@ class MarketSnapshotService:
         )
         return cls(market_data=market_data, flow=flow)
 
-    def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
-        snapshot, _ = self.build_with_instrument(symbol, as_of_date=as_of_date)
+    def build(
+        self, symbol: str, *, as_of_date: str | None = None,
+        knowledge_cutoff_at: str | None = None,
+    ) -> MarketSnapshot:
+        snapshot, _ = self.build_with_instrument(
+            symbol, as_of_date=as_of_date, knowledge_cutoff_at=knowledge_cutoff_at,
+        )
         return snapshot
 
     def build_with_instrument(
@@ -58,10 +64,46 @@ class MarketSnapshotService:
         symbol: str,
         *,
         as_of_date: str | None = None,
+        knowledge_cutoff_at: str | None = None,
     ) -> tuple[MarketSnapshot, Instrument]:
-        """Build a causal snapshot and return its exact resolved instrument."""
-        till = date.fromisoformat(as_of_date) if as_of_date else datetime.now(MOEX_TIMEZONE).date()
+        """Build price evidence, optionally at an explicit decision cutoff.
+
+        Explicit historical receipt mode is deliberately narrower than normal
+        reconstructed snapshots: it requires exact-SECID stored prices, no
+        flow lacking historical receipt provenance, and no future-root contract
+        inferred from later session activity. It does not certify the historical
+        metadata or independently attest market-data publication.
+        """
+        decision: datetime | None = None
+        if knowledge_cutoff_at is not None:
+            decision = _strict_decision_cutoff(knowledge_cutoff_at)
+            if not isinstance(self.market_data, StoredMarketDataView):
+                raise ValueError("historical decision cutoff requires stored market data")
+            if self.market_data.version_view != "as_of":
+                raise ValueError("historical decision cutoff requires as_of version view")
+            if not self.market_data.require_stored_resolution:
+                raise ValueError("historical decision cutoff requires frozen resolution")
+            if self.flow is not None:
+                raise ValueError("historical flow receipt provenance is not attested")
+            # Root futures selection can depend on complete future-session
+            # volume. Accept an already specified exact SECID instead.
+            from birzha.application.market_data import is_futures_root_symbol
+            if is_futures_root_symbol(symbol):
+                raise ValueError("historical decision cutoff requires exact SECID, not root")
+            if as_of_date is not None and date.fromisoformat(as_of_date) != decision.date():
+                raise ValueError("as_of_date must equal decision cutoff exchange date")
+            exact = self.market_data.stored_instrument(symbol)
+            if exact is None or exact.secid.upper() != symbol.upper():
+                raise ValueError("historical cutoff SECID is not stored and exact")
+
+        till = (
+            decision.date() if decision is not None
+            else date.fromisoformat(as_of_date) if as_of_date
+            else datetime.now(MOEX_TIMEZONE).date()
+        )
         instrument = self.market_data.resolve(symbol, as_of=till)
+        if decision is not None and instrument.secid.upper() != symbol.upper():
+            raise ValueError("historical decision cannot use a different contract")
 
         d1 = self.market_data.candles_for_instrument(
             instrument,
@@ -69,6 +111,7 @@ class MarketSnapshotService:
             from_date=(till - timedelta(days=260)).isoformat(),
             till_date=till.isoformat(),
             completed_only=True,
+            **({"now": decision} if decision is not None else {}),
         )
         h1 = self.market_data.candles_for_instrument(
             instrument,
@@ -76,13 +119,20 @@ class MarketSnapshotService:
             from_date=(till - timedelta(days=60)).isoformat(),
             till_date=till.isoformat(),
             completed_only=True,
+            **({"now": decision} if decision is not None else {}),
         )
-        m15 = _load_m15(self.market_data, instrument, till)
+        m15 = _load_m15(self.market_data, instrument, till, knowledge_cutoff=decision)
 
         last_ends = [series.candles[-1].end for series in (d1, h1, m15) if series.candles]
         if not last_ends:
             raise ValueError("no completed candles available for snapshot")
-        causal_t0 = max(last_ends, key=_timestamp)
+        causal_t0 = decision.isoformat() if decision is not None else max(last_ends, key=_timestamp)
+        if decision is not None:
+            for series in (d1, h1, m15):
+                for candle in series.candles:
+                    seen = _strict_decision_cutoff(candle.observed_at)
+                    if seen > decision:
+                        raise ValueError("stored candle observed later than decision cutoff")
         d1 = _cut_at(d1, causal_t0)
         h1 = _cut_at(h1, causal_t0)
         m15 = _cut_at(m15, causal_t0)
@@ -185,6 +235,8 @@ def _load_m15(
     market_data: MarketDataService,
     instrument: Instrument,
     till: date,
+    *,
+    knowledge_cutoff: datetime | None = None,
 ) -> CandleSeries:
     series: CandleSeries | None = None
     for lookback_days in (7, 20):
@@ -194,11 +246,24 @@ def _load_m15(
             from_date=(till - timedelta(days=lookback_days)).isoformat(),
             till_date=till.isoformat(),
             completed_only=True,
+            **({"now": knowledge_cutoff} if knowledge_cutoff is not None else {}),
         )
         if series.count >= 50:
             return series
     assert series is not None
     return series
+
+
+def _strict_decision_cutoff(value: str | None) -> datetime:
+    if not value:
+        raise ValueError("historical decision cutoff needs an explicit timezone")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("historical decision cutoff must be ISO 8601") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("historical decision cutoff needs an explicit timezone")
+    return parsed.astimezone(MOEX_TIMEZONE)
 
 
 def _timestamp(value: str) -> datetime:
