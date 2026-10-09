@@ -388,6 +388,41 @@ class DuckDBHistoricalCandleStore:
             """, [secid, timeframe]).fetchone() is not None
 
     def coverage(self, secid: str, timeframe: str) -> HistoricalCoverage:
+        with self._lock:
+            row = self._connection.execute("""
+                SELECT min(begin), max(end_time), count(*)
+                FROM historical_candles
+                WHERE secid = ? AND timeframe = ? AND completed = true
+            """, [secid, timeframe]).fetchone()
+        if not row or int(row[2]) == 0:
+            return HistoricalCoverage(secid, timeframe, None, None, 0)
+        return HistoricalCoverage(secid, timeframe, str(row[0]), str(row[1]), int(row[2]))
+
+    def read(self, instrument: Instrument, timeframe: str, from_date: str, till_date: str) -> CandleSeries:
+        with self._lock:
+            rows = self._connection.execute("""
+                SELECT open, close, high, low, value, volume, begin, end_time, completed, source,
+                       available_at, available_at_confidence, observed_at, revision
+                FROM historical_candles
+                WHERE secid = ? AND timeframe = ?
+                  AND begin >= ? AND begin < ?
+                ORDER BY begin
+            """, [instrument.secid, timeframe, from_date, _exclusive_upper_bound(till_date)]).fetchall()
+        candles = tuple(Candle(
+            open=row[0], close=row[1], high=row[2], low=row[3], value=row[4], volume=row[5],
+            begin=str(row[6]), end=str(row[7]), completed=bool(row[8]),
+            source=str(row[9]) if row[9] is not None else None,
+            available_at=str(row[10]) if row[10] is not None else None,
+            available_at_confidence=(
+                str(row[11]) if row[11] is not None else "UNKNOWN"
+            ),
+            observed_at=str(row[12]) if row[12] is not None else None,
+            revision=str(row[13]) if row[13] is not None else None,
+        ) for row in rows)
+        source = str(rows[0][9]) if rows else instrument.source
+        return CandleSeries(instrument=instrument, timeframe=timeframe, candles=candles, source=source)
+
+    def coverage_latest(self, secid: str, timeframe: str) -> HistoricalCoverage:
         if self._has_revisions(secid, timeframe):
             candles = tuple(
                 candle for candle in self._selected_candles(
@@ -412,11 +447,11 @@ class DuckDBHistoricalCandleStore:
             secid, timeframe, str(row[0]), str(row[1]), int(row[2])
         )
 
-    def read(
+    def read_latest(
         self, instrument: Instrument, timeframe: str,
         from_date: str, till_date: str,
     ) -> CandleSeries:
-        """Latest projected content, for current/reconstructed analysis only."""
+        """Explicit latest projected content for current/reconstructed analysis."""
         candles = self._selected_candles(
             instrument.secid, timeframe, from_date, till_date
         )
@@ -446,7 +481,18 @@ class DuckDBHistoricalCandleStore:
             source=candles[0].source or instrument.source if candles else instrument.source,
         )
 
-    def stored_trade_dates(
+    def stored_trade_dates(self, secid: str, timeframe: str, from_date: str, till_date: str) -> tuple[str, ...]:
+        with self._lock:
+            rows = self._connection.execute("""
+                SELECT DISTINCT substr(begin, 1, 10) AS trade_date
+                FROM historical_candles
+                WHERE secid = ? AND timeframe = ? AND completed = true
+                  AND begin >= ? AND begin < ?
+                ORDER BY trade_date
+            """, [secid, timeframe, from_date, _exclusive_upper_bound(till_date)]).fetchall()
+        return tuple(str(row[0]) for row in rows)
+
+    def stored_trade_dates_latest(
         self, secid: str, timeframe: str, from_date: str, till_date: str,
     ) -> tuple[str, ...]:
         if self._has_revisions(secid, timeframe):

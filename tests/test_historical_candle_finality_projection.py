@@ -35,7 +35,7 @@ def _write(store, candle):
 
 
 def _get(store):
-    return store.read(INSTRUMENT, "D1", DAY, DAY)
+    return store.read_latest(INSTRUMENT, "D1", DAY, DAY)
 
 
 def _at(store, instant):
@@ -50,20 +50,23 @@ def test_forming_to_completed_latest_projection_and_consistent_coverage():
         _write(store, _bar(observed_at="2025-05-05T15:00:00+03:00"))
         assert _get(store).count == 1
         assert _get(store).candles[0].completed is False
-        assert store.coverage("BRM5", "D1").count == 0
-        assert store.stored_trade_dates("BRM5", "D1", DAY, DAY) == ()
+        assert store.coverage_latest("BRM5", "D1").count == 0
+        assert store.stored_trade_dates_latest("BRM5", "D1", DAY, DAY) == ()
 
         _write(store, _bar(
             close=105.0, completed=True,
             observed_at="2025-05-06T08:00:00+03:00",
         ))
+        # Existing first-seen reader and readiness are unchanged.
+        assert store.read(INSTRUMENT, "D1", DAY, DAY).candles[0].close == 100.0
+        assert store.coverage("BRM5", "D1").count == 0
         current = _get(store)
         assert current.count == 1
         assert current.candles[0].completed is True
         assert current.candles[0].close == 105.0
         assert current.candles[0].observed_at == "2025-05-06T08:00:00+03:00"
-        assert store.coverage("BRM5", "D1").count == 1
-        assert store.stored_trade_dates("BRM5", "D1", DAY, DAY) == (DAY,)
+        assert store.coverage_latest("BRM5", "D1").count == 1
+        assert store.stored_trade_dates_latest("BRM5", "D1", DAY, DAY) == (DAY,)
 
         # Historical cutoff sees the forming revision before its final
         # version arrived; the final price cannot contaminate yesterday.
@@ -89,7 +92,7 @@ def test_later_stale_forming_does_not_downgrade_final_version():
                            observed_at="2025-05-06T09:00:00+03:00"))
         assert _get(store).candles[0].close == 105.0
         assert _get(store).candles[0].completed is True
-        assert store.coverage("BRM5", "D1").count == 1
+        assert store.coverage_latest("BRM5", "D1").count == 1
         assert _at(store, "2025-05-06T10:00:00+03:00").candles[0].close == 105.0
     finally:
         store.close()
