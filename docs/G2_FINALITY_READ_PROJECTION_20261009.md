@@ -30,3 +30,7 @@ The storage writer intentionally kept the immutable first payload for every (SEC
 
 ### CI correction: 09.10.2026
 Initial combined CI failed: an existing immutable `read()` regression expected original close 101 but silently changing `read()` returned revised close 999. Corrected by keeping `read()/coverage()/stored_trade_dates()` unchanged and introducing explicit `read_latest()/coverage_latest()/stored_trade_dates_latest()` + `read_as_of()`. This is a contract breach caught by CI, not evidence of forecast quality. An opt-in caller integration is required before current stored views use the latest projection.
+
+## Explicit StoredMarketDataView integration
+
+`StoredMarketDataView.version_view` defaults to `first_seen` (all legacy callers unchanged). `version_view='latest'` explicitly uses DuckDB `read_latest` for current/reconstructed use; `version_view='as_of'` requires the caller to pass a **timezone-aware** `now` knowledge cutoff and uses `read_as_of`. Backends without the corresponding reader fail closed. `completed_only=True` remains a separate filter: an old forming bar cannot masquerade as a final bar before its actual receipt. Historical snapshot builder does not yet propagate a single decision-time cutoff across candles, contract selection and flow, so this is not a blanket strict causality PASS.
