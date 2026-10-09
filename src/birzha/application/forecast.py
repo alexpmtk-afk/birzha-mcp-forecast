@@ -61,8 +61,17 @@ class ForecastService:
         shared_control = control_plane or ProcessUpstreamControlPlane()
         return cls(snapshots=MarketSnapshotService.default(control_plane=shared_control))
 
-    def build(self, symbol: str, *, as_of_date: str | None = None) -> ForecastRecord:
-        snapshot = self.snapshots.build(symbol, as_of_date=as_of_date)
+    def build(
+        self, symbol: str, *, as_of_date: str | None = None,
+        knowledge_cutoff_at: str | None = None,
+    ) -> ForecastRecord:
+        if knowledge_cutoff_at is None:
+            snapshot = self.snapshots.build(symbol, as_of_date=as_of_date)
+        else:
+            snapshot = self.snapshots.build(
+                symbol, as_of_date=as_of_date,
+                knowledge_cutoff_at=knowledge_cutoff_at,
+            )
         return build_forecast_from_snapshot(snapshot, parameters=self.parameters)
 
 
