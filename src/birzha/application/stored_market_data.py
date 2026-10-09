@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Literal
 
 from birzha.application.historical_data import HistoricalDataService, _verification_symbol
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
@@ -15,6 +16,7 @@ class StoredMarketDataView:
     base: MarketDataService
     history: HistoricalDataService
     require_stored_resolution: bool = False
+    version_view: Literal["first_seen", "latest", "as_of"] = "first_seen"
 
     @property
     def provider(self):
@@ -82,12 +84,30 @@ class StoredMarketDataView:
         completed_only: bool = True,
         now: datetime | None = None,
     ) -> CandleSeries:
-        series = self.history.load_exact(
-            instrument,
-            timeframe=timeframe,
-            from_date=from_date,
-            till_date=till_date,
-        )
+        # Explicit version semantics: never silently change the historically
+        # immutable first-seen reader used by existing research/validation.
+        if self.version_view == "first_seen":
+            series = self.history.load_exact(
+                instrument, timeframe=timeframe,
+                from_date=from_date, till_date=till_date,
+            )
+        elif self.version_view == "latest":
+            latest_reader = getattr(self.history.store, "read_latest", None)
+            if not callable(latest_reader):
+                raise RuntimeError("storage backend has no versioned latest reader")
+            series = latest_reader(instrument, timeframe, from_date, till_date)
+        elif self.version_view == "as_of":
+            if now is None or now.tzinfo is None or now.utcoffset() is None:
+                raise ValueError("as_of view requires explicit timezone-aware knowledge cutoff")
+            historical_reader = getattr(self.history.store, "read_as_of", None)
+            if not callable(historical_reader):
+                raise RuntimeError("storage backend has no observed-as-of reader")
+            series = historical_reader(
+                instrument, timeframe, from_date, till_date,
+                knowledge_cutoff=now.isoformat(),
+            )
+        else:
+            raise ValueError(f"unsupported version_view={self.version_view!r}")
         candles = series.candles
         if completed_only:
             candles = tuple(item for item in candles if item.completed)
