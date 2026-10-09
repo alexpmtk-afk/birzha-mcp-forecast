@@ -152,6 +152,38 @@ class DuckDBHistoricalCandleStore:
             CREATE TABLE IF NOT EXISTS historical_session_verified_ranges (symbol VARCHAR NOT NULL, from_date VARCHAR NOT NULL, till_date VARCHAR NOT NULL, PRIMARY KEY (symbol, from_date, till_date))
         """)
 
+    def _stamp_legacy_base_revision(self, series: CandleSeries) -> None:
+        """Fingerprint stored legacy OHLC itself, never a newly received payload.
+
+        Legacy rows with revision=NULL have unknown first-receipt time. A later
+        backfill may present changed prices; assigning *its* hash to the old
+        immutable base falsely identifies that base. This method runs under
+        the upsert lock, and intentionally leaves observed_at NULL when no
+        original receipt evidence exists.
+        """
+        for candle in series.candles:
+            row = self._connection.execute("""
+                SELECT open, close, high, low, value, volume,
+                       begin, end_time, completed, source
+                FROM historical_candles
+                WHERE secid=? AND timeframe=? AND begin=? AND revision IS NULL
+            """, [series.instrument.secid, series.timeframe, candle.begin]).fetchone()
+            if row is None:
+                continue
+            original = Candle(
+                open=row[0], close=row[1], high=row[2], low=row[3],
+                value=row[4], volume=row[5], begin=str(row[6]),
+                end=str(row[7]), completed=bool(row[8]), source=str(row[9]),
+            )
+            base_revision, _ = _candle_revision(original, str(row[9]))
+            self._connection.execute("""
+                UPDATE historical_candles SET revision=?
+                WHERE secid=? AND timeframe=? AND begin=? AND revision IS NULL
+            """, [
+                base_revision, series.instrument.secid, series.timeframe,
+                candle.begin,
+            ])
+
     def upsert_series(self, series: CandleSeries) -> int:
         rows = []
         revision_rows = []
@@ -210,6 +242,9 @@ class DuckDBHistoricalCandleStore:
         if not rows:
             return 0
         with self._lock:
+            # Make legacy first-version identity consistent *before* comparing
+            # the incoming payload. Unknown historical receipt remains NULL.
+            self._stamp_legacy_base_revision(series)
             self._connection.executemany("""
                 INSERT OR IGNORE INTO historical_candle_revisions
                 (secid, timeframe, begin, observed_at, revision, payload_json, source)
@@ -236,7 +271,7 @@ class DuckDBHistoricalCandleStore:
                         THEN historical_candles.available_at_confidence
                         ELSE excluded.available_at_confidence
                     END,
-                    observed_at=COALESCE(historical_candles.observed_at, excluded.observed_at),
+                    observed_at=historical_candles.observed_at,
                     revision=COALESCE(historical_candles.revision, excluded.revision)
             """, rows)
         return len(rows)
