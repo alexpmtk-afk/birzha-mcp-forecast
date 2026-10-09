@@ -94,3 +94,30 @@ def test_new_versions_still_append_without_overwriting_first_snapshot():
         assert len(_revision_rows(store)) == 1
     finally:
         store.close()
+
+
+def test_legacy_non_close_ohlc_revision_stays_separate():
+    store = DuckDBHistoricalCandleStore()
+    try:
+        original = _series(100.0)
+        old_hash, _ = _candle_revision(original.candles[0], "MOEX_ISS")
+        from dataclasses import replace
+        corrected = CandleSeries(
+            INSTRUMENT, "D1", (
+                replace(original.candles[0], high=103.0),
+            ),
+        )
+        new_hash, _ = _candle_revision(corrected.candles[0], "MOEX_ISS")
+        store.upsert_series(original)
+        store._connection.execute(
+            "UPDATE historical_candles SET revision=NULL, observed_at=NULL "
+            "WHERE secid='BRM5'"
+        )
+        store.upsert_series(corrected)
+        assert _base(store)[:3] == (100.0, old_hash, None)
+        rows = _revision_rows(store)
+        assert len(rows) == 1
+        assert rows[0][0] == new_hash
+        assert json.loads(rows[0][1])["high"] == 103.0
+    finally:
+        store.close()
