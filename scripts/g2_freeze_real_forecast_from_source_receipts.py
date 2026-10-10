@@ -239,7 +239,7 @@ def freeze_from_receipts(source_dir: Path, output_dir: Path, *, clock=lambda:dat
         except Exception as exc:
             results.append({"market":market,"status":"FROZEN_FORECAST_REFUSED",
                 "error_type":type(exc).__name__,"detail":str(exc)[:300]})
-    result={"schema":VERSION,"genuine_raw_source":True,"source_manifest_sha256":digest(manifest_bytes),
+    result={"schema":VERSION,"source_origin_declared_real":True,"independent_provider_attestation":False,"source_manifest_sha256":digest(manifest_bytes),
         "research_holdout_used":False,"production_activated":False,
         "forecasts_frozen":sum(x["status"]=="FROZEN_REAL_SOURCE_BASELINE" for x in results),
         "expected_source_markets":manifest["requested_markets"],
