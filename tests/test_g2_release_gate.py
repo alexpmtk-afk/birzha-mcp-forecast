@@ -99,15 +99,15 @@ def test_reviewer_approval_is_not_inferred_from_green_tests():
 def test_latest_source_and_real_six_market_release_pins_are_exact():
     policy = base()
     heads = {p["pr"]: p["head"] for p in policy["release_leaves"]}
-    assert set(heads) == {168, 169, 147}
-    policy["release_leaves"][1]["pr"] = 167
-    policy["release_leaves"][1]["head"] = "c5b815dd59dd226caf288aeb387b172911fefd4c"
-    policy["release_leaves"][1]["parent_pr"] = 165
+    assert set(heads) == {168, 171, 147}
+    policy["release_leaves"][1]["pr"] = 169
+    policy["release_leaves"][1]["head"] = "c9dbd3b4382adc2a6f59e3b6701abfdb2e20dd6a"
+    policy["release_leaves"][1]["parent_pr"] = 167
     with pytest.raises(ValueError, match="heads moved"):
         validate(policy)
 
 
-@pytest.mark.parametrize("node,wrong_parent", [("168", 164), ("169", 165)])
+@pytest.mark.parametrize("node,wrong_parent", [("168", 164), ("169", 165), ("171", 167)])
 def test_latest_stack_dependency_rewire_fails_closed(node, wrong_parent):
     policy = base()
     policy["pr_dependencies"][node] = wrong_parent
