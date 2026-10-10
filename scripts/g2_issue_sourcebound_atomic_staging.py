@@ -33,7 +33,8 @@ def _safe_isolated_path(path: str | Path, *, existing_directory: bool) -> Path:
     raw = Path(os.path.abspath(os.fspath(path)))
     if any(part.casefold() in {"mcp-home", "production"} for part in raw.parts):
         raise AdmissionRefused("no HOME or production path permitted")
-    if str(raw).replace("\\", "/").casefold().startswith("/opt/mcp/"):
+    normalized = str(raw).replace("\\", "/").casefold().rstrip("/")
+    if normalized == "/opt/mcp" or normalized.startswith("/opt/mcp/"):
         raise AdmissionRefused("no HOME or production path permitted")
     if any(part.is_symlink() for part in (raw, *raw.parents)):
         raise AdmissionRefused("symlinked staging/source path not permitted")
