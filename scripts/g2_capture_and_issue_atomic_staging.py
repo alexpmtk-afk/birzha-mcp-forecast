@@ -15,6 +15,35 @@ from scripts.g2_issue_sourcebound_atomic_staging import (
 from scripts.g2_six_market_live_source_capture import MARKETS, capture_all
 
 
+SAFE_FAILURE_REASONS = {
+    "maximum governed source pages exceeded": "MAX_SOURCE_PAGES_EXCEEDED",
+    "source pagination changed during capture": "PAGINATION_DRIFT",
+    "unexpected empty paginated page": "PREMATURE_EMPTY_PAGE",
+    "duplicate or unsorted response sessions": "DUPLICATE_OR_UNORDERED_BARS",
+    "no completed source candles": "NO_COMPLETED_CANDLES",
+    "no successful governed source body": "HTTP_RESPONSE_UNAVAILABLE",
+    "noncausal or excessively long request clock interval": "REQUEST_TIME_INVALID",
+    "MOEX row outside pinned exchange-local window": "OUT_OF_PINNED_WINDOW",
+    "forming or unobserved candle included": "UNFINISHED_SOURCE_CANDLE",
+}
+
+
+def _safe_failure_diagnostic(failures):
+    """Never echo arbitrary provider exceptions (may contain URLs/tokens)."""
+    if not isinstance(failures, list):
+        return "UNCLASSIFIED_SOURCE_FAILURE"
+    codes = []
+    for row in failures:
+        if not isinstance(row, dict):
+            codes.append("UNCLASSIFIED_SOURCE_FAILURE")
+            continue
+        detail = str(row.get("detail", ""))
+        match = next((code for phrase, code in SAFE_FAILURE_REASONS.items()
+                      if phrase in detail), "UNCLASSIFIED_SOURCE_FAILURE")
+        codes.append(match)
+    return ",".join(codes) or "UNCLASSIFIED_SOURCE_FAILURE"
+
+
 def capture_and_issue_one(
     provider, market_data, market, capture_dir: Path, staging_root: Path, *,
     clock=lambda: datetime.now(timezone.utc), fault_hook=None,
@@ -32,7 +61,10 @@ def capture_and_issue_one(
     if (manifest["verified_complete_market_count"] != 1
         or manifest["failed_markets"]
         or manifest["complete_markets"] != [market]):
-        raise ValueError("governed source capture failed; refusing forecast issuance")
+        raise ValueError(
+            "governed source capture failed; refusing forecast issuance; "
+            "safe_reason=" + _safe_failure_diagnostic(manifest.get("failed_markets"))
+        )
     result = issue_atomic_staging(
         capture_dir, staging_root, market, clock=clock, fault_hook=fault_hook
     )
