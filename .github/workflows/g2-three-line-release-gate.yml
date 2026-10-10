@@ -1,0 +1,68 @@
+name: G2 Three-Line No-Push Release Gate
+
+on:
+  push:
+    branches:
+      - chatgpt/g2-release-readiness-gate-20261010
+  pull_request:
+    branches:
+      - chatgpt/g2-revision-content-integrity-20261010
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-three-line-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout CI-only release audit branch (no credentials)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify exact pinned revision-fix parent
+        shell: bash
+        run: |
+          git merge-base --is-ancestor e105afeda4828ec3116a2e1ec6431130a11743dc HEAD
+      - name: Fetch pinned production-feature and regime branches
+        shell: bash
+        run: |
+          git fetch --no-tags origin +refs/heads/codex/g2-production-feature-contracts-20261010:refs/remotes/origin/g2-features-release
+          git fetch --no-tags origin +refs/heads/codex/g2-regime-development-results-20261010:refs/remotes/origin/g2-research-release
+          test "$(git rev-parse refs/remotes/origin/g2-features-release)" = "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae" || {
+            echo "::error::PRODUCTION_FEATURE_BRANCH_MOVED: re-audit before retry"; exit 3;
+          }
+          test "$(git rev-parse refs/remotes/origin/g2-research-release)" = "82af27e1f9d79f02f8062c5756047fe1fb35ef20" || {
+            echo "::error::RESEARCH_BRANCH_MOVED: re-audit before retry"; exit 4;
+          }
+      - name: Two local temporary merges (NOT PUSHED)
+        shell: bash
+        run: |
+          git -c user.name=Release-Gate-Runner -c user.email=runner@invalid.example merge --no-ff --no-edit refs/remotes/origin/g2-features-release
+          git -c user.name=Release-Gate-Runner -c user.email=runner@invalid.example merge --no-ff --no-edit refs/remotes/origin/g2-research-release
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git merge-base --is-ancestor e105afeda4828ec3116a2e1ec6431130a11743dc HEAD
+          git merge-base --is-ancestor 0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae HEAD
+          git merge-base --is-ancestor 82af27e1f9d79f02f8062c5756047fe1fb35ef20 HEAD
+          echo "THREE_LINE_MERGE=PASS;REPOSITORY_PUSH=FORBIDDEN"
+      - name: Set up Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Install project development dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Validate fail-closed release policy
+        run: python -m scripts.g2_release_gate --manifest docs/G2_RELEASE_GATE_20261010.json
+      - name: Run all three lines' focused integration tests
+        run: |
+          python -m pytest -q tests/test_g2_revision_content_integrity.py tests/test_production_feature_contracts.py tests/test_price_feature_full_windows.py tests/test_g2_verify_regime_development_report.py tests/test_g2_post_maturity_outcome_readiness.py tests/test_g2_release_gate.py
+      - name: Full repository pytest after both temporary merges
+        run: python -m pytest -q
+      - name: Compile all combined application code
+        run: python -m compileall -q src/birzha/application src/birzha/storage scripts/g2_release_gate.py
+      - name: Explicitly refuse release as a consequence of green CI
+        run: |
+          python -m scripts.g2_release_gate --manifest docs/G2_RELEASE_GATE_20261010.json --summary
+          echo "ALL_CI_GREEN_DOES_NOT_AUTHORIZE_MERGE_HOME_PRODUCTION"
