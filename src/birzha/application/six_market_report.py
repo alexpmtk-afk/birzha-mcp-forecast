@@ -1,10 +1,11 @@
 """One read-only inventory of six markets from original bound inputs."""
 import hashlib
+from birzha.application.input_diagnostics import build_market_input_diagnostics, render_market_input_diagnostics
 from birzha.application.combined_market_report import build_combined_market_report
 from birzha.application.level_reaction import canonical_bytes
 
 MARKETS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
-SIX_MARKET_REPORT_VERSION = "SIX_MARKET_FACTS_V1"
+SIX_MARKET_REPORT_VERSION = "SIX_MARKET_FACTS_V2"
 EVIDENCE_MODES = ("OFFLINE_RESEARCH_REPEAT", "FROZEN_RECORD_VIEW")
 
 
@@ -24,11 +25,14 @@ def build_six_market_report(inputs, *, evidence_mode):
             rows.append({"market": market, "input_status": "NOT_SUPPLIED", "secid": None,
                 "t0": None, "timeframes": None, "decision_status": None, "direction": None,
                 "abstention_reasons": None, "reference": None, "level_status_counts": None,
-                "later_observation": None, "detail_report": None})
+                "later_observation": None, "input_diagnostics": None, "detail_report": None})
             continue
         detail = build_combined_market_report(**inputs[market])
         if detail["symbol"] != market:
             raise ValueError("market inventory key conflicts with snapshot instrument")
+        diagnostics = build_market_input_diagnostics(inputs[market]["snapshot"])
+        if diagnostics["snapshot_sha256"] != detail["snapshot_sha256"] or diagnostics["movement_report_id"] != detail["movement_at_t0"]["report_id"] or diagnostics["location_report_id"] != detail["level_report"]["at_t0"]["report_id"]:
+            raise ValueError("input diagnostics and frozen report source mismatch")
         movement = detail["movement_at_t0"]
         decision = detail["decision_at_t0"]
         levels = detail["level_report"]
@@ -55,7 +59,7 @@ def build_six_market_report(inputs, *, evidence_mode):
             "t0": detail["t0"], "timeframes": timeframes, "decision_status": decision["decision_status"],
             "direction": decision["direction"], "abstention_reasons": decision["abstention_reasons"],
             "reference": levels["at_t0"]["reference"], "level_status_counts": statuses,
-            "later_observation": observation, "detail_report": detail})
+            "later_observation": observation, "input_diagnostics": diagnostics, "detail_report": detail})
     complete = all(row["input_status"] == "SUPPLIED_AND_CONTENT_BOUND" for row in rows)
     timestamps = {row["t0"] for row in rows if row["t0"] is not None}
     body = {"version": SIX_MARKET_REPORT_VERSION, "evidence_mode": evidence_mode, "rows": rows,
@@ -110,6 +114,10 @@ def render_six_market_report(report):
                 else: value = "источник или показатель не допущен; причина в подробном отчёте"
                 values.append(value)
             lines.append("| " + " | ".join([labels[tf["timeframe"]], *values]) + " |")
+        if row.get("input_diagnostics") is not None:
+            lines.extend(["", render_market_input_diagnostics(row["input_diagnostics"])])
+        else:
+            lines.append("Подробной диагностики входов в этой версии сводки нет.")
         reference = row["reference"]
         lines.append("Опорная цена: " + _safe(reference["price"]) + ("; источник допущен." if reference["status"] == "AVAILABLE" else "; источник не допущен."))
         later = row["later_observation"]
