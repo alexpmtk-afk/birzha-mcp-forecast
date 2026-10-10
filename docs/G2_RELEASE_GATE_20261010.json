@@ -112,12 +112,20 @@
       "focused_tests_passed": 239,
       "full_tests_passed": 1252,
       "meaning": "GitHub CI verified exact #168/#171/#147 local ephemeral no-push merges, 239 focused, 1252 full PASS, compile+Preflight+Security. Manifest status updated AFTER run, requires final-HEAD CI check."
+    },
+    "latest_168_173_147_shadow_ci": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38085524574",
+      "tested_workflow_commit": "81874b1f7b2d6831d05bdec1b0c6791f2fca4ce2",
+      "focused_tests_passed": 265,
+      "full_tests_passed": 1278,
+      "meaning": "Exact #168/#173/#147 two temporary runner-only merges PASS, all focused/full tests PASS. The final manifest-change HEAD must rerun before fully accepted."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
-      "status": "PENDING",
-      "evidence": "CI-only ephemeral exact #168 + #173 (includes #171/#169/#167) + #147 rerun is required after updated manifest and blocker-triage diagnostics; old #171 combined PASS is historical and does not cover #173."
+      "status": "PASS",
+      "evidence": "GitHub-hosted no-push exact #168 + #173 (includes #171/#169/#167) + #147 integration at run 38085524574, workflow commit 81874b1f7b2d6831d05bdec1b0c6791f2fca4ce2. 265 targeted and 1278 full pytest PASS, compile, Security, Preflight PASS. This is compatibility only; final-HEAD audit rerun required after manifest update."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
