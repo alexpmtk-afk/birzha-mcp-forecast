@@ -16,10 +16,10 @@
       "parent_pr": 166
     },
     {
-      "area": "admitted_levels_movement_and_combined_T0_vs_later_observations",
-      "pr": 173,
-      "head": "f22624b804e8057af61a72ae12e812177d7121cf",
-      "parent_pr": 171
+      "area": "admitted_levels_movement_combined_six_market_explanations_and_input_diagnostics",
+      "pr": 179,
+      "head": "1097e67ae240b797e9e7d62e276745dc0bb4294d",
+      "parent_pr": 178
     },
     {
       "area": "market_regime_research",
@@ -71,7 +71,13 @@
     "171": 169,
     "172": 170,
     "173": 171,
-    "174": 172
+    "174": 172,
+    "175": 173,
+    "176": 174,
+    "177": 176,
+    "178": 175,
+    "179": 178,
+    "180": 177
   },
   "evidence": {
     "synthetic_three_line_ci": {
@@ -120,12 +126,19 @@
       "focused_tests_passed": 265,
       "full_tests_passed": 1278,
       "meaning": "Exact #168/#173/#147 two temporary runner-only merges PASS, all focused/full tests PASS. The final manifest-change HEAD must rerun before fully accepted."
+    },
+    "latest_168_179_147_shadow_ci": {
+      "status": "PENDING",
+      "run_url": null,
+      "focused_tests_passed": null,
+      "full_tests_passed": null,
+      "meaning": "Await final-head exact GitHub CI SHA-pinned integration. Existing earlier #173 CI is historical."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
-      "status": "PASS",
-      "evidence": "GitHub-hosted no-push exact #168 + #173 (includes #171/#169/#167) + #147 integration at run 38085524574, workflow commit 81874b1f7b2d6831d05bdec1b0c6791f2fca4ce2. 265 targeted and 1278 full pytest PASS, compile, Security, Preflight PASS. This is compatibility only; final-HEAD audit rerun required after manifest update."
+      "status": "PENDING",
+      "evidence": "Prior exact #168/#173/#147 proof did not include colleague successor #179 (with #175/#178 input diagnostics). New SHA-pinned #168/#179/#147 temporary no-push crossline and full CI required before converting gate back to PASS; do not transfer previous PASS."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
