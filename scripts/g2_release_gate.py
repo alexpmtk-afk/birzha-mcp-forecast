@@ -26,11 +26,11 @@ REQUIRED = frozenset({
 })
 RESEARCH = (132, 133, 134, 135, 136, 137, 138, 140, 142, 144, 147)
 FORECAST = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148)
-PRODUCTION = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148, 149, 151)
-REVISIONS = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148, 152)
+PRODUCTION = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148, 149, 151, 154, 155)
+REVISIONS = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148, 152, 153, 156)
 EXPECTED_LEAVES = {
-    152: "e105afeda4828ec3116a2e1ec6431130a11743dc",
-    151: "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae",
+    156: "5f091403510a7af0a4c036404db7c04af959120d",
+    155: "0a55a9607642cd1428a396c9d69ff404c7d0578f",
     147: "82af27e1f9d79f02f8062c5756047fe1fb35ef20",
 }
 
@@ -74,7 +74,7 @@ def validate(manifest: dict) -> dict:
     leaf_pins = {p["pr"]: p["head"] for p in leaves}
     if leaf_pins != EXPECTED_LEAVES:
         raise ValueError("release line heads moved without independent re-audit")
-    if {p["parent_pr"] for p in leaves} != {144, 148, 149}:
+    if {p["parent_pr"] for p in leaves} != {144, 153, 154}:
         raise ValueError("release line dependency not pinned")
 
     gates = manifest.get("release_gates")
