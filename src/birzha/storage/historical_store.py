@@ -321,6 +321,27 @@ class DuckDBHistoricalCandleStore:
             )
             versions.setdefault(item.begin, []).append(item)
         for begin, observed_at, revision, payload_json, source in revisions:
+            if knowledge_cutoff is not None:
+                # An unobserved or later revision may be corrupt, but must
+                # not affect a historical view from BEFORE its first receipt.
+                # Do not even parse future payloads in the strict path.
+                receipt = _receipt_utc(str(observed_at) if observed_at is not None else None)
+                if receipt is None or receipt > knowledge_cutoff:
+                    continue
+            # Unlike the base table, the revisions table retains the
+            # ORIGINAL canonical payload JSON, so SHA verification does not
+            # depend on lossy DuckDB INTEGER/FLOAT round-trip formatting.
+            token = str(revision)
+            content_addressed = (
+                len(token) == 64
+                and all(ch in "0123456789abcdefABCDEF" for ch in token)
+            )
+            if content_addressed:
+                actual_sha = hashlib.sha256(str(payload_json).encode("utf-8")).hexdigest()
+                if actual_sha != token.lower():
+                    raise ValueError("candle version SHA256 does not match stored revision payload")
+            elif knowledge_cutoff is not None:
+                raise ValueError("historical T0 candle revision has no content-addressed SHA256")
             payload = json.loads(str(payload_json))
             if not isinstance(payload, dict) or payload.get("begin") != str(begin):
                 raise ValueError("revision payload does not match stored candle begin")
@@ -359,6 +380,21 @@ class DuckDBHistoricalCandleStore:
                                 continue
                         except ValueError:
                             continue
+                # The base table does not preserve original numeric JSON:
+                # values such as 100 and 100.0 round-trip to the same
+                # DuckDB DOUBLE. Its content SHA cannot safely be recomputed
+                # from the projected Candle without creating false failures.
+                # Existing base timestamps and original receipts still obey
+                # the opt-in causal cutoff, but historical vintage/legacy
+                # bytes are NOT independently certified by this read.
+                token = item.revision
+                is_sha256 = (
+                    isinstance(token, str)
+                    and len(token) == 64
+                    and all(ch in "0123456789abcdefABCDEF" for ch in token)
+                )
+                if knowledge_cutoff is not None and not is_sha256:
+                    raise ValueError("historical T0 candle lacks a content-addressed revision token")
                 candidates.append((item, observed))
             if not candidates:
                 continue
