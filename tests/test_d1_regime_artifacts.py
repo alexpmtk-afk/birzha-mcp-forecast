@@ -201,3 +201,43 @@ def test_receipt_is_last_and_readback_failure_blocks_it(tmp_path, monkeypatch):
         )
     assert not (path / "receipt.json").exists()
     assert not (path / "frozen.json").exists()
+
+@pytest.mark.parametrize("bad", [None, "", "x", "A" * 64, "g" * 64, 123, False])
+def test_missing_or_malformed_external_preparation_anchor_rejected(tmp_path, bad):
+    report = b'{"completion":"COMPLETE","forecast_admission":false}\n'
+    output = tmp_path / "forged-lineage"
+    output.mkdir()
+    receipt = artifacts._json_bytes({
+        "schema": artifacts.ARTIFACT_VERSION, "stage": "REPORT_PUBLISHED",
+        "scope": "DESCRIPTIVE_PROPOSAL_SIMULATION_ONLY", "forecast_admission": False,
+        "parent_receipt_sha256": bad, "files": {"report.json": sha256(report)},
+    })
+    (output / "report.json").write_bytes(report)
+    (output / "receipt.json").write_bytes(receipt)
+    with pytest.raises(ValueError, match="SHA256"):
+        artifacts.read_evaluation(output, trusted_receipt_sha256=sha256(receipt),
+                                  trusted_preparation_receipt_sha256=bad)
+
+
+@pytest.mark.parametrize("bad", [None, "", "x", "A" * 64, "g" * 64, 123, False])
+def test_report_anchor_format_rejected_before_read(tmp_path, bad):
+    with pytest.raises(ValueError, match="SHA256"):
+        artifacts.read_evaluation(tmp_path / "absent", trusted_receipt_sha256=bad,
+                                  trusted_preparation_receipt_sha256="a" * 64)
+
+
+@pytest.mark.parametrize("bad", [None, "", "z" * 64])
+def test_malformed_receipt_parent_rejected_with_valid_external_anchors(tmp_path, bad):
+    output = tmp_path / "bad-parent"
+    output.mkdir()
+    report = b"{}"
+    receipt = artifacts._json_bytes({
+        "schema": artifacts.ARTIFACT_VERSION, "stage": "REPORT_PUBLISHED",
+        "scope": "DESCRIPTIVE_PROPOSAL_SIMULATION_ONLY", "forecast_admission": False,
+        "parent_receipt_sha256": bad, "files": {"report.json": sha256(report)},
+    })
+    (output / "report.json").write_bytes(report)
+    (output / "receipt.json").write_bytes(receipt)
+    with pytest.raises(ValueError, match="SHA256"):
+        artifacts.read_evaluation(output, trusted_receipt_sha256=sha256(receipt),
+                                  trusted_preparation_receipt_sha256="a" * 64)

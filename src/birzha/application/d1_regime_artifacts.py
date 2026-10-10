@@ -11,6 +11,12 @@ ARTIFACT_VERSION = "G2_REGIME_ARTIFACTS_V1"
 _INPUT_NAMES = ("manifest.json", "accepted.jsonl", "exclusions.jsonl", "frozen.json")
 
 
+def _require_hash(value: str, where: str) -> None:
+    if (not isinstance(value, str) or len(value) != 64
+            or any(ch not in "0123456789abcdef" for ch in value)):
+        raise ValueError(where + ": explicit lowercase SHA256 required")
+
+
 def _json_bytes(value: dict) -> bytes:
     return (canonical_json(value) + "\n").encode()
 
@@ -76,9 +82,8 @@ def read_preparation(directory: Path, *, trusted_receipt_sha256: str) -> tuple[b
     directory = Path(directory)
     _leaf(directory)
     receipt_bytes = _read(directory / "receipt.json")
-    if (not isinstance(trusted_receipt_sha256, str) or len(trusted_receipt_sha256) != 64
-            or any(ch not in "0123456789abcdef" for ch in trusted_receipt_sha256)
-            or sha256(receipt_bytes) != trusted_receipt_sha256):
+    _require_hash(trusted_receipt_sha256, "trusted preparation receipt")
+    if sha256(receipt_bytes) != trusted_receipt_sha256:
         raise ValueError("trusted preparation receipt SHA mismatch")
     receipt = _decode(receipt_bytes, "preparation receipt")
     if (not isinstance(receipt, dict) or receipt.get("schema") != ARTIFACT_VERSION
@@ -122,12 +127,17 @@ def publish_evaluation(
 def read_evaluation(directory: Path, *, trusted_receipt_sha256: str,
                     trusted_preparation_receipt_sha256: str) -> bytes:
     """Verify published report bytes and their anchored preparation lineage."""
+    _require_hash(trusted_receipt_sha256, "trusted report receipt")
+    _require_hash(trusted_preparation_receipt_sha256, "trusted preparation receipt")
     directory = Path(directory)
     _leaf(directory)
     receipt_bytes = _read(directory / "receipt.json")
     if sha256(receipt_bytes) != trusted_receipt_sha256:
         raise ValueError("trusted report receipt SHA mismatch")
     receipt = _decode(receipt_bytes, "report receipt")
+    if not isinstance(receipt, dict):
+        raise ValueError("invalid report receipt")
+    _require_hash(receipt.get("parent_receipt_sha256"), "receipt preparation parent")
     if (not isinstance(receipt, dict) or receipt.get("schema") != ARTIFACT_VERSION
             or receipt.get("stage") != "REPORT_PUBLISHED"
             or receipt.get("scope") != "DESCRIPTIVE_PROPOSAL_SIMULATION_ONLY"

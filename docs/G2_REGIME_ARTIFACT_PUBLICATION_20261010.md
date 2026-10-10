@@ -56,3 +56,10 @@ links, interrupted writes at every preparation/report file, readback failure,
 invalid input, criteria mismatch, and preservation of aborted report bytes.
 No real quantile calibration, MOEX run, reserved-period read, or HOME action.
 The underlying proposed quantile procedure still requires separate agreement.
+
+## Review correction
+
+Both external evaluation receipt anchors and the receipt preparation parent
+must be explicit lowercase SHA256 strings. None, empty or malformed values
+are refused even if an externally hashed report receipt matches them.
+Dependent branch now incorporates the reviewed yearly reporting fix in #142.
