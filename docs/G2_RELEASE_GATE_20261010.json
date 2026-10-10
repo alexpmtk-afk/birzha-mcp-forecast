@@ -16,10 +16,10 @@
       "parent_pr": 153
     },
     {
-      "area": "baseline_decisions_and_price_level_evidence",
-      "pr": 155,
-      "head": "0a55a9607642cd1428a396c9d69ff404c7d0578f",
-      "parent_pr": 154
+      "area": "baseline_decisions_price_level_provenance_and_separate_reaction_facts",
+      "pr": 157,
+      "head": "abe9a42ddf1242e30162c51bfd6207127c34e92a",
+      "parent_pr": 155
     },
     {
       "area": "market_regime_research",
@@ -54,7 +54,9 @@
     "154": 151,
     "155": 154,
     "156": 153,
-    "158": 156
+    "157": 155,
+    "158": 156,
+    "159": 158
   },
   "evidence": {
     "synthetic_three_line_ci": {
@@ -63,7 +65,7 @@
       "tests_passed": 999,
       "focused_tests_passed": 106,
       "verified_commit": "a2584c09c59c8c8333e8e63cffacb6e1df7e1b39",
-      "meaning": "CI-only local merge exact current HEADs PR #156 source issuance, PR #155 baseline decisions / price levels and PR #147 regime research; full pytest 999 PASS; no repository push."
+      "meaning": "CI-only local merge exact current HEADs PR #156 source issuance, PR #155 baseline decisions / price levels and PR #147 regime research; full pytest 999 PASS; no repository push. This is HISTORICAL #155-pin compatibility proof, not current PR #157 three-line evidence."
     },
     "forecast_freeze": {
       "status": "PASS",
@@ -79,12 +81,19 @@
       "status": "PASS",
       "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/147",
       "meaning": "Development descriptive research only; not independent prospective predictive validation."
+    },
+    "level_reaction_fact_layer": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38077936521",
+      "verified_commit": "abe9a42ddf1242e30162c51bfd6207127c34e92a",
+      "tests_passed": 743,
+      "meaning": "PR #157 isolated reaction fact storage/CLI + tests 743 PASS, with bounded synthetic-only demonstration; no independent post-T0 calendar or strength/acceptance/control claim."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
-      "status": "PASS",
-      "evidence": "GitHub Actions 38078049456 (shadow CI-only HEAD a2584c09c59c8c8333e8e63cffacb6e1df7e1b39): exact PR #156 + #155 + #147 temporary no-push merges, 106 focused and 999 full pytest PASS, compile, Security and Preflight PASS."
+      "status": "PENDING",
+      "evidence": "Latest no-push combined CI for exact source #156 + colleague reaction #157 + regime #147 is PENDING on this new pinned branch. Previous run 38078395704 (1003 PASS) used older #155; not evidence for new leaf."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
