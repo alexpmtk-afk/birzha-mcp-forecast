@@ -53,10 +53,12 @@
   },
   "evidence": {
     "synthetic_three_line_ci": {
-      "status": "PENDING",
-      "run_url": null,
-      "tests_passed": null,
-      "meaning": "GitHub-hosted temporary merge of PR #152, #151, #147; all pytest; no push."
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069916800",
+      "tests_passed": 910,
+      "meaning": "GitHub-hosted temporary merge of PR #152, #151, #147; all pytest; no push.",
+      "focused_tests_passed": 144,
+      "verified_commit": "b4487b395b39e0747a5bf06471b6f6288c8ff072"
     },
     "forecast_freeze": {
       "status": "PASS",
@@ -76,8 +78,8 @@
   },
   "release_gates": {
     "code_three_line_compatibility": {
-      "status": "PENDING",
-      "evidence": "new CI run must verify all three pinned branch HEADs"
+      "status": "PASS",
+      "evidence": "GitHub Actions 38069916800 on b4487b395b39e0747a5bf06471b6f6288c8ff072: three exact pinned HEADs, two no-push temporary merges, 144 focused and 910 full pytest PASS, compile + Preflight/Security PASS"
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
