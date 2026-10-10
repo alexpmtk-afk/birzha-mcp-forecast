@@ -12,7 +12,8 @@ from birzha.domain.market_state import (
     FeatureStatus,
     MarketStateVector,
 )
-from birzha.domain.normalized_features import NormalizedFeatureSet
+from birzha.domain.normalized_features import NormalizedFeatureSet, NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
+from birzha.application.features import _finite_price
 from birzha.domain.snapshot import MarketSnapshot, TimeframeState, market_snapshot_id
 
 if TYPE_CHECKING:
@@ -63,6 +64,18 @@ _PROFILE_VALUE_FEATURES = frozenset(
     }
 )
 _CANDLE_FEATURES = frozenset({"current_price", *_TIMEFRAMES_BY_FEATURE})
+# Versioned lengths of the numerical inputs, not a universal timeframe guard.
+_FEATURE_MINIMUMS = {
+    'd1_atr_price_scale': 15,
+    'd1_return_5_atr': 15, 'd1_return_20_atr': 21,
+    'h1_return_5_atr': 15, 'm15_return_5_atr': 15,
+    'd1_efficiency_20': 21, 'h1_efficiency_20': 21, 'm15_efficiency_20': 21,
+    'd1_price_location_20': 20, 'h1_price_location_20': 20, 'm15_price_location_20': 20,
+    'd1_volume_ratio_20': 21, 'h1_volume_ratio_20': 21, 'm15_volume_ratio_20': 21,
+    'distance_to_session_vwap_atr': 15,
+    'distance_to_poc_atr': 15, 'distance_to_vah_atr': 15, 'distance_to_val_atr': 15,
+}
+
 _MINIMUM_CANDLES = 50
 _TRADESTATS_FAILURE_WARNINGS = (
     "ALGOPACK_TRADESTATS_UNAVAILABLE:",
@@ -108,6 +121,7 @@ def build_market_state_vector(
     }
     timeframe_quality = _timeframe_quality(snapshot)
     availability: list[tuple[str, FeatureAvailability]] = []
+    full_windows = normalized.version == NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
 
     for item in fields(NormalizedFeatureSet):
         name = item.name
@@ -121,6 +135,8 @@ def build_market_state_vector(
             timeframe_quality=timeframe_quality,
             profile_is_exact=normalized.profile_is_exact,
             flow=snapshot.flow,
+            full_windows=full_windows,
+            quality_reasons=snapshot.quality_contract.reasons if snapshot.quality_contract else (),
         )
         availability.append((name, FeatureAvailability(status, reason)))
         if status not in {"AVAILABLE", "AVAILABLE_APPROXIMATE"}:
@@ -156,6 +172,7 @@ def build_market_state_vector(
         availability=tuple(availability),
         timeframe_evidence=timeframe_evidence,
         warnings=warnings,
+        version="MARKET_STATE_VECTOR_V1_PER_FEATURE" if full_windows else "MARKET_STATE_VECTOR_V0",
     )
 
 
@@ -180,6 +197,20 @@ def _timeframe_quality(
     }
 
 
+def feature_capability_reason(name: str, capabilities: frozenset[str]) -> str | None:
+    if name in _CANDLE_FEATURES and "CANDLES" not in capabilities:
+        return "instrument_does_not_declare_CANDLES"
+    if name in _VOLUME_FEATURES and "VOLUME" not in capabilities:
+        return "instrument_does_not_declare_VOLUME"
+    if name in _TRADESTATS_FEATURES and "TRADESTATS" not in capabilities:
+        return "instrument_does_not_declare_TRADESTATS"
+    if name == "oi_change_ratio" and not (
+        {"OPEN_INTEREST", "FUTOI"} & capabilities
+    ):
+        return "instrument_does_not_declare_open_interest"
+    return None
+
+
 def _feature_status(
     name: str,
     value: object,
@@ -189,17 +220,12 @@ def _feature_status(
     timeframe_quality: dict[str, tuple[int, str]],
     profile_is_exact: bool | None,
     flow: MarketFlowSnapshot | None,
+    full_windows: bool = False,
+    quality_reasons: tuple[str, ...] = (),
 ) -> tuple[FeatureStatus, str | None]:
-    if name in _CANDLE_FEATURES and "CANDLES" not in capabilities:
-        return "NOT_APPLICABLE", "instrument_does_not_declare_CANDLES"
-    if name in _VOLUME_FEATURES and "VOLUME" not in capabilities:
-        return "NOT_APPLICABLE", "instrument_does_not_declare_VOLUME"
-    if name in _TRADESTATS_FEATURES and "TRADESTATS" not in capabilities:
-        return "NOT_APPLICABLE", "instrument_does_not_declare_TRADESTATS"
-    if name == "oi_change_ratio" and not (
-        {"OPEN_INTEREST", "FUTOI"} & capabilities
-    ):
-        return "NOT_APPLICABLE", "instrument_does_not_declare_open_interest"
+    capability_reason = feature_capability_reason(name, capabilities)
+    if capability_reason is not None:
+        return "NOT_APPLICABLE", capability_reason
 
     required_timeframes = _TIMEFRAMES_BY_FEATURE.get(name, ())
     if name in _PROFILE_VALUE_FEATURES and profile_is_exact is False:
@@ -209,11 +235,28 @@ def _feature_status(
             timeframe,
             (_MINIMUM_CANDLES, "DEGRADED"),
         )
-        if timeframe_states[timeframe].candles < minimum or status != "PASS":
-            return "INSUFFICIENT_HISTORY", f"{timeframe}_requires_{minimum}_candles"
+        actual = timeframe_states[timeframe].candles
+        if full_windows:
+            declared_minimum = minimum
+            minimum = 50 if timeframe == 'H1' and name in _PROFILE_VALUE_FEATURES and profile_is_exact is False else _FEATURE_MINIMUMS.get(name, 1)
+            if actual < minimum:
+                return 'INSUFFICIENT_HISTORY', f'{timeframe}_requires_{minimum}_candles'
+            # Relax only the explicit general warmup limitation. Unknown quality
+            # or an unrelated defect remains closed even if arithmetic exists.
+            count_only = (
+                status == 'DEGRADED' and actual < declared_minimum
+                and bool(quality_reasons)
+                and all(reason.startswith(('D1: insufficient_history=', 'H1: insufficient_history=', 'M15: insufficient_history=')) for reason in quality_reasons)
+            )
+            if status != 'PASS' and not count_only:
+                return 'UNAVAILABLE', f'{timeframe}_quality_not_proven_for_feature'
+        elif actual < minimum or status != 'PASS':
+            return 'INSUFFICIENT_HISTORY', f'{timeframe}_requires_{minimum}_candles'
 
     if value is None:
         return "UNAVAILABLE", "causal_value_not_available_at_snapshot_T0"
+    if name not in {"profile_method", "profile_is_exact"} and not _finite_price(value):
+        return "UNAVAILABLE", "nonfinite_or_invalid_numeric_value"
     flow_reason = _flow_evidence_unavailable_reason(name, flow)
     if flow_reason is not None:
         return "UNAVAILABLE", flow_reason

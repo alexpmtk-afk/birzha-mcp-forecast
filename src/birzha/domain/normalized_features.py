@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 
 
+NORMALIZED_FEATURES_FULL_WINDOWS_VERSION = "NORMALIZED_FEATURES_V2_FULL_WINDOWS_SMA_TR14"
+
 NORMALIZED_FEATURES_VERSION = "NORMALIZED_FEATURES_V1"
 
 

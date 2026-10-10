@@ -1,0 +1,23 @@
+name: G2 Production Feature Contracts
+on:
+  push:
+    branches: [codex/g2-production-feature-contracts-20261010]
+  pull_request:
+    branches: [codex/g2-full-window-price-features-20261010]
+permissions:
+  contents: read
+concurrency:
+  group: g2-production-features-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q -p no:cacheprovider
+      - run: python scripts/repository_preflight.py

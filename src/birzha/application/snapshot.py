@@ -212,6 +212,7 @@ class MarketSnapshotService:
             m15=m15_state,
             flow=flow_snapshot,
             volume_profile=volume_profile,
+            instrument=instrument,
         )
         snapshot = MarketSnapshot(
             symbol=symbol,

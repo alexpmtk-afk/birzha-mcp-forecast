@@ -6,6 +6,8 @@ import hashlib
 import json
 from dataclasses import dataclass
 
+from birzha.application.features import _finite_price
+from birzha.domain.normalized_features import NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.domain.prediction import (
     PREDICTION_CONTRACT_VERSION,
@@ -16,6 +18,7 @@ from birzha.domain.snapshot import MarketSnapshot
 
 BASELINE_BARRIER_K = 1.0
 DEFAULT_HORIZONS = (5, 10, 20)
+FULL_WINDOWS_PREDICTION_VERSION = "PREDICTION_CONTRACT_V2_SMA_TR14_FULL_WINDOWS"
 
 
 @dataclass(slots=True)
@@ -34,24 +37,29 @@ class PredictionContractService:
 
 def build_prediction_contract(snapshot: MarketSnapshot) -> PredictionContract:
     p0, coordinate = _reference_price(snapshot)
-    if p0 in {None, 0.0}:
+    if not _finite_price(p0) or p0 == 0:
         raise ValueError("Prediction Contract requires a valid causal P0")
 
     d1_close = snapshot.d1.last_close
     atr_pct = snapshot.d1.atr_14_pct
-    if d1_close in {None, 0.0} or atr_pct in {None, 0.0}:
+    if not _finite_price(d1_close) or d1_close == 0 or not _finite_price(atr_pct) or atr_pct <= 0:
         raise ValueError("Prediction Contract requires causal D1 ATR(14)")
 
     volatility_price = abs(float(d1_close) * float(atr_pct))
-    if volatility_price <= 0:
+    if not _finite_price(volatility_price) or volatility_price <= 0:
         raise ValueError("causal volatility must be > 0")
 
     p0 = float(p0)
     up = p0 + BASELINE_BARRIER_K * volatility_price
     down = p0 - BASELINE_BARRIER_K * volatility_price
 
+    if not all(_finite_price(value) for value in (up, down)):
+        raise ValueError("causal barriers must be finite")
+    full_windows = snapshot.normalized_features is not None and snapshot.normalized_features.version == NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
+    contract_version = FULL_WINDOWS_PREDICTION_VERSION if full_windows else PREDICTION_CONTRACT_VERSION
+    measure = "D1_SMA_TR14_PRICE_V1" if full_windows else "D1_WILDER_ATR14_PRICE"
     identity = {
-        "version": PREDICTION_CONTRACT_VERSION,
+        "version": contract_version,
         "symbol": snapshot.symbol,
         "secid": snapshot.secid,
         "t0": snapshot.as_of,
@@ -66,14 +74,14 @@ def build_prediction_contract(snapshot: MarketSnapshot) -> PredictionContract:
 
     return PredictionContract(
         contract_id=f"pred_{digest}",
-        version=PREDICTION_CONTRACT_VERSION,
+        version=contract_version,
         symbol=snapshot.symbol,
         secid=snapshot.secid,
         t0=snapshot.as_of,
         p0=round(p0, 10),
         price_coordinate=coordinate,
         significant_move_definition="P0 +/- k * causal D1 ATR(14)",
-        volatility_measure="D1_WILDER_ATR14_PRICE",
+        volatility_measure=measure,
         causal_volatility_price=round(volatility_price, 10),
         barrier_k=BASELINE_BARRIER_K,
         up_barrier=round(up, 10),

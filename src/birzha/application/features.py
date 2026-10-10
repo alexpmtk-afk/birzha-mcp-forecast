@@ -9,6 +9,8 @@ from birzha.domain.market import Candle, CandleSeries
 from birzha.domain.snapshot import TimeframeState
 
 
+TIMEFRAME_FEATURE_RULES_VERSION = "TIMEFRAME_FULL_WINDOWS_SMA_TR14_V2"
+
 PRICE_WINDOW_FEATURE_VERSION = "TIMEFRAME_PRICE_WINDOWS_V2"
 
 
@@ -18,8 +20,8 @@ class TimeframeFeatureEngine:
 
     def build(self, series: CandleSeries) -> TimeframeState:
         candles = list(series.candles)
-        closes = [c.close for c in candles]
-        volumes = [c.volume for c in candles]
+        closes = [c.close if c.completed is True and _finite_price(c.close) else None for c in candles]
+        volumes = [c.volume if c.completed is True and _finite_price(c.volume) and c.volume >= 0 else None for c in candles]
         return TimeframeState(
             timeframe=series.timeframe,
             candles=len(candles),
@@ -44,7 +46,7 @@ def _complete_trailing(values: list[float | None], count: int) -> list[float] | 
     if len(values) < count:
         return None
     window = values[-count:]
-    if any(value is None for value in window):
+    if any(not _finite_price(value) for value in window):
         return None
     return [value for value in window if value is not None]
 
@@ -53,14 +55,16 @@ def _return_n(values: list[float | None], n: int) -> float | None:
     window = _complete_trailing(values, n + 1)
     if window is None or window[0] == 0:
         return None
-    return window[-1] / window[0] - 1.0
+    result = window[-1] / window[0] - 1.0
+    return result if _finite_price(result) else None
 
 
 def _sma(values: list[float | None], n: int) -> float | None:
     window = _complete_trailing(values, n)
     if window is None:
         return None
-    return sum(window) / n
+    result = sum(window) / n
+    return result if _finite_price(result) else None
 
 
 def _efficiency_ratio(values: list[float | None], n: int) -> float | None:
@@ -69,29 +73,36 @@ def _efficiency_ratio(values: list[float | None], n: int) -> float | None:
         return None
     direction = abs(window[-1] - window[0])
     noise = sum(abs(b - a) for a, b in zip(window, window[1:]))
-    return direction / noise if noise else 0.0
+    if not _finite_price(direction) or not _finite_price(noise) or noise <= 0:
+        return None
+    result = direction / noise
+    return result if _finite_price(result) else None
 
 
 def _atr_pct(candles: list[Candle], n: int) -> float | None:
-    window = candles[-(n + 1):]
-    if len(window) < n + 1 or any(
-        c.high is None or c.low is None or c.close is None for c in window
-    ):
+    window = _full_hlc_window(candles, n + 1)
+    if window is None:
         return None
-    trs: list[float] = []
-    for prev, cur in zip(window[:-1], window[1:]):
-        assert cur.high is not None and cur.low is not None and prev.close is not None
-        trs.append(max(cur.high-cur.low, abs(cur.high-prev.close), abs(cur.low-prev.close)))
-    last_close = window[-1].close
-    return (sum(trs) / len(trs)) / last_close if last_close else None
+    trs = [
+        max(cur.high-cur.low, abs(cur.high-prev.close), abs(cur.low-prev.close))
+        for prev, cur in zip(window[:-1], window[1:])
+    ]
+    scale = abs(window[-1].close)
+    if scale == 0 or any(not _finite_price(tr) for tr in trs):
+        return None
+    result = (sum(trs) / n) / scale
+    return result if _finite_price(result) and result > 0 else None
 
 
 def _volume_ratio(values: list[float | None], n: int) -> float | None:
     window = _complete_trailing(values, n + 1)
-    if window is None:
+    if window is None or any(value < 0 for value in window):
         return None
     baseline = sum(window[:-1]) / n
-    return window[-1] / baseline if baseline else None
+    if not _finite_price(baseline) or baseline <= 0:
+        return None
+    result = window[-1] / baseline
+    return result if _finite_price(result) else None
 
 
 def _finite_price(value: object) -> bool:
@@ -176,13 +187,13 @@ def _trend_score(closes: list[float | None]) -> float:
     if not closes:
         return 0.0
     last = closes[-1]
-    if last is None:
+    if not _finite_price(last):
         return 0.0
     score = 0.0
     sma20, sma50 = _sma(closes, 20), _sma(closes, 50)
     r20, er = _return_n(closes, 20), _efficiency_ratio(closes, 20)
-    if sma20 is not None: score += 1.0 if last > sma20 else -1.0
-    if sma20 is not None and sma50 is not None: score += 1.0 if sma20 > sma50 else -1.0
-    if r20 is not None: score += 1.0 if r20 > 0 else -1.0
+    if sma20 is not None: score += (last > sma20) - (last < sma20)
+    if sma20 is not None and sma50 is not None: score += (sma20 > sma50) - (sma20 < sma50)
+    if r20 is not None: score += (r20 > 0) - (r20 < 0)
     if er is not None: score *= 0.5 + min(1.0, er)
     return round(score, 6)
