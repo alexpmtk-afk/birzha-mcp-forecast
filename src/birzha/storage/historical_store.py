@@ -321,6 +321,13 @@ class DuckDBHistoricalCandleStore:
             )
             versions.setdefault(item.begin, []).append(item)
         for begin, observed_at, revision, payload_json, source in revisions:
+            if knowledge_cutoff is not None:
+                # An unobserved or later revision may be corrupt, but must
+                # not affect a historical view from BEFORE its first receipt.
+                # Do not even parse future payloads in the strict path.
+                receipt = _receipt_utc(str(observed_at) if observed_at is not None else None)
+                if receipt is None or receipt > knowledge_cutoff:
+                    continue
             payload = json.loads(str(payload_json))
             if not isinstance(payload, dict) or payload.get("begin") != str(begin):
                 raise ValueError("revision payload does not match stored candle begin")
@@ -359,6 +366,22 @@ class DuckDBHistoricalCandleStore:
                                 continue
                         except ValueError:
                             continue
+                # Content-addressed version identity is independently checked
+                # against the actual selected OHLC bytes; otherwise an
+                # overwritten revision payload could silently alter as-of T0.
+                # Legacy non-hash tokens remain readable only in explicit
+                # non-strict first/latest modes, not certified historical T0.
+                token = item.revision
+                content_sha, _ = _candle_revision(item, item.source or "")
+                is_sha256 = (
+                    isinstance(token, str)
+                    and len(token) == 64
+                    and all(ch in "0123456789abcdefABCDEF" for ch in token)
+                )
+                if is_sha256 and token.lower() != content_sha:
+                    raise ValueError("candle version SHA256 does not match stored OHLC payload")
+                if knowledge_cutoff is not None and not is_sha256:
+                    raise ValueError("historical T0 candle version has no verifiable content SHA256")
                 candidates.append((item, observed))
             if not candidates:
                 continue
