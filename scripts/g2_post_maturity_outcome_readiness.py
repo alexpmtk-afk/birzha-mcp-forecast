@@ -83,10 +83,13 @@ def verify_frozen(archive):
         rec_bytes = archive.read(f"g2-frozen-forecasts/{market}/forecast_record.json")
         rec = json.loads(rec_bytes)
         receipt = json.loads(archive.read(f"g2-frozen-forecasts/{market}/capture_receipt.json"))
-        if digest(canonical(rec).encode()) != row["forecast_record_sha256"]:
-            raise ValueError("forecast payload hash mismatch")
-        if receipt["forecast_sha256"] != row["forecast_record_sha256"]:
-            raise ValueError("receipt/forecast hash mismatch")
+        # The manifest anchors on-disk JSON bytes (with terminal newline),
+        # whereas the immutable receipt anchors canonical record JSON.
+        # They are two independent, intentionally different hashes.
+        if digest(rec_bytes) != row["forecast_record_sha256"]:
+            raise ValueError("forecast file-byte hash mismatch")
+        if receipt["forecast_sha256"] != digest(canonical(rec).encode()):
+            raise ValueError("receipt/canonical forecast hash mismatch")
         if not (rec["forecast_id"]==row["forecast_id"]==receipt["forecast_id"]):
             raise ValueError("forecast ID mismatch")
         if not (rec["snapshot_id"]==row["snapshot_id"]==receipt["snapshot_id"]):
