@@ -90,11 +90,16 @@ class CanonicalProspectiveStagingBridge:
 
     def capture(self, record: Any, evidence: CaptureEvidence) -> dict[str, Any]:
         """Receipt first, canonical journal second; identical replay heals crash gap."""
+        # Even normal capture/replay needs integrity of prior persisted receipts,
+        # not only the special reconcile() recovery path. Staging-only full pass.
+        self.pilot.audit()
         fid = str(record.to_dict()["forecast_id"])
         current = self.forecasts.get(fid)
         if current is not None and _canonical_digest(current) != _canonical_digest(record):
             raise ImmutableCollision("conflicting existing Forecast Journal record")
         pilot_receipt = self.pilot.capture(record, evidence)
+        # Verify fresh and duplicate receipt hashes before a separate DB write.
+        self.pilot.audit()
         receipt = pilot_receipt["receipt"]
         if receipt["forecast_sha256"] != _canonical_digest(record):
             raise ImmutableCollision("pilot/canonical Forecast Record SHA mismatch")
@@ -111,12 +116,17 @@ class CanonicalProspectiveStagingBridge:
     def observe(self, forecast_id: str, horizon: int,
                 evidence: CompletedSessions) -> dict[str, Any]:
         """Append validated pilot outcome, then canonical HorizonOutcome."""
+        # Neither a forged capture receipt nor a forged earlier outcome can be
+        # treated as admissible simply because reconcile() was not called.
+        self.pilot.audit()
         record = self.pilot.get_capture_record(forecast_id)
         if record is None:
             raise AdmissionRefused("no original prospective receipt")
         if self._check_forecast_binding(forecast_id, record["receipt"]["forecast_sha256"]) is None:
             raise AdmissionRefused("canonical forecast pending; replay original capture first")
         pilot_result = self.pilot.observe(forecast_id, horizon, evidence)
+        # Validate the durable pilot sidecar before projecting to DuckDB.
+        self.pilot.audit()
         item = _outcome_from_pilot(pilot_result["outcome"])
         self.outcomes.append(item)
         rows = {out.horizon_sessions: out for out in self.outcomes.list_for_forecast(forecast_id)}
