@@ -9,7 +9,9 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.g2_issue_sourcebound_atomic_staging import issue_atomic_staging
+from scripts.g2_issue_sourcebound_atomic_staging import (
+    issue_atomic_staging, _safe_isolated_path, _separate_scopes,
+)
 from scripts.g2_six_market_live_source_capture import MARKETS, capture_all
 
 
@@ -19,11 +21,11 @@ def capture_and_issue_one(
 ):
     if market not in MARKETS:
         raise ValueError("unsupported market root")
-    capture_dir, staging_root = Path(capture_dir), Path(staging_root)
-    if capture_dir.resolve() == staging_root.resolve():
-        raise ValueError("source and staging directories must be distinct")
-    if not staging_root.is_dir():
-        raise ValueError("existing disposable staging root required")
+    # Reject known HOME/production and symlinked parents *before* network
+    # capture creates folders or writes original HTTP response bytes.
+    capture_dir = _safe_isolated_path(capture_dir, existing_directory=False)
+    staging_root = _safe_isolated_path(staging_root, existing_directory=True)
+    _separate_scopes(capture_dir, staging_root)
     manifest = capture_all(
         provider, market_data, capture_dir, clock=clock, markets=(market,)
     )
