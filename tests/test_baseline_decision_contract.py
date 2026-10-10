@@ -160,3 +160,26 @@ def test_unadmitted_proxy_profile_cannot_influence_baseline_direction():
     assert first.signal_strength==second.signal_strength
     assert 'optional_profile_excluded' in first.reasons
     assert first.snapshot_id==market_snapshot_id(snap)
+
+
+@pytest.mark.parametrize('field,value',[('control','BUYERS'),('decision_status',None),('record_version','FORECAST_RECORD_UNKNOWN_V9')])
+def test_prospective_capture_rejects_malformed_v2_dictionary(tmp_path,field,value):
+    from birzha.application.prospective_capture import ProspectivePilotLedger, AdmissionRefused
+    from test_prospective_capture import BASE, source
+    payload=build_forecast_from_snapshot(snapshot()).to_dict()
+    payload[field]=value
+    class Record:
+        def to_dict(self): return payload
+    ledger=ProspectivePilotLedger(tmp_path/'bad.sqlite3',clock=lambda:BASE)
+    try:
+        with pytest.raises(AdmissionRefused): ledger.capture(Record(),source())
+        assert ledger.audit()['captures']==0
+    finally: ledger.close()
+
+
+@pytest.mark.parametrize('field,value',[('pressure','BUYERS_FAVORED'),('market_state','BALANCE'),('validation_status','VALIDATED'),('probability',.8),('scenario',{'primary':'invented'}),('execution_plan',{'entries':[100.]})])
+def test_v2_payload_validator_rejects_contradictory_unimplemented_evidence(field,value):
+    from birzha.domain.forecast import validate_baseline_evidence_payload
+    payload=build_forecast_from_snapshot(snapshot()).to_dict()
+    payload[field]=value
+    with pytest.raises(ValueError): validate_baseline_evidence_payload(payload)
