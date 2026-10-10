@@ -145,3 +145,20 @@ def test_future_twenty_closes_still_require_independent_calendar(tmp_path):
     assert len(sber)==3
     assert all(o["status"]=="PENDING_VERIFIED_SESSION_CALENDAR" for o in sber)
     assert result["canonical_outcomes_appended"]==0
+
+
+def test_human_report_renders_original_ids_without_recalculating(tmp_path):
+    from scripts.g2_frozen_forecast_report import generate_report
+    p=fixture(tmp_path/"frozen.zip")
+    report=generate_report(p)
+    assert report.count("## ")>=7
+    assert "fcst_fixture_SBER" in report and "fcst_fixture_RTSI" in report
+    assert report.count("| PENDING |")==18
+    assert "Не" in report and "HOME" in report
+
+
+def test_human_report_rejects_changed_raw_source(tmp_path):
+    from scripts.g2_frozen_forecast_report import generate_report
+    p=fixture(tmp_path/"bad.zip",bad_raw=True)
+    with pytest.raises(ValueError,match="raw provider source"):
+        generate_report(p)
