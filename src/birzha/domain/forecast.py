@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from typing import Literal
+import math
 
 
 Direction = Literal["UP", "DOWN", "NEUTRAL"]
 FORECAST_RECORD_CONTRACT_VERSION = "FORECAST_RECORD_V1_PROTOCOL_08"
+BASELINE_EVIDENCE_RECORD_VERSION = "FORECAST_RECORD_V2_BASELINE_EVIDENCE"
 LEGACY_FORECAST_RECORD_VERSION = "FORECAST_RECORD_LEGACY_V0"
 
 
@@ -57,6 +59,8 @@ class ForecastRecord:
     stop_level: float | None = None
     target_levels: tuple[float, ...] = ()
     reversal_condition: str | None = None
+    decision_status: str | None = None
+    abstention_reasons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """Return the immutable Protocol-08 journal payload.
@@ -75,7 +79,7 @@ class ForecastRecord:
             "targets": "AVAILABLE" if self.target_levels else "UNAVAILABLE",
             "reversal": _availability(self.reversal_condition),
         }
-        return {
+        payload = {
             "record_version": self.record_version,
             "forecast_id": self.forecast_id,
             "as_of": self.created_at_t0,
@@ -133,7 +137,69 @@ class ForecastRecord:
             },
             "field_availability": availability,
         }
+        if self.record_version == BASELINE_EVIDENCE_RECORD_VERSION:
+            availability.update({
+                'control': 'UNAVAILABLE' if self.control == 'UNKNOWN' else 'AVAILABLE',
+                'route': 'UNAVAILABLE' if self.route == 'UNAVAILABLE' else 'AVAILABLE',
+                'scenario': 'UNAVAILABLE' if self.primary_scenario is None else 'AVAILABLE',
+                'probability': 'UNAVAILABLE',
+                'control_confidence': 'UNAVAILABLE',
+                'route_confidence': 'UNAVAILABLE',
+                'directional_estimate': 'UNAVAILABLE' if self.decision_status == 'ABSTAIN' else 'AVAILABLE',
+            })
+            payload['decision_status'] = self.decision_status
+            payload['abstention_reasons'] = list(self.abstention_reasons)
+            validate_baseline_evidence_payload(payload)
+        return payload
 
 
 def _availability(value: object | None) -> str:
     return "AVAILABLE" if value is not None else "UNAVAILABLE"
+
+
+def validate_baseline_evidence_payload(data: dict[str, object]) -> None:
+    """Validate V2 semantics equally for domain records and capture dictionaries."""
+    if data.get('record_version') != BASELINE_EVIDENCE_RECORD_VERSION:
+        raise ValueError('not a baseline evidence contract')
+    decision = data.get('decision_status')
+    if decision not in {'ABSTAIN', 'BASELINE_NEUTRAL', 'BASELINE_DIRECTIONAL_ESTIMATE'}:
+        raise ValueError('baseline evidence record requires an explicit decision status')
+    reasons = data.get('abstention_reasons')
+    if not isinstance(reasons, list) or any(not isinstance(r, str) or not r for r in reasons):
+        raise ValueError('baseline evidence requires a list of explicit reasons')
+    if (decision == 'ABSTAIN') != bool(reasons):
+        raise ValueError('abstention status and reasons must agree')
+    if data.get('control') != 'UNKNOWN' or data.get('route') != 'UNAVAILABLE':
+        raise ValueError('baseline evidence does not establish Control or Route')
+    absent = ('primary_scenario', 'alternative_scenario', 'confirmation_level', 'invalidation_level', 'stop_level', 'reversal_condition', 'market_state', 'location', 'pressure', 'alignment', 'control_confidence', 'route_confidence', 'probability')
+    if any(data.get(name) is not None for name in absent) or data.get('entry_levels') or data.get('target_levels'):
+        raise ValueError('full scenario and execution plan are not implemented in baseline evidence')
+    scenario = data.get('scenario')
+    execution = data.get('execution_plan')
+    if not isinstance(scenario, dict) or any(scenario.get(name) is not None for name in ('primary', 'alternative', 'confirmation_level', 'invalidation_level', 'reversal_condition')):
+        raise ValueError('nested scenario contradicts unavailable full-engine evidence')
+    if not isinstance(execution, dict) or execution.get('entries') or execution.get('targets') or execution.get('stop') is not None:
+        raise ValueError('nested execution plan contradicts unavailable full-engine evidence')
+    if data.get('validation_status') != 'UNVALIDATED_BASELINE':
+        raise ValueError('baseline evidence does not establish predictive quality')
+    direction = data.get('direction')
+    if direction not in {'UP', 'DOWN', 'NEUTRAL'}:
+        raise ValueError('invalid baseline direction')
+    if (decision == 'BASELINE_DIRECTIONAL_ESTIMATE') != (direction in {'UP', 'DOWN'}):
+        raise ValueError('baseline decision and direction must agree')
+    strength = data.get('signal_strength')
+    if type(strength) not in (int, float) or not 0 <= strength <= 1 or not math.isfinite(strength):
+        raise ValueError('invalid baseline signal strength')
+    horizons = data.get('horizons')
+    if not isinstance(horizons, list) or [h.get('sessions') for h in horizons if isinstance(h, dict)] != [5, 10, 20]:
+        raise ValueError('baseline evidence requires ordered 5/10/20 horizons')
+    if any(h.get('direction') != direction or h.get('signal_strength') != strength for h in horizons):
+        raise ValueError('horizon estimates contradict the baseline decision')
+    if decision == 'ABSTAIN':
+        if strength != 0 or any(h.get('direction') != 'NEUTRAL' or h.get('signal_strength') != 0 or h.get('expected_move_pct') is not None or h.get('adverse_move_pct') is not None for h in horizons):
+            raise ValueError('abstention cannot contain a directional estimate')
+    availability = data.get('field_availability')
+    if not isinstance(availability, dict) or any(availability.get(name) != 'UNAVAILABLE' for name in ('control', 'route', 'scenario', 'probability', 'control_confidence', 'route_confidence')):
+        raise ValueError('missing explicit unavailable full-engine evidence')
+    if availability.get('directional_estimate') != ('UNAVAILABLE' if decision == 'ABSTAIN' else 'AVAILABLE'):
+        raise ValueError('directional availability contradicts decision')

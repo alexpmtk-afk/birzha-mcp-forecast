@@ -18,6 +18,8 @@ import threading
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from birzha.domain.forecast import BASELINE_EVIDENCE_RECORD_VERSION, FORECAST_RECORD_CONTRACT_VERSION, validate_baseline_evidence_payload
+
 VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 HORIZONS = (5, 10, 20)
 MAX_CAPTURE_LAG_SECONDS = 300
@@ -159,8 +161,13 @@ class ProspectivePilotLedger:
             raise AdmissionRefused("requires a versioned ForecastRecord.to_dict()")
         if not data.get("symbol") or not data.get("secid"):
             raise AdmissionRefused("missing exact symbol/SECID")
-        if data.get("record_version") != "FORECAST_RECORD_V1_PROTOCOL_08":
+        if data.get("record_version") not in {FORECAST_RECORD_CONTRACT_VERSION, BASELINE_EVIDENCE_RECORD_VERSION}:
             raise AdmissionRefused("unrecognized Forecast Record contract")
+        if data.get("record_version") == BASELINE_EVIDENCE_RECORD_VERSION:
+            try:
+                validate_baseline_evidence_payload(data)
+            except (ValueError, TypeError, KeyError, OverflowError) as exc:
+                raise AdmissionRefused("invalid baseline evidence contract: " + str(exc)) from exc
         if not data.get("snapshot_id") or data.get("snapshot_contract_version") != evidence.contract_version:
             raise AdmissionRefused("snapshot identity/contract must be anchored")
         horizons = data.get("horizons")
