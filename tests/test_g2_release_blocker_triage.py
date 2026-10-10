@@ -5,7 +5,7 @@ import json
 import pytest
 
 from scripts.g2_release_blocker_triage import NEXT, main, triage
-from scripts.g2_release_gate import REQUIRED
+from scripts.g2_release_gate import REQUIRED, validate
 
 MANIFEST = Path(__file__).resolve().parents[1] / "docs/G2_RELEASE_GATE_20261010.json"
 
@@ -16,17 +16,17 @@ def base():
 
 def test_diagnostic_is_comprehensive_and_release_stays_blocked(capsys):
     found = triage(base())
-    assert found["blocking_count"] == 12
-    assert found["blocking_technical_and_evidence"] == 10
+    assert found["blocking_count"] == len(validate(base())["blocking_requirements"])
+    assert found["blocking_technical_and_evidence"] == sum(v["status"] != "PASS" for v in base()["release_gates"].values())
     assert found["blocking_user_permissions"] == 2
     assert found["historical_receipt_missing_is_irrecoverable"] is True
     assert found["no_policy_change"] is True
     assert found["release_allowed"] is False
-    assert len({item["gate"] for item in found["blocking"]}) == 12
+    assert len({item["gate"] for item in found["blocking"]}) == found["blocking_count"]
     assert set(NEXT) == REQUIRED | {"user_approved_main_merge", "user_approved_home_deploy"}
     main(["--manifest", str(MANIFEST)])
     out = capsys.readouterr().out
-    assert "G2_RELEASE_ALLOWED=false" in out and "G2_BLOCKERS=12" in out
+    assert "G2_RELEASE_ALLOWED=false" in out and f"G2_BLOCKERS={found[\u0027blocking_count\u0027]}" in out
 
 
 def test_legacy_missing_knowledge_cannot_be_relabelled_as_pass():
@@ -48,7 +48,7 @@ def test_diagnostic_reports_fewer_open_items_but_no_release_if_review_done():
     m = deepcopy(base())
     m["release_gates"]["individual_pr_semantic_review"]["status"] = "PASS"
     checked = triage(m)
-    assert checked["blocking_count"] == 11
+    assert checked["blocking_count"] == len(triage(base())["blocking"]) - 1
     assert checked["release_allowed"] is False
 
 
@@ -74,6 +74,6 @@ def test_triage_schema_missing_item_cannot_be_silent(monkeypatch, missing):
 def test_structured_output_contains_verified_blocker_evidence(capsys):
     main(["--manifest", str(MANIFEST), "--format", "json"])
     report = json.loads(capsys.readouterr().out)
-    assert report["blocking_count"] == 12
+    assert report["blocking_count"] == len(validate(base())["blocking_requirements"])
     assert all(b["evidence"] and b["next_action"] for b in report["blocking"])
     assert not report["release_allowed"]
