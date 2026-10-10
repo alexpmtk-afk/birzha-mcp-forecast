@@ -40,7 +40,7 @@ def fixture(path, *, bad_raw=False, late_receipt=False):
         forecast={
           "forecast_id":fid,"snapshot_id":"snap_fixture_"+market,
           "symbol":market,"secid":market+"Z6" if market in ("Si","BR","GOLD") else market,
-          "created_at_t0":t0,"reference_price":100,
+          "created_at_t0":t0,"reference_price":100,"direction":"UP",
           "horizons":[{"sessions":n,"direction":"UP"} for n in (5,10,20)]}
         forecast_sha=h(canon(forecast))
         raw_forecast_bytes=canon(forecast)+b"\n"
