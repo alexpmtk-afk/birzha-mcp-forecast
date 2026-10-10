@@ -80,3 +80,22 @@ The early triple-line audit recorded production feature HEAD **PR #151**, but th
 The machine-readable release manifest `G2_RELEASE_GATE_20261010.json` has now been **re-pinned to exactly #156/#155/#147**, and its DAG records new #153/#154/#155/#156 dependencies. `scripts/g2_release_gate.py` validates the actual new leaves, rejects outdated PR #151 as the release leaf and enforces the dependency chains. The release remains **BLOCKED** with the same **12 requirements** (10 factual engineering/evidence gates and 2 explicit user approvals). A full latest-head manifest+code CI rerun is required on the final PR HEAD.
 
 Importantly, **compatibility PASS does not imply source attribution, original provider time proof, model calibration, healthy HOME runtime, completed 5/10/20 future outcomes, or readiness for production**. No protected holdout data used.
+
+
+## 10 October 2026 — successor audit for actual #157 post-T0 level reaction facts
+
+The separate follow-up **Draft PR #160** is stacked on prior pin audit **#159**. The protected ChatGPT release code does **not** merge into main or mutate HOME/production; it fetches the following exact independent heads in an isolated GitHub Actions runner and performs two local no-push merges:
+
+- Source-first forecast issuance **#156** HEAD `5f091403510a7af0a4c036404db7c04af959120d`.
+- Colleague price-level + post-T0 reaction **#157** HEAD `abe9a42ddf1242e30162c51bfd6207127c34e92a` (stacked on #155 → #154 → #151).
+- Descriptive regime research **#147** HEAD `82af27e1f9d79f02f8062c5756047fe1fb35ef20`.
+
+**Actual GitHub Actions run [38079241225](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38079241225)** on first #160 workflow commit `a5683ce936a53687b2c3f37605509b124369e061`: **149 targeted PASS (1.21s), 1042 full combined pytest PASS (40.11s)**; both local ephemeral merges, Python compilation, Public Repository Security and Repository Preflight PASS. No push of merge results, no file/path conflicts. This replaces the previous CI source+price-level+research pin evidence (999 PASS) **only for code compatibility**.
+
+The current release matrix now pins #157 rather than #155 as the production-feature/reaction leaf, with #157's **exact** parent #155. `scripts/g2_release_gate.py` rejects old #155 pins and rejects miswired #157 dependency; corresponding negative tests and audit SHA evidence were updated. Earlier checked results for #155 remain historical evidence rather than being erased.
+
+**Interpretation:** #157 provides completed/finite post-forecast OHLC *observations* against previously frozen nine level origins, with explicit time/SECID gates and an isolated immutable SQLite report. These are **not** demonstrated market acceptance/rejection, strength, Control, holding, calendar continuity, or forecast predictive skill. The observed-at timestamp is not independently attested provider receipt time. The PR tests and a synthetic demonstration do not prove actual live-source publication or HOME readiness. No new matured +5/+10/+20 outcome has been measured.
+
+The release-gate check intentionally remains `G2_RELEASE_ALLOWED=false`, **12 blocking requirements**: ten unresolved evidence/engineering requirements plus separate user permission for main merge and for HOME deployment. Independent semantic review remains OPEN. The unverified 2023–24 reserved holdout was not opened. A successful 1042-test integration cannot convert any of these to PASS.
+
+The shared cloud Project Card and Quality Ledger are being updated separately by the Codex colleague; this engineering PR does not write any of their cells, journal rows, or private Drive evidence.
