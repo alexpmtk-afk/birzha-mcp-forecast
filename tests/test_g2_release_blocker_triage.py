@@ -26,7 +26,7 @@ def test_diagnostic_is_comprehensive_and_release_stays_blocked(capsys):
     assert set(NEXT) == REQUIRED | {"user_approved_main_merge", "user_approved_home_deploy"}
     main(["--manifest", str(MANIFEST)])
     out = capsys.readouterr().out
-    assert "G2_RELEASE_ALLOWED=false" in out and f"G2_BLOCKERS={found[\u0027blocking_count\u0027]}" in out
+    assert "G2_RELEASE_ALLOWED=false" in out and "G2_BLOCKERS=" + str(found["blocking_count"]) in out
 
 
 def test_legacy_missing_knowledge_cannot_be_relabelled_as_pass():
