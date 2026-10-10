@@ -5,10 +5,12 @@ on:
     branches:
       - chatgpt/g2-atomic-single-duckdb-staging-20261010
       - chatgpt/g2-duckdb-process-recovery-20261010
+      - chatgpt/g2-atomic-evidence-replay-20261010
   pull_request:
     branches:
       - chatgpt/g2-pilot-receipt-preflight-20261010
       - chatgpt/g2-atomic-single-duckdb-staging-20261010
+      - chatgpt/g2-duckdb-process-recovery-20261010
   workflow_dispatch:
 
 permissions:
@@ -51,9 +53,9 @@ jobs:
       - name: Assert exact source parent and fetch independent heads
         run: |
           git merge-base --is-ancestor b148b658d3f9c828d5c2dfbc5f0e4a6eb946bcbb HEAD
-          git fetch --no-tags origin +refs/heads/codex/g2-price-location-facts-20261010:refs/remotes/origin/g2-holding
+          git fetch --no-tags origin +refs/heads/codex/g2-linked-level-report-20261010:refs/remotes/origin/g2-holding
           git fetch --no-tags origin +refs/heads/codex/g2-regime-development-results-20261010:refs/remotes/origin/g2-research
-          test "$(git rev-parse refs/remotes/origin/g2-holding)" = "4b51c92879de9a59cd808a6635ba860f6f861fa6"
+          test "$(git rev-parse refs/remotes/origin/g2-holding)" = "c5b815dd59dd226caf288aeb387b172911fefd4c"
           test "$(git rev-parse refs/remotes/origin/g2-research)" = "82af27e1f9d79f02f8062c5756047fe1fb35ef20"
       - name: Only temporary two local merges without push
         run: |
@@ -68,7 +70,7 @@ jobs:
       - name: Install project
         run: python -m pip install -e '.[dev]'
       - name: Focused current-head contracts
-        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_price_location.py tests/test_baseline_decision_contract.py
+        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_price_location.py tests/test_linked_level_report.py tests/test_baseline_decision_contract.py
       - name: Full combined suite
         run: python -m pytest -q
       - name: Compile

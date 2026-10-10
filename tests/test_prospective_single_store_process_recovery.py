@@ -107,7 +107,7 @@ def test_process_exits_mid_capture_and_reopens_without_half_record(tmp_path, fau
     assert result.returncode==KILLED_AT_FAULT,(result.stdout,result.stderr)
     assert (tmp_path/"fault_reached.txt").read_text(encoding="utf-8")==fault
     store=_store(tmp_path)
-    assert store.audit()=={"schema":"G2_ATOMIC_SINGLE_DUCKDB_STAGING_V1",
+    assert store.audit()=={"schema":"G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2",
                            "captures":0,"outcomes":0,"staging_only":True}
     assert store.capture(_forecast(),_source())["status"]=="APPENDED"
     store.close()
