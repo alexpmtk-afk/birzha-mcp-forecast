@@ -8,6 +8,7 @@ from typing import Literal
 
 Direction = Literal["UP", "DOWN", "NEUTRAL"]
 FORECAST_RECORD_CONTRACT_VERSION = "FORECAST_RECORD_V1_PROTOCOL_08"
+BASELINE_EVIDENCE_RECORD_VERSION = "FORECAST_RECORD_V2_BASELINE_EVIDENCE"
 LEGACY_FORECAST_RECORD_VERSION = "FORECAST_RECORD_LEGACY_V0"
 
 
@@ -57,6 +58,8 @@ class ForecastRecord:
     stop_level: float | None = None
     target_levels: tuple[float, ...] = ()
     reversal_condition: str | None = None
+    decision_status: str | None = None
+    abstention_reasons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """Return the immutable Protocol-08 journal payload.
@@ -65,6 +68,19 @@ class ForecastRecord:
         producing engine does not exist yet remain explicit None / empty
         collections; they are never synthesized from unrelated signals.
         """
+        if self.record_version == BASELINE_EVIDENCE_RECORD_VERSION:
+            allowed = {'ABSTAIN', 'BASELINE_NEUTRAL', 'BASELINE_DIRECTIONAL_ESTIMATE'}
+            if self.decision_status not in allowed:
+                raise ValueError('baseline evidence record requires an explicit decision status')
+            if (self.decision_status == 'ABSTAIN') != bool(self.abstention_reasons):
+                raise ValueError('abstention status and reasons must agree')
+            if self.control != 'UNKNOWN' or self.route != 'UNAVAILABLE':
+                raise ValueError('baseline evidence does not establish Control or Route')
+            if any(value is not None for value in (self.primary_scenario, self.alternative_scenario, self.confirmation_level, self.invalidation_level, self.stop_level, self.reversal_condition)) or self.entry_levels or self.target_levels:
+                raise ValueError('full scenario and execution plan are not implemented in baseline evidence')
+            if self.decision_status == 'ABSTAIN':
+                if self.direction != 'NEUTRAL' or self.signal_strength != 0 or any(h.direction != 'NEUTRAL' or h.signal_strength != 0 or h.expected_move_pct is not None or h.adverse_move_pct is not None for h in self.horizons):
+                    raise ValueError('abstention cannot contain a directional estimate')
         availability = {
             "market_state": _availability(self.market_state),
             "location": _availability(self.location),
@@ -75,7 +91,7 @@ class ForecastRecord:
             "targets": "AVAILABLE" if self.target_levels else "UNAVAILABLE",
             "reversal": _availability(self.reversal_condition),
         }
-        return {
+        payload = {
             "record_version": self.record_version,
             "forecast_id": self.forecast_id,
             "as_of": self.created_at_t0,
@@ -133,6 +149,19 @@ class ForecastRecord:
             },
             "field_availability": availability,
         }
+        if self.record_version == BASELINE_EVIDENCE_RECORD_VERSION:
+            availability.update({
+                'control': 'UNAVAILABLE' if self.control == 'UNKNOWN' else 'AVAILABLE',
+                'route': 'UNAVAILABLE' if self.route == 'UNAVAILABLE' else 'AVAILABLE',
+                'scenario': 'UNAVAILABLE' if self.primary_scenario is None else 'AVAILABLE',
+                'probability': 'UNAVAILABLE',
+                'control_confidence': 'UNAVAILABLE',
+                'route_confidence': 'UNAVAILABLE',
+                'directional_estimate': 'UNAVAILABLE' if self.decision_status == 'ABSTAIN' else 'AVAILABLE',
+            })
+            payload['decision_status'] = self.decision_status
+            payload['abstention_reasons'] = list(self.abstention_reasons)
+        return payload
 
 
 def _availability(value: object | None) -> str:

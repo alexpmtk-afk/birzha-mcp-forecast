@@ -12,6 +12,7 @@ import json
 import math
 from dataclasses import dataclass
 
+from birzha.application.forecast_admission import admit_baseline_snapshot
 from birzha.application.features import _finite_price
 from birzha.domain.normalized_features import NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
 from birzha.application.prediction import build_prediction_contract
@@ -19,6 +20,7 @@ from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.forecast import (
     FORECAST_RECORD_CONTRACT_VERSION,
+    BASELINE_EVIDENCE_RECORD_VERSION,
     ForecastRecord,
     HorizonForecast,
 )
@@ -26,7 +28,7 @@ from birzha.domain.snapshot import MarketSnapshot, market_snapshot_id
 
 
 ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
-FULL_WINDOWS_ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_5_FULL_WINDOWS"
+FULL_WINDOWS_ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_6_EVIDENCE_DECISION"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +81,24 @@ class ForecastService:
 
 
 def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: ForecastParameters = DEFAULT_FORECAST_PARAMETERS) -> ForecastRecord:
+    for name, value in parameters.to_dict().items():
+        if name != 'name' and not _finite_price(value):
+            raise ValueError(f'forecast parameter {name} must be finite')
+    if parameters.strength_scale <= 0 or parameters.direction_threshold <= 0:
+        raise ValueError('forecast scale and direction threshold must be positive')
+    source_snapshot = snapshot
+    evidence_contract = snapshot.normalized_features is not None and snapshot.normalized_features.version == NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
+    record_version = BASELINE_EVIDENCE_RECORD_VERSION if evidence_contract else FORECAST_RECORD_CONTRACT_VERSION
+    abstention_reasons: tuple[str, ...] = ()
+    disabled: tuple[str, ...] = ()
+    if evidence_contract:
+        snapshot, abstention_reasons, disabled = admit_baseline_snapshot(snapshot)
     engine_version = (FULL_WINDOWS_ENGINE_VERSION if snapshot.normalized_features is not None and snapshot.normalized_features.version == NORMALIZED_FEATURES_FULL_WINDOWS_VERSION else ENGINE_VERSION)
     score = _combined_score(snapshot, parameters)
+    if not _finite_price(score):
+        raise ValueError("forecast score must be finite")
+    if abstention_reasons:
+        score = 0.0
     strength = min(1.0, abs(score) / parameters.strength_scale)
     if score >= parameters.direction_threshold:
         direction = "UP"
@@ -92,16 +110,26 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         direction = "NEUTRAL"
         control = "BALANCE"
 
+    decision_status = None
+    if evidence_contract:
+        control = "UNKNOWN"
+        decision_status = "ABSTAIN" if abstention_reasons else "BASELINE_NEUTRAL" if direction == "NEUTRAL" else "BASELINE_DIRECTIONAL_ESTIMATE"
     route = "TREND" if direction != "NEUTRAL" and strength >= 0.35 else "BALANCE"
+    if evidence_contract:
+        route = "UNAVAILABLE"
     reasons = _reasons(snapshot, score, parameters)
+    reasons.extend(f"optional_timeframe_excluded:{tf}" if tf != "PROFILE" else "optional_profile_excluded" for tf in disabled)
+    reasons.extend(f"abstain:{reason}" for reason in abstention_reasons)
     warnings = list(snapshot.warnings)
     warnings.append("baseline_engine_not_probability_calibrated")
+    if evidence_contract:
+        warnings.append("full_control_route_scenario_not_implemented")
 
     daily_atr = snapshot.d1.atr_14_pct
     sign = 1.0 if direction == "UP" else -1.0 if direction == "DOWN" else 0.0
     horizons: list[HorizonForecast] = []
     for sessions in (5, 10, 20):
-        if daily_atr is None:
+        if daily_atr is None or abstention_reasons:
             expected = None
             adverse = None
         else:
@@ -124,10 +152,10 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
     except ValueError:
         prediction = None
 
-    snapshot_id = market_snapshot_id(snapshot)
+    snapshot_id = market_snapshot_id(source_snapshot)
 
     identity_payload = {
-        "record_version": FORECAST_RECORD_CONTRACT_VERSION,
+        "record_version": record_version,
         "symbol": snapshot.symbol,
         "secid": snapshot.secid,
         "t0": snapshot.as_of,
@@ -149,6 +177,8 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
     )
 
     primary, alternative, confirmation, invalidation, levels = _scenarios(snapshot, direction, reference_price)
+    if evidence_contract:
+        primary = alternative = confirmation = invalidation = None
 
     return ForecastRecord(
         forecast_id=f"fcst_{digest}",
@@ -170,7 +200,9 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         confirmation_level=confirmation,
         invalidation_level=invalidation,
         key_levels=levels,
-        record_version=FORECAST_RECORD_CONTRACT_VERSION,
+        record_version=record_version,
+        decision_status=decision_status,
+        abstention_reasons=abstention_reasons,
         snapshot_id=snapshot_id,
         snapshot_contract_version=snapshot.contract_version,
         prediction_contract_id=(

@@ -193,6 +193,8 @@ def _record_from_dict(payload: dict[str, object]) -> ForecastRecord:
         target_levels=tuple(
             float(item) for item in (payload.get("target_levels") or [])
         ),
+        decision_status=str(payload["decision_status"]) if payload.get("decision_status") is not None else None,
+        abstention_reasons=tuple(str(item) for item in (payload.get("abstention_reasons") or [])),
         reversal_condition=(
             str(payload["reversal_condition"])
             if payload.get("reversal_condition") is not None
