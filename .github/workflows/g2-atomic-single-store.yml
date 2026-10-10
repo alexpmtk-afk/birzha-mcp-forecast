@@ -10,6 +10,7 @@ on:
     branches:
       - chatgpt/g2-pilot-receipt-preflight-20261010
       - chatgpt/g2-atomic-single-duckdb-staging-20261010
+      - chatgpt/g2-duckdb-process-recovery-20261010
   workflow_dispatch:
 
 permissions:
@@ -69,7 +70,7 @@ jobs:
       - name: Install project
         run: python -m pip install -e '.[dev]'
       - name: Focused current-head contracts
-        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_price_location.py tests/test_baseline_decision_contract.py
+        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_price_location.py tests/test_linked_level_report.py tests/test_baseline_decision_contract.py
       - name: Full combined suite
         run: python -m pytest -q
       - name: Compile
