@@ -16,10 +16,10 @@
       "parent_pr": 166
     },
     {
-      "area": "admitted_levels_post_t0_facts_real_six_market_and_D1_H1_M15_movement",
-      "pr": 171,
-      "head": "16edfb353332cdf22aa8b5be28ab58fd676acfc7",
-      "parent_pr": 169
+      "area": "admitted_levels_movement_and_combined_T0_vs_later_observations",
+      "pr": 173,
+      "head": "f22624b804e8057af61a72ae12e812177d7121cf",
+      "parent_pr": 171
     },
     {
       "area": "market_regime_research",
@@ -68,7 +68,10 @@
     "168": 166,
     "169": 167,
     "170": 168,
-    "171": 169
+    "171": 169,
+    "172": 170,
+    "173": 171,
+    "174": 172
   },
   "evidence": {
     "synthetic_three_line_ci": {
@@ -113,8 +116,8 @@
   },
   "release_gates": {
     "code_three_line_compatibility": {
-      "status": "PASS",
-      "evidence": "Independent exact-head #168 + #171 (includes #169/#167) + #147 CI-only temporary no-push integration: GitHub Actions 38084842292 on bd090c1f44d14ccc5a33a9c29094a7cb5a327a99 239 focused / 1252 full tests PASS, Python compile, Preflight and Security PASS. This is code compatibility only; final-HEAD rerun required after updated manifest."
+      "status": "PENDING",
+      "evidence": "CI-only ephemeral exact #168 + #173 (includes #171/#169/#167) + #147 rerun is required after updated manifest and blocker-triage diagnostics; old #171 combined PASS is historical and does not cover #173."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
