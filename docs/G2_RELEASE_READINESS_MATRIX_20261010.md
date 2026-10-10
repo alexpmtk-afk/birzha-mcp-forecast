@@ -66,3 +66,17 @@ The already existing `ProspectivePilotLedger.capture()` fail-closes `latest_comp
 New mandatory release gate `live_forecast_issuance_after_source_receipt` is `BLOCKED` until all default LIVE callers are proven to route through this strict issued-at + full SHA receipt contract. The protected HOME runner accepted a 10 October diagnostic but the actual read-only checks could **not execute**: `pwsh` was missing in run [38070736976](https://github.com/alexpmtk-afk/gpt-powershell-bridge/actions/runs/38070736976), then Windows execution policy blocked PowerShell .ps1 before any audit commands in [38070781907](https://github.com/alexpmtk-afk/gpt-powershell-bridge/actions/runs/38070781907). This is **not** a negative health check of the Birzha repo; it is a protected external execution-path blocker. Do not change execution policy or use alternate shells to circumvent it. Draft HOME audit evidence: [private bridge PR #104](https://github.com/alexpmtk-afk/gpt-powershell-bridge/pull/104).
 
 Accordingly there are now **12 release blockers**: 10 unfinished/blocked technical or evidence gates (including live first-issuance T0 and HOME) plus 2 explicit user approvals. A green combined CI cannot make `release_allowed=true`.
+
+## 10 October 2026 — latest current-head manifest reconciliation
+
+The early triple-line audit recorded production feature HEAD **PR #151**, but the colleague subsequently finished two additional dependent Draft PRs: **#154 baseline decision/abstention**, and **#155 price-level source admission**. A **separate no-push compatibility run** [Actions 38078049456](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38078049456) has now actually checked:
+
+- ChatGPT source-bound first issuance **PR #156** HEAD `5f091403510a7af0a4c036404db7c04af959120d` (includes revisions #152 and release-diagnostics #153, after its parent #148).
+- Colleague's production/decision/price-level **PR #155** HEAD `0a55a9607642cd1428a396c9d69ff404c7d0578f` (parent #154 → #151 → #149 → #148).
+- Colleague's regime research **PR #147** HEAD `82af27e1f9d79f02f8062c5756047fe1fb35ef20` (parent #144 → #142 → #140 → #138 → #137).
+
+**Result:** exact three-head local GitHub runner-only merges, 106 targeted pytest PASS and **999 full pytest PASS** (39.54s), compilation + Security/Preflight PASS; all within ephemeral Actions runner, no repository push/merge or production operation.
+
+The machine-readable release manifest `G2_RELEASE_GATE_20261010.json` has now been **re-pinned to exactly #156/#155/#147**, and its DAG records new #153/#154/#155/#156 dependencies. `scripts/g2_release_gate.py` validates the actual new leaves, rejects outdated PR #151 as the release leaf and enforces the dependency chains. The release remains **BLOCKED** with the same **12 requirements** (10 factual engineering/evidence gates and 2 explicit user approvals). A full latest-head manifest+code CI rerun is required on the final PR HEAD.
+
+Importantly, **compatibility PASS does not imply source attribution, original provider time proof, model calibration, healthy HOME runtime, completed 5/10/20 future outcomes, or readiness for production**. No protected holdout data used.
