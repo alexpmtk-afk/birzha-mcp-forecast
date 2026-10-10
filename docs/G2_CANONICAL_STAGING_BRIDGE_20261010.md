@@ -27,7 +27,7 @@ Canonical HorizonOutcome max_favorable_excursion_pct and max_adverse_excursion_p
 
 ## Executed local verification
 
-Python 3.13.5, isolated offline tests including previous 10 baseline + 17 pilot + 14 bridge cases: **40 passed, 1 skipped**. The skipped case is the actual DuckDB journal integration, which cannot run in the local environment due to the unavailable dependency. It is explicitly included in GitHub feature-scoped CI, which must be read back separately before claiming true DuckDB PASS.
+Local Python 3.13.5: **40 passed, 1 skipped** (local DuckDB unavailable). **GitHub Actions run 38059958884 at SHA f0d5ba1bb63280dd1a7d04c3eb73e4f59e62c834: full project suite 489 PASSED in 26.43s; focused integration 41 PASSED in 0.54s (including actual DuckDB Forecast/Outcome journals); compile PASS, isolated synthetic pilot PASS, Repository Preflight PASS and Public Repository Security PASS.** No 2023–2024 holdout or real MOEX data were used.
 
 Tests cover restart/idempotency, original receipt preservation, conflicting forecast/source, invalid provenance and clock, exact session/SECID, missing/extra future bars, partial forecast and outcome failures, canonical recovery, incompatible record identity, orphan outcomes, SQL UPDATE/DELETE failure, tamper detection and distinct staging paths. No actual MOEX prices or prospective first receipt were acquired; fixture data are synthetic and never used for model-quality claims.
 
