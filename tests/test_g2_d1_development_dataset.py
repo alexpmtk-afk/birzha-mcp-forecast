@@ -17,6 +17,23 @@ from scripts.g2_d1_development_dataset import (
 from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
 
 
+def test_market_specific_calendar_keys_match_writer_contract():
+    # Protect against the original green-fixture/real-archive mismatch.
+    # Rolling-history namespace applies only to futures roots.
+    expected = {
+        "SBER": "SBER#D1_SESSION_V2_ACTIVITY",
+        "IMOEX": "IMOEX#D1_SESSION_V2_ACTIVITY",
+        "RTSI": "RTSI#D1_SESSION_V2_ACTIVITY",
+        "Si": "Si#ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V2_ACTIVITY",
+        "BR": "BR#ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V2_ACTIVITY",
+        "GOLD": "GOLD#ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V2_ACTIVITY",
+    }
+    assert set(expected) == set(MARKETS)
+    assert {market: _root_key(market) for market in MARKETS} == expected
+    with pytest.raises(ValueError, match="unsupported research market"):
+        _root_key("UNKNOWN")
+
+
 def _fixture_db():
     store = DuckDBHistoricalCandleStore()
     days = tuple((date(2021, 1, 1) + timedelta(days=i)).isoformat()
