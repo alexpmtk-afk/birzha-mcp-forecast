@@ -110,12 +110,16 @@
       "evidence": "SQLite pilot and canonical DuckDB remain separate transactions; outbox production durability unproven"
     },
     "home_windows_readonly_acceptance": {
-      "status": "OPEN",
-      "evidence": "No verified read-only inspection of actual HOME Windows runtime of the changed chain"
+      "status": "BLOCKED",
+      "evidence": "Private protected HOME GitHub Windows runner accepted diagnostic (PR #104), but no HOME queries executed: run 38070736976 lacked pwsh; run 38070781907 was blocked by Windows PowerShell execution policy ('running scripts is disabled', PSSecurityException). Do not bypass; approved protected read-only bridge route required. No HOME branch, dirty state, database or source readiness was measured."
     },
     "production_backup_rollback_and_authorization": {
       "status": "OPEN",
       "evidence": "No verified restore/rollback for exact new deployment, no explicit merge/deploy permission"
+    },
+    "live_forecast_issuance_after_source_receipt": {
+      "status": "BLOCKED",
+      "evidence": "In default non-historical ForecastService.build, MarketSnapshotService uses max(completed candle end) as snapshot.as_of, which is propagated into ForecastRecord.created_at_t0. This is event time, not proof of source HTTP receipt or wall-clock issuance. Prospective pilot correctly rejects source observed later than t0; a verified live issuance adapter must use observed real receipt clock after exact completed bars. Confirm with regression, do not backdate live forecasts."
     }
   },
   "user_approved_main_merge": false,
