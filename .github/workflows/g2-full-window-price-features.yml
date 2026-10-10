@@ -1,0 +1,30 @@
+name: G2 Full Window Price Features
+on:
+  push:
+    branches: [codex/g2-full-window-price-features-20261010]
+  pull_request:
+    branches: [chatgpt/g2-post-maturity-outcome-readiness-20261010]
+    paths:
+      - src/birzha/application/features.py
+      - tests/test_price_feature_full_windows.py
+      - docs/G2_FULL_WINDOW_PRICE_FEATURES_20261010.md
+      - .github/workflows/g2-full-window-price-features.yml
+permissions:
+  contents: read
+concurrency:
+  group: g2-full-window-price-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Full regression suite
+        run: python -m pytest -q -p no:cacheprovider
+      - name: Repository preflight
+        run: python scripts/repository_preflight.py

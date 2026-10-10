@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 from birzha.domain.market import Candle, CandleSeries
 from birzha.domain.snapshot import TimeframeState
+
+
+PRICE_WINDOW_FEATURE_VERSION = "TIMEFRAME_PRICE_WINDOWS_V2"
 
 
 @dataclass(slots=True)
@@ -90,56 +94,82 @@ def _volume_ratio(values: list[float | None], n: int) -> float | None:
     return window[-1] / baseline if baseline else None
 
 
+def _finite_price(value: object) -> bool:
+    try:
+        return type(value) in (int, float) and isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _full_hlc_window(candles: list[Candle], n: int) -> list[Candle] | None:
+    """Never backfill missing or unfinished candles with older usable rows."""
+    if len(candles) < n:
+        return None
+    window = candles[-n:]
+    for candle in window:
+        if candle.completed is not True or not all(
+            _finite_price(value) for value in (candle.high, candle.low, candle.close)
+        ):
+            return None
+        if not candle.low <= candle.close <= candle.high:
+            return None
+    return window
+
+
 def _typical_price(candle: Candle) -> float | None:
-    values = [candle.high, candle.low, candle.close]
-    return sum(values) / 3.0 if all(value is not None for value in values) else candle.close
+    # No close-only fallback: this is explicitly an HLC candle proxy.
+    if not all(_finite_price(value) for value in (candle.high, candle.low, candle.close)):
+        return None
+    return sum((candle.high, candle.low, candle.close)) / 3.0
+
 
 def _vwap(candles: list[Candle], n: int) -> float | None:
-    weighted = 0.0
-    volume = 0.0
-    window = candles[-n:]
-    if any(c.close is None or c.volume is None for c in window):
+    window = _full_hlc_window(candles, n)
+    if window is None:
         return None
+    if any(not _finite_price(c.volume) or c.volume < 0 for c in window):
+        return None
+    # Observed zero volume is valid; unknown or negative volume is not.
+    volume = 0.0
+    weighted = 0.0
     for candle in window:
         price = _typical_price(candle)
-        if price is None or candle.volume is None or candle.volume <= 0:
+        if not _finite_price(price):
+            return None
+        if candle.volume == 0:
             continue
         weighted += price * candle.volume
         volume += candle.volume
-    return weighted / volume if volume else None
+    if not _finite_price(volume) or volume <= 0 or not _finite_price(weighted):
+        return None
+    result = weighted / volume
+    return result if isfinite(result) else None
+
 
 
 def _price_location(candles: list[Candle], n: int) -> float | None:
-    window = candles[-n:]
-    if any(
-        c.high is None or c.low is None or c.close is None for c in window
-    ):
+    window = _full_hlc_window(candles, n)
+    if window is None:
         return None
-    highs = [c.high for c in window if c.high is not None]
-    lows = [c.low for c in window if c.low is not None]
-    closes = [c.close for c in window if c.close is not None]
-    if not highs or not lows or not closes:
-        return None
-    low, high = min(lows), max(highs)
+    low, high = min(c.low for c in window), max(c.high for c in window)
     if high == low:
-        return 0.5
-    return (closes[-1] - low) / (high - low)
+        return None  # no position in a zero-width range; no invented midpoint
+    width = high - low
+    offset = window[-1].close - low
+    if not _finite_price(width) or not _finite_price(offset):
+        return None
+    result = offset / width
+    return result if isfinite(result) else None
 
 
 def _support(candles: list[Candle], n: int) -> float | None:
-    window = candles[-n:]
-    if any(c.low is None for c in window):
-        return None
-    lows = [c.low for c in window if c.low is not None]
-    return min(lows) if lows else None
+    window = _full_hlc_window(candles, n)
+    return min(c.low for c in window) if window is not None else None
 
 
 def _resistance(candles: list[Candle], n: int) -> float | None:
-    window = candles[-n:]
-    if any(c.high is None for c in window):
-        return None
-    highs = [c.high for c in window if c.high is not None]
-    return max(highs) if highs else None
+    window = _full_hlc_window(candles, n)
+    return max(c.high for c in window) if window is not None else None
 
 
 def _trend_score(closes: list[float | None]) -> float:
