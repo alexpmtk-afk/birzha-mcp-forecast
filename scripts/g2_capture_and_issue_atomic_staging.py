@@ -6,6 +6,7 @@ receipts stale. Never an MCP production journal writer or automated trader.
 from __future__ import annotations
 
 import argparse
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,8 +39,30 @@ def _safe_failure_diagnostic(failures):
             codes.append("UNCLASSIFIED_SOURCE_FAILURE")
             continue
         detail = str(row.get("detail", ""))
-        match = next((code for phrase, code in SAFE_FAILURE_REASONS.items()
-                      if phrase in detail), "UNCLASSIFIED_SOURCE_FAILURE")
+        error_type = str(row.get("error_type", ""))
+        # The upstream client turns HTTP status into MoexIssError and may
+        # include an endpoint path in its message. Extract ONLY the status.
+        # Never echo arbitrary message contents or provider URL/query.
+        http = (re.search(r"^MOEX ISS returned HTTP ([1-5][0-9]{2})\\b", detail)
+                if error_type == "MoexIssError" else None)
+        if http:
+            status = int(http.group(1))
+            match = (
+                "HTTP_429_RATE_LIMIT" if status == 429 else
+                "HTTP_403_ACCESS_DENIED" if status == 403 else
+                "HTTP_503_UNAVAILABLE" if status == 503 else
+                "HTTP_5XX_UPSTREAM" if status >= 500 else
+                "HTTP_OTHER_NON_200"
+            )
+        elif error_type in {"TimeoutError", "ConnectTimeout", "ReadTimeout",
+                            "ConnectError", "TransportError"}:
+            match = "UPSTREAM_TIMEOUT_OR_TRANSPORT"
+        elif error_type in {"UnsafeUpstreamConfiguration",
+                            "UpstreamSafetyError", "UpstreamBudgetExceeded"}:
+            match = "UPSTREAM_GOVERNOR_BLOCKED"
+        else:
+            match = next((code for phrase, code in SAFE_FAILURE_REASONS.items()
+                          if phrase in detail), "UNCLASSIFIED_SOURCE_FAILURE")
         codes.append(match)
     return ",".join(codes) or "UNCLASSIFIED_SOURCE_FAILURE"
 
