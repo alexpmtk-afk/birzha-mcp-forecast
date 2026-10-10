@@ -19,7 +19,7 @@ def test_incomplete_m15_group_never_compressed():
     ins=Instrument(symbol="SBER",secid="SBER",engine="stock",market="shares",board="TQBR",asset_class="equity")
     start=datetime(2026,10,9,10,0,tzinfo=timezone.utc)
     cs=[]
-    for j in range(29):
+    for j in range(30):
         if j==7:continue
         t=start+timedelta(minutes=j)
         cs.append(Candle(open=100.,close=101.,high=102.,low=99.,value=1.,volume=1.,
