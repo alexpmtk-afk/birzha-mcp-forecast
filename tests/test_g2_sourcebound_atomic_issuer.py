@@ -283,3 +283,10 @@ def test_capture_wrapper_rejects_linked_output_before_network_request(monkeypatc
         )
     assert not called
     assert list(stage_root.iterdir()) == []
+
+
+@pytest.mark.parametrize("blocked", ["/opt/mcp", "/opt/mcp/projects", "/opt/mcp/data"])
+def test_remote_canonical_root_never_accepted_as_source_or_capture_scope(blocked):
+    from scripts.g2_issue_sourcebound_atomic_staging import _safe_isolated_path
+    with pytest.raises(AdmissionRefused, match="HOME or production"):
+        _safe_isolated_path(blocked, existing_directory=False)
