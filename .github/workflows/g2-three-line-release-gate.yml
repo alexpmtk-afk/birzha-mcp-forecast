@@ -57,7 +57,7 @@ jobs:
         run: python -m scripts.g2_release_gate --manifest docs/G2_RELEASE_GATE_20261010.json
       - name: Run all three lines' focused integration tests
         run: |
-          python -m pytest -q tests/test_g2_revision_content_integrity.py tests/test_production_feature_contracts.py tests/test_price_feature_full_windows.py tests/test_g2_verify_regime_development_report.py tests/test_g2_post_maturity_outcome_readiness.py tests/test_g2_release_gate.py
+          python -m pytest -q tests/test_g2_revision_content_integrity.py tests/test_production_feature_contracts.py tests/test_price_feature_full_windows.py tests/test_g2_verify_regime_development_report.py tests/test_g2_post_maturity_outcome_readiness.py tests/test_g2_release_gate.py tests/test_g2_live_issuance_semantics.py
       - name: Full repository pytest after both temporary merges
         run: python -m pytest -q
       - name: Compile all combined application code
