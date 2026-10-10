@@ -73,7 +73,7 @@ def test_future_malformed_revision_does_not_poison_prior_cutoff():
         # Parsing evidence from the future is not allowed at an earlier T0.
         result=_asof(store,"2025-05-06T12:00:00+03:00")
         assert result.candles[0].close==100.0
-        with pytest.raises(json.JSONDecodeError):
+        with pytest.raises(ValueError,match="SHA256 does not match"):
             _asof(store,"2025-05-07T12:00:00+03:00")
     finally:
         store.close()
