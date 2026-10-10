@@ -1,14 +1,16 @@
-name: G2 Current-Head Source Bound + Colleague Compatibility
+name: G2 Current-Head Source Bound + Colleague Level Reaction Compatibility
 
 on:
   push:
     branches:
       - chatgpt/g2-source-bound-latest-colleague-shadow-20261010
       - chatgpt/g2-current-release-pins-20261010
+      - chatgpt/g2-current-level-reaction-integration-20261010
   pull_request:
     branches:
       - chatgpt/g2-source-bound-issuance-20261010
       - chatgpt/g2-source-bound-latest-colleague-shadow-20261010
+      - chatgpt/g2-current-release-pins-20261010
   workflow_dispatch:
 
 permissions:
@@ -28,9 +30,9 @@ jobs:
         shell: bash
         run: |
           git merge-base --is-ancestor 5f091403510a7af0a4c036404db7c04af959120d HEAD
-          git fetch --no-tags origin +refs/heads/codex/g2-price-level-evidence-20261010:refs/remotes/origin/g2-latest-price-level
+          git fetch --no-tags origin +refs/heads/codex/g2-level-reaction-facts-20261010:refs/remotes/origin/g2-latest-price-level
           git fetch --no-tags origin +refs/heads/codex/g2-regime-development-results-20261010:refs/remotes/origin/g2-regime-audit
-          test "$(git rev-parse refs/remotes/origin/g2-latest-price-level)" = "0a55a9607642cd1428a396c9d69ff404c7d0578f" || {
+          test "$(git rev-parse refs/remotes/origin/g2-latest-price-level)" = "abe9a42ddf1242e30162c51bfd6207127c34e92a" || {
             echo "::error::COLLEAGUE_LEVEL_HEAD_MOVED"; exit 3;
           }
           test "$(git rev-parse refs/remotes/origin/g2-regime-audit)" = "82af27e1f9d79f02f8062c5756047fe1fb35ef20" || {
@@ -42,7 +44,7 @@ jobs:
           git -c user.name=Ephemeral-CI -c user.email=ci@example.invalid merge --no-ff --no-edit refs/remotes/origin/g2-latest-price-level
           git -c user.name=Ephemeral-CI -c user.email=ci@example.invalid merge --no-ff --no-edit refs/remotes/origin/g2-regime-audit
           test -z "$(git diff --name-only --diff-filter=U)"
-          for sha in 5f091403510a7af0a4c036404db7c04af959120d 0a55a9607642cd1428a396c9d69ff404c7d0578f 82af27e1f9d79f02f8062c5756047fe1fb35ef20; do
+          for sha in 5f091403510a7af0a4c036404db7c04af959120d abe9a42ddf1242e30162c51bfd6207127c34e92a 82af27e1f9d79f02f8062c5756047fe1fb35ef20; do
             git merge-base --is-ancestor "$sha" HEAD
           done
           echo "LOCAL_EPHEMERAL_MERGE=PASS;NO_PUSH=TRUE"
@@ -54,11 +56,11 @@ jobs:
         run: python -m pip install -e '.[dev]'
       - name: Focus on source issuance and latest admission/price contract
         run: |
-          python -m pytest -q tests/test_g2_source_bound_issuance.py tests/test_g2_freeze_real_forecast_from_source_receipts.py tests/test_baseline_decision_contract.py tests/test_price_level_evidence.py tests/test_g2_live_issuance_semantics.py tests/test_g2_release_gate.py
+          python -m pytest -q tests/test_g2_source_bound_issuance.py tests/test_g2_freeze_real_forecast_from_source_receipts.py tests/test_baseline_decision_contract.py tests/test_price_level_evidence.py tests/test_g2_live_issuance_semantics.py tests/test_level_reaction.py tests/test_g2_release_gate.py
       - name: Full combined project pytest
         run: python -m pytest -q
       - name: Compile all affected combined code
-        run: python -m compileall -q src/birzha/application src/birzha/domain src/birzha/storage scripts/g2_freeze_real_forecast_from_source_receipts.py
+        run: python -m compileall -q src/birzha/application src/birzha/domain src/birzha/storage scripts/g2_freeze_real_forecast_from_source_receipts.py scripts/g2_level_reaction.py
       - name: Confirm release stays blocked despite combined code PASS
         run: |
           python -m scripts.g2_release_gate --manifest docs/G2_RELEASE_GATE_20261010.json --summary
