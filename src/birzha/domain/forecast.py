@@ -5,11 +5,13 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Literal
 import math
+from birzha.domain.price_levels import PriceLevelEvidence, LEVEL_EVIDENCE_VERSION, validate_level_evidence
 
 
 Direction = Literal["UP", "DOWN", "NEUTRAL"]
 FORECAST_RECORD_CONTRACT_VERSION = "FORECAST_RECORD_V1_PROTOCOL_08"
 BASELINE_EVIDENCE_RECORD_VERSION = "FORECAST_RECORD_V2_BASELINE_EVIDENCE"
+LEVEL_EVIDENCE_RECORD_VERSION = "FORECAST_RECORD_V3_LEVEL_EVIDENCE"
 LEGACY_FORECAST_RECORD_VERSION = "FORECAST_RECORD_LEGACY_V0"
 
 
@@ -61,6 +63,7 @@ class ForecastRecord:
     reversal_condition: str | None = None
     decision_status: str | None = None
     abstention_reasons: tuple[str, ...] = ()
+    level_evidence: tuple[PriceLevelEvidence, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """Return the immutable Protocol-08 journal payload.
@@ -137,7 +140,7 @@ class ForecastRecord:
             },
             "field_availability": availability,
         }
-        if self.record_version == BASELINE_EVIDENCE_RECORD_VERSION:
+        if self.record_version in {BASELINE_EVIDENCE_RECORD_VERSION, LEVEL_EVIDENCE_RECORD_VERSION}:
             availability.update({
                 'control': 'UNAVAILABLE' if self.control == 'UNKNOWN' else 'AVAILABLE',
                 'route': 'UNAVAILABLE' if self.route == 'UNAVAILABLE' else 'AVAILABLE',
@@ -149,6 +152,9 @@ class ForecastRecord:
             })
             payload['decision_status'] = self.decision_status
             payload['abstention_reasons'] = list(self.abstention_reasons)
+            if self.record_version == LEVEL_EVIDENCE_RECORD_VERSION:
+                payload["level_evidence_version"] = LEVEL_EVIDENCE_VERSION
+                payload["level_evidence"] = [item.to_dict() for item in self.level_evidence]
             validate_baseline_evidence_payload(payload)
         return payload
 
@@ -158,8 +164,8 @@ def _availability(value: object | None) -> str:
 
 
 def validate_baseline_evidence_payload(data: dict[str, object]) -> None:
-    """Validate V2 semantics equally for domain records and capture dictionaries."""
-    if data.get('record_version') != BASELINE_EVIDENCE_RECORD_VERSION:
+    """Validate V2/V3 semantics equally for domain records and capture dictionaries."""
+    if data.get('record_version') not in {BASELINE_EVIDENCE_RECORD_VERSION, LEVEL_EVIDENCE_RECORD_VERSION}:
         raise ValueError('not a baseline evidence contract')
     decision = data.get('decision_status')
     if decision not in {'ABSTAIN', 'BASELINE_NEUTRAL', 'BASELINE_DIRECTIONAL_ESTIMATE'}:
@@ -203,3 +209,6 @@ def validate_baseline_evidence_payload(data: dict[str, object]) -> None:
         raise ValueError('missing explicit unavailable full-engine evidence')
     if availability.get('directional_estimate') != ('UNAVAILABLE' if decision == 'ABSTAIN' else 'AVAILABLE'):
         raise ValueError('directional availability contradicts decision')
+
+    if data.get("record_version") == LEVEL_EVIDENCE_RECORD_VERSION:
+        validate_level_evidence(data)
