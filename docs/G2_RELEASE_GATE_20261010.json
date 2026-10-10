@@ -103,18 +103,18 @@
       "meaning": "Exact #168/#169/#147 fetched and merged twice temporarily on GitHub runner; no push. Focused and full pytest, compile, Preflight and Security PASS. Run precedes release-pin reconciliation; final HEAD must retest."
     },
     "latest_168_171_147_shadow_ci": {
-      "status": "PENDING",
-      "tested_workflow_commit": null,
-      "run_url": null,
-      "focused_tests_passed": null,
-      "full_tests_passed": null,
-      "meaning": "Exact #168/#171/#147 no-push integration rerun required at final manifest HEAD; earlier #168/#169/#147 evidence remains historical."
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38084842292",
+      "tested_workflow_commit": "bd090c1f44d14ccc5a33a9c29094a7cb5a327a99",
+      "focused_tests_passed": 239,
+      "full_tests_passed": 1252,
+      "meaning": "GitHub CI verified exact #168/#171/#147 local ephemeral no-push merges, 239 focused, 1252 full PASS, compile+Preflight+Security. Manifest status updated AFTER run, requires final-HEAD CI check."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
-      "status": "PENDING",
-      "evidence": "New exact #168/#171/#147 compatibility CI (includes #169) must be verified on final integration HEAD. Previous #168/#169/#147 1212 full PASS is historical, cannot certify newer #171."
+      "status": "PASS",
+      "evidence": "Independent exact-head #168 + #171 (includes #169/#167) + #147 CI-only temporary no-push integration: GitHub Actions 38084842292 on bd090c1f44d14ccc5a33a9c29094a7cb5a327a99 239 focused / 1252 full tests PASS, Python compile, Preflight and Security PASS. This is code compatibility only; final-HEAD rerun required after updated manifest."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
