@@ -136,3 +136,19 @@ def test_nan_or_bad_high_low_is_rejected():
     invalid=page([[100,101,100,99,None,None,"2026-10-09 10:00:00","2026-10-09 18:50:00"]])
     with pytest.raises(ValueError,match="high/low"):
         _parse_page(invalid,earliest=FIXED.date()-__import__("datetime").timedelta(days=1),latest=FIXED.date(),observed=FIXED)
+
+
+def test_M1_window_covers_multiple_sessions_without_relaxing_page_limit(tmp_path):
+    """Real smoke showed 36 M15 from one day; 50 must not be faked."""
+    from datetime import timedelta
+    assert TIMEFRAMES["M1"] == (1, 5)
+    assert MAX_PAGES == 8
+    provider = Provider()
+    meta = collect_one(
+        provider, MarketData().resolve("SBER"), "M1", FIXED, clock, tmp_path
+    )
+    cutoff = FIXED.astimezone(__import__("zoneinfo").ZoneInfo("Europe/Moscow")).date() - timedelta(days=1)
+    assert provider.calls[0][1]["from"] == (cutoff - timedelta(days=5)).isoformat()
+    assert provider.calls[0][1]["till"] == cutoff.isoformat()
+    assert meta["requested_from"] == provider.calls[0][1]["from"]
+    assert meta["requested_till"] == provider.calls[0][1]["till"]
