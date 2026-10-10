@@ -10,7 +10,7 @@ else:
     from scripts.g2_price_location import snapshot_from_dict, read_json
 
 
-def run(snapshot_path, forecast_path, *, candles_path=None, observation_at=None, schedule_path=None):
+def load_inputs(snapshot_path, forecast_path, *, candles_path=None, observation_at=None, schedule_path=None):
     snapshot=snapshot_from_dict(read_json(snapshot_path))
     forecast=read_json(forecast_path)
     series=None
@@ -20,7 +20,11 @@ def run(snapshot_path, forecast_path, *, candles_path=None, observation_at=None,
         if "count" in payload and payload["count"]!=series.count:
             raise ValueError("source count conflict")
     schedule=Path(schedule_path).read_bytes() if schedule_path is not None else None
-    return build_combined_market_report(snapshot,forecast,series=series,observation_at=observation_at,schedule_bytes=schedule)
+    return {"snapshot":snapshot,"forecast_payload":forecast,"series":series,"observation_at":observation_at,"schedule_bytes":schedule}
+
+
+def run(snapshot_path, forecast_path, *, candles_path=None, observation_at=None, schedule_path=None):
+    return build_combined_market_report(**load_inputs(snapshot_path,forecast_path,candles_path=candles_path,observation_at=observation_at,schedule_path=schedule_path))
 
 
 def main():
