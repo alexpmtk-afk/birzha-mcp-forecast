@@ -41,7 +41,8 @@ def timestamp(dt):
 
 
 def market_time(dt):
-    return datetime.fromisoformat(str(dt).replace(" ", "T")).replace(tzinfo=MOEX_TZ).astimezone(timezone.utc)
+    value = datetime.fromisoformat(str(dt).replace(" ", "T"))
+    return value.replace(tzinfo=MOEX_TZ) if value.tzinfo is None else value.astimezone(MOEX_TZ)
 
 
 def _source_request(provider, path, params, clock):
@@ -74,8 +75,14 @@ def _parse_page(response, *, earliest, latest, observed):
     for item in raw_rows:
         row = dict(zip(columns, item))
         begin, end = market_time(row["begin"]), market_time(row["end"])
-        if not earliest <= begin.date() <= latest:
-            raise ValueError("MOEX row outside pinned time range")
+        # Some MOEX D1 bars include the previous evening session.
+        # Validate completed exchange-local candle END, not UTC begin date.
+        if not earliest <= end.date() <= latest or begin.date() < earliest - timedelta(days=2):
+            raise ValueError(
+                "MOEX row outside pinned exchange-local window: "
+                f"begin={row['begin']!r}, end={row['end']!r}, "
+                f"start={earliest}, cutoff={latest}"
+            )
         if not begin < end <= observed:
             raise ValueError("forming or unobserved candle included")
         prices = [float(row[k]) for k in ("open", "close", "high", "low")]
@@ -117,6 +124,10 @@ def collect_one(provider, instrument, timeframe, now, clock, folder):
     for index in range(MAX_PAGES):
         start = 0 if page_size is None else page_size * index
         response, started, ended, header_date = _source_request(provider,path,{**params,"start":start},clock)
+        # Original HTTP response bytes MUST survive even an invalid page.
+        file_name=f"{instrument.symbol}_{instrument.secid}_{timeframe}_{index}.json"
+        with (folder/file_name).open("xb") as handle:
+            handle.write(response.body)
         page_rows, total, size = _parse_page(response,
             earliest=since,latest=cutoff,observed=datetime.fromisoformat(ended.replace("Z","+00:00")))
         if expected_total is None:
@@ -125,8 +136,6 @@ def collect_one(provider, instrument, timeframe, now, clock, folder):
             raise ValueError("source pagination changed during capture; fail closed")
         if not page_rows and start < expected_total:
             raise ValueError("unexpected empty paginated page")
-        file_name=f"{instrument.symbol}_{instrument.secid}_{timeframe}_{index}.json"
-        (folder/file_name).write_bytes(response.body)
         pages.append({"path":file_name, "start":start,"sha256":sha256(response.body).hexdigest(),
                      "bytes":len(response.body),"observed_start_utc":started,
                      "observed_end_utc":ended,"http_date_utc":header_date,
@@ -213,6 +222,8 @@ def main():
     print(stable({"schema":RECEIPT_VERSION,"complete_market_count":result["verified_complete_market_count"],
                   "failures":result["failed_markets"],"pages":result["complete_pages"],
                   "capture_started_utc":result["capture_started_utc"]}))
+    if result["verified_complete_market_count"] != len(MARKETS):
+        raise SystemExit(2)
 
 
 if __name__=="__main__":
