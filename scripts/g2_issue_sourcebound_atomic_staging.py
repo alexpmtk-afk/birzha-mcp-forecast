@@ -7,6 +7,7 @@ integrity, NOT externally signed/independently time attested. No live fetch.
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -20,6 +21,32 @@ from scripts.g2_freeze_real_forecast_from_source_receipts import (
 )
 
 VERSION = "G2_SOURCE_BOUND_ATOMIC_STAGING_ISSUER_V1"
+
+
+def _safe_isolated_path(path: str | Path, *, existing_directory: bool) -> Path:
+    """Refuse symlinked ancestors and known HOME/production directories.
+
+    Resolve only after inspecting every raw path component; resolving first
+    would erase the very symlink evidence we must refuse. This is a local
+    staging guard, not a substitute for process filesystem permissions.
+    """
+    raw = Path(os.path.abspath(os.fspath(path)))
+    if any(part.casefold() in {"mcp-home", "production"} for part in raw.parts):
+        raise AdmissionRefused("no HOME or production path permitted")
+    if str(raw).replace("\\", "/").casefold().startswith("/opt/mcp/"):
+        raise AdmissionRefused("no HOME or production path permitted")
+    if any(part.is_symlink() for part in (raw, *raw.parents)):
+        raise AdmissionRefused("symlinked staging/source path not permitted")
+    if existing_directory and not raw.is_dir():
+        raise AdmissionRefused("existing disposable source/staging directory required")
+    if not existing_directory and raw.exists() and not raw.is_dir():
+        raise AdmissionRefused("source capture destination must be a directory")
+    return raw.resolve()
+
+
+def _separate_scopes(source: Path, staging: Path) -> None:
+    if source == staging or source.is_relative_to(staging) or staging.is_relative_to(source):
+        raise AdmissionRefused("source inventory and DuckDB staging must be separate scopes")
 
 
 def _unique_pairs(pairs):
@@ -72,6 +99,10 @@ def _manifest_and_entry(source_dir: Path, market: str):
     actual_files = {p.name for p in source_dir.iterdir() if p.name != "manifest.json"}
     if actual_files != set(index):
         raise AdmissionRefused("source directory and original page inventory differ")
+    if any(not (source_dir / name).is_file() or (source_dir / name).is_symlink()
+           or sha256((source_dir / name).read_bytes()).hexdigest() != digest
+           for name, digest in index.items()):
+        raise AdmissionRefused("source inventory contains tampered or linked page")
     used = set()
     for tf in ("D1", "H1", "M1"):
         meta = entry["timeframes"][tf]
@@ -104,9 +135,10 @@ def issue_atomic_staging(
     be reissued to another Forecast ID for the same SECID. The duplicate guard
     and source+Forecast commit share the store's own reentrant lock.
     """
-    source_dir = Path(source_dir).resolve()
-    root = Path(staging_root).resolve()
-    if root == source_dir or not root.is_dir() or not market or not isinstance(market, str):
+    source_dir = _safe_isolated_path(source_dir, existing_directory=True)
+    root = _safe_isolated_path(staging_root, existing_directory=True)
+    _separate_scopes(source_dir, root)
+    if not market or not isinstance(market, str):
         raise AdmissionRefused("separate existing disposable staging root required")
     if (market != Path(market).name or "/" in market or "\\" in market
         or market in (".", "..")):
@@ -141,7 +173,16 @@ def issue_atomic_staging(
                     )
             capture = store.capture(prepared.record, prepared.evidence)
             audit = store.audit()
-            if audit["captures"] < 1 or audit["outcomes"] != 0:
+            # Existing mature Outcomes for *other* forecasts are legitimate.
+            # The original global outcomes==0 check incorrectly made a
+            # per-market staging DB one-use after the first matured Outcome.
+            own_outcomes = store.db.execute(
+                "SELECT COUNT(*) FROM outcome_records WHERE forecast_id=?",
+                [prepared.record.forecast_id]
+            ).fetchone()[0]
+            if audit["captures"] < 1 or (
+                capture["status"] == "APPENDED" and own_outcomes != 0
+            ):
                 raise AdmissionRefused("new source-bound issuance has unexpected staging state")
         return {
             "schema": VERSION,
