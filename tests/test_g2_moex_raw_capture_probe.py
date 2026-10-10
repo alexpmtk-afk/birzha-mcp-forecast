@@ -58,3 +58,14 @@ def test_refuse_clock_reversal(tmp_path):
 
 def test_refuse_empty_response(tmp_path):
     with pytest.raises(ValueError,match='required'):capture(FakeGovernor(Response(b'{"candles":{"columns":[],"data":[]}}')),tmp_path/'new',clock=times())
+
+def test_timezone_naive_clock_fail_closed(tmp_path):
+    from datetime import datetime
+    with pytest.raises(ValueError,match='timezone aware'):
+        capture(FakeGovernor(Response(body())),tmp_path/'new',clock=lambda:datetime(2026,10,10,12,0))
+
+def test_clock_after_provider_cannot_be_naive(tmp_path):
+    from datetime import datetime
+    clock=iter([DAY, datetime(2026,10,10,12,0)])
+    with pytest.raises(ValueError,match='timezone aware'):
+        capture(FakeGovernor(Response(body())),tmp_path/'new',clock=lambda:next(clock))
