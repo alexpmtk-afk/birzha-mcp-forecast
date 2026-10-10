@@ -290,3 +290,16 @@ def test_remote_canonical_root_never_accepted_as_source_or_capture_scope(blocked
     from scripts.g2_issue_sourcebound_atomic_staging import _safe_isolated_path
     with pytest.raises(AdmissionRefused, match="HOME or production"):
         _safe_isolated_path(blocked, existing_directory=False)
+
+
+def test_public_live_smoke_error_diagnostics_never_echo_provider_detail():
+    from scripts.g2_capture_and_issue_atomic_staging import _safe_failure_diagnostic
+    assert _safe_failure_diagnostic([
+        {"error_type": "ValueError", "detail": "maximum governed source pages exceeded"}
+    ]) == "MAX_SOURCE_PAGES_EXCEEDED"
+    assert _safe_failure_diagnostic([
+        {"error_type": "RuntimeError", "detail": "opaque provider header TOKEN-SHOULD-NOT-LEAK"}
+    ]) == "UNCLASSIFIED_SOURCE_FAILURE"
+    assert "TOKEN-SHOULD-NOT-LEAK" not in _safe_failure_diagnostic([
+        {"detail": "opaque provider header TOKEN-SHOULD-NOT-LEAK"}
+    ])
