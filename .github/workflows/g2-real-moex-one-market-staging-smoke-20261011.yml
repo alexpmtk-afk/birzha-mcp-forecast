@@ -28,6 +28,8 @@ jobs:
           python-version: "3.13"
       - name: Install reviewed project and actual DuckDB
         run: python -m pip install -e '.[dev]'
+      - name: Reject incorrect minute windows and source evidence before network
+        run: python -m pytest -q tests/test_g2_six_market_live_source_capture.py tests/test_g2_sourcebound_atomic_issuer.py
       - name: Receive one real governed MOEX market and issue only to disposable DuckDB
         shell: bash
         run: |
