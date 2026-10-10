@@ -61,6 +61,8 @@ jobs:
         run: python -m pytest -q
       - name: Compile entire merged project
         run: python -m compileall -q src/birzha scripts/g2_real_source_level_report.py scripts/g2_timeframe_movement.py scripts/g2_combined_market_report.py scripts/g2_release_blocker_triage.py
+      - name: Publish factual blocker diagnosis without changing release decision
+        run: python -m scripts.g2_release_blocker_triage --manifest docs/G2_RELEASE_GATE_20261010.json --format text
       - name: Require release gate to remain blocked
         shell: bash
         run: |
