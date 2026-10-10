@@ -293,3 +293,82 @@ def test_actual_canonical_duckdb_forecast_and_outcome_journals(tmp_path):
     assert len(o.list_for_forecast(rec.forecast_id))==3
     assert bridge.reconcile()['pilot_outcomes']==3
     pilot.close();f.close();o.close()
+
+
+def _tamper_sidecar_receipt(tmp_path, table, statement, values):
+    """Synthetic privileged mutation defeats SQL triggers but not stored SHA."""
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "receipt.sqlite3")
+    try:
+        db.execute(f"DROP TRIGGER {table}_no_update")
+        db.execute(statement, values)
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_normal_duplicate_capture_rejects_tampered_receipt_before_duckdb(tmp_path):
+    bridge, p, f, o = stage(tmp_path)
+    bridge.capture(Forecast(), source())
+    p.close()
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "receipt.sqlite3")
+    receipt = json.loads(db.execute("SELECT receipt_json FROM captures").fetchone()[0])
+    db.close()
+    receipt["captured_at"] = "2026-10-10T11:59:50Z"
+    _tamper_sidecar_receipt(
+        tmp_path, "captures", "UPDATE captures SET receipt_json=?",
+        (json.dumps(receipt, sort_keys=True),),
+    )
+    bridge, p, _, _ = stage(tmp_path, now=T0 + timedelta(days=1),
+                            forecast_journal=f, outcome_journal=o)
+    with pytest.raises(ImmutableCollision, match="corrupt capture"):
+        bridge.capture(Forecast(), source())
+    assert not o.list_for_forecast("bridge_test_001")
+    p.close()
+
+
+def test_normal_observe_rejects_tampered_forecast_receipt_before_duckdb(tmp_path):
+    bridge, p, f, o = stage(tmp_path)
+    bridge.capture(Forecast(), source())
+    p.close()
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "receipt.sqlite3")
+    receipt = json.loads(db.execute("SELECT receipt_json FROM captures").fetchone()[0])
+    db.close()
+    receipt["source_observed_at"] = "2026-10-10T11:58:25Z"
+    _tamper_sidecar_receipt(
+        tmp_path, "captures", "UPDATE captures SET receipt_json=?",
+        (json.dumps(receipt, sort_keys=True),),
+    )
+    bridge, p, _, _ = stage(tmp_path, now=T0 + timedelta(days=30),
+                            forecast_journal=f, outcome_journal=o)
+    with pytest.raises(ImmutableCollision, match="corrupt capture"):
+        bridge.observe("bridge_test_001", 5, later())
+    assert not o.list_for_forecast("bridge_test_001")
+    p.close()
+
+
+def test_duplicate_observe_rejects_tampered_outcome_receipt_before_duckdb(tmp_path):
+    bridge, p, f, o = stage(tmp_path)
+    bridge.capture(Forecast(), source())
+    p.close()
+    bridge, p, _, _ = stage(tmp_path, now=T0 + timedelta(days=30),
+                            forecast_journal=f, outcome_journal=o)
+    bridge.observe("bridge_test_001", 5, later())
+    p.close()
+    import sqlite3
+    db = sqlite3.connect(tmp_path / "receipt.sqlite3")
+    outcome = json.loads(db.execute("SELECT payload_json FROM outcomes").fetchone()[0])
+    db.close()
+    outcome["outcome_written_at"] = "2000-01-01T00:00:00Z"
+    _tamper_sidecar_receipt(
+        tmp_path, "outcomes", "UPDATE outcomes SET payload_json=?",
+        (json.dumps(outcome, sort_keys=True),),
+    )
+    bridge, p, _, _ = stage(tmp_path, now=T0 + timedelta(days=30),
+                            forecast_journal=f, outcome_journal=o)
+    with pytest.raises(ImmutableCollision, match="corrupt outcome"):
+        bridge.observe("bridge_test_001", 5, later())
+    assert len(o.list_for_forecast("bridge_test_001")) == 1
+    p.close()
