@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from birzha.application.features import TimeframeFeatureEngine
 from birzha.application.normalized_features import NormalizedFeatureEngine
-from birzha.application.forecast import build_forecast_from_snapshot
+from birzha.application.prospective_issuance import prepare_source_bound_forecast, capture_prepared_in_staging
 from birzha.application.prospective_capture import CaptureEvidence, ProspectivePilotLedger
 from birzha.application.prospective_staging_bridge import CanonicalProspectiveStagingBridge
 from birzha.domain.market import Instrument, Candle, CandleSeries
@@ -205,7 +205,14 @@ def freeze_from_receipts(source_dir: Path, output_dir: Path, *, clock=lambda:dat
         market=entry["market"]
         try:
             snap,bundle,observed,last_completed,counts,skipped=assemble_snapshot(entry,source_dir,clock=clock)
-            record=build_forecast_from_snapshot(snap)
+            original_evidence=CaptureEvidence(
+                source_payload=bundle,source_observed_at=observed,
+                latest_completed_event_end=last_completed,
+                source_origin="LIVE_CAPTURED_PAYLOAD",
+                contract_version=snap.contract_version)
+            prepared=prepare_source_bound_forecast(snap,original_evidence,clock=clock)
+            snap=prepared.snapshot
+            record=prepared.record
             if record.snapshot_id!=market_snapshot_id(snap) or record.created_at_t0!=snap.as_of:
                 raise ValueError("snapshot/forecast identity not bound")
             root=output_dir/market
@@ -215,11 +222,7 @@ def freeze_from_receipts(source_dir: Path, output_dir: Path, *, clock=lambda:dat
             outcomes= DuckDBOutcomeJournal(str(root/"outcome.duckdb"))
             try:
                 bridge=CanonicalProspectiveStagingBridge(pilot,canonical,outcomes,root)
-                receipt=bridge.capture(record,CaptureEvidence(
-                    source_payload=bundle,source_observed_at=observed,
-                    latest_completed_event_end=last_completed,
-                    source_origin="LIVE_CAPTURED_PAYLOAD",
-                    contract_version=snap.contract_version))
+                receipt=capture_prepared_in_staging(prepared,bridge)
                 if bridge.reconcile()["status"]!="CONSISTENT":
                     raise ValueError("canonical journal failed readback reconciliation")
                 if pilot.audit()["outcomes"]!=0:
