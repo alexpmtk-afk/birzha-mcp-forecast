@@ -32,4 +32,4 @@ jobs:
       - name: Test entire project
         run: python -m pytest -q
       - name: Compile maturity reader
-        run: python -m compileall -q scripts/g2_post_maturity_outcome_readiness.py tests/test_g2_post_maturity_outcome_readiness.py
+        run: python -m compileall -q scripts/g2_post_maturity_outcome_readiness.py scripts/g2_frozen_forecast_report.py tests/test_g2_post_maturity_outcome_readiness.py
