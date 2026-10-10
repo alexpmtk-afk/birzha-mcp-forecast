@@ -91,12 +91,12 @@ def test_fresh_output_dir_required(tmp_path):
 def test_refuse_unfinished_or_future(tmp_path):
     bad=page([[100,101,102,99,None,None,"2026-10-09 10:00:00","2026-10-11 18:50:00"]])
     with pytest.raises(ValueError,match="unobserved"):
-        _parse_page(bad,earliest=FIXED.date(),latest=FIXED.date(),observed=FIXED)
+        _parse_page(bad,earliest=FIXED.date()-__import__('datetime').timedelta(days=1),latest=FIXED.date(),observed=FIXED)
 
 def test_refuse_source_paginated_without_cursor(tmp_path):
     bunch=[[100,101,102,99,None,None,"2026-10-09 10:00:00","2026-10-09 18:50:00"]]*500
     with pytest.raises(ValueError,match="pagination"):
-        _parse_page(page(bunch),earliest=FIXED.date(),latest=FIXED.date(),observed=FIXED)
+        _parse_page(page(bunch),earliest=FIXED.date()-__import__('datetime').timedelta(days=1),latest=FIXED.date(),observed=FIXED)
 
 def test_refuse_duplicate_candle_end_in_multi_page(tmp_path):
     p=Provider()
