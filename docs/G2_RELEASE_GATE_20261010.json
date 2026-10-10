@@ -128,17 +128,18 @@
       "meaning": "Exact #168/#173/#147 two temporary runner-only merges PASS, all focused/full tests PASS. The final manifest-change HEAD must rerun before fully accepted."
     },
     "latest_168_179_147_shadow_ci": {
-      "status": "PENDING",
-      "run_url": null,
-      "focused_tests_passed": null,
-      "full_tests_passed": null,
-      "meaning": "Await final-head exact GitHub CI SHA-pinned integration. Existing earlier #173 CI is historical."
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38088027415",
+      "tested_workflow_commit": "967f190ec9440a5efbe64b7e8320739ca96f021f",
+      "focused_tests_passed": 375,
+      "full_tests_passed": 1428,
+      "meaning": "CI verified #168 + #179 (includes #175/#178) + #147 temporary SHA-exact merges and full tests. Subsequent explicit /opt/mcp root denial and negative tests require final-head repeat; do not count this as fully final."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
-      "status": "PENDING",
-      "evidence": "Prior exact #168/#173/#147 proof did not include colleague successor #179 (with #175/#178 input diagnostics). New SHA-pinned #168/#179/#147 temporary no-push crossline and full CI required before converting gate back to PASS; do not transfer previous PASS."
+      "status": "PASS",
+      "evidence": "SHA-pinned CI-only #168 (93c1639a...), #179 (1097e67a..., includes #175/#178), #147 (82af27e1...) ephemeral two-merge integration no push at Actions 38088027415, head 967f190ec9440a5efbe64b7e8320739ca96f021f: 375 focused, 1428 full pytest PASS, compile, Preflight, Security PASS. Subsequently strengthened exact /opt/mcp directory guard and added negative tests; FINAL-HEAD rerun is required and is separate."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
