@@ -47,6 +47,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: g2-six-market-original-responses-20261010
-          path: \${{ runner.temp }}/g2-six-market-source/
+          path: ${{ runner.temp }}/g2-six-market-source/
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Require complete six-market source receipt after artifact preservation
+        if: steps.actual_capture.outcome != 'success'
+        run: |
+          echo "::error::SIX_MARKET_LIVE_RECEIPT_PARTIAL: inspect manifest and original pages"
+          exit 3
