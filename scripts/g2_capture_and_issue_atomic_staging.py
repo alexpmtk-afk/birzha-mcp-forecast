@@ -43,7 +43,7 @@ def _safe_failure_diagnostic(failures):
         # The upstream client turns HTTP status into MoexIssError and may
         # include an endpoint path in its message. Extract ONLY the status.
         # Never echo arbitrary message contents or provider URL/query.
-        http = (re.search(r"^MOEX ISS returned HTTP ([1-5][0-9]{2})\\b", detail)
+        http = (re.search(r"^MOEX ISS returned HTTP ([1-5][0-9]{2})\b", detail)
                 if error_type == "MoexIssError" else None)
         if http:
             status = int(http.group(1))
