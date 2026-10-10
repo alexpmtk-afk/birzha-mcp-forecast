@@ -101,10 +101,11 @@ def _parse_page(response, *, earliest, latest, observed):
         total = int(cursor_row.get("TOTAL") or cursor_row.get("total") or len(raw_rows))
         page_size = int(cursor_row.get("PAGESIZE") or cursor_row.get("pagesize") or max(1,len(raw_rows)))
     else:
-        if len(raw_rows) == 500:
-            raise ValueError("MOEX response may have truncated pagination; cursor absent")
-        total, page_size = len(raw_rows), max(1,len(raw_rows))
-    if total < len(raw_rows) or page_size > 500 or page_size < 1:
+        # Official ISS may omit its cursor and cap each response at 500.
+        # Keep total unknown; caller MUST page until a short/empty page,
+        # reject repeats, and never certify after MAX_PAGES full pages.
+        total, page_size = None, 500
+    if (total is not None and total < len(raw_rows)) or page_size > 500 or page_size < 1:
         raise ValueError("inconsistent source pagination")
     return result, total, page_size
 
@@ -131,22 +132,25 @@ def collect_one(provider, instrument, timeframe, now, clock, folder):
             handle.write(response.body)
         page_rows, total, size = _parse_page(response,
             earliest=since,latest=cutoff,observed=datetime.fromisoformat(ended.replace("Z","+00:00")))
-        if expected_total is None:
+        if page_size is None:
             expected_total,page_size=total,size
         elif total != expected_total or size != page_size:
             raise ValueError("source pagination changed during capture; fail closed")
-        if not page_rows and start < expected_total:
+        if not page_rows and expected_total is not None and start < expected_total:
             raise ValueError("unexpected empty paginated page")
         pages.append({"path":file_name, "start":start,"sha256":sha256(response.body).hexdigest(),
                      "bytes":len(response.body),"observed_start_utc":started,
                      "observed_end_utc":ended,"http_date_utc":header_date,
                      "row_count":len(page_rows)})
         candles.extend(page_rows)
-        if len(candles) >= expected_total:
+        if expected_total is None:
+            if len(page_rows) < page_size:
+                break
+        elif len(candles) >= expected_total:
             break
     else:
         raise ValueError("maximum governed source pages exceeded")
-    if len(candles) != expected_total:
+    if expected_total is not None and len(candles) != expected_total:
         raise ValueError("incomplete pagination or source count changed")
     ends = [v["end"] for v in candles]
     if ends != sorted(set(ends)):
