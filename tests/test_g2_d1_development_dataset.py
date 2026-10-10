@@ -185,3 +185,72 @@ def test_v2_checksum_and_contract_keys_required(tmp_path):
     path.write_text(_canonical(data))
     with pytest.raises(ValueError,match="manifest SHA"):
         load_v2(path,archive_hash)
+
+
+def test_rollover_uses_new_contract_own_preactive_v2_not_old_contract_prices():
+    store, days = _fixture_db()
+    try:
+        market = "BR"
+        new_secid = "BRM1"
+        source = store.stored_instrument("BRH1")
+        assert source is not None
+        new_instrument = replace(source, secid=new_secid)
+        # Last active date is a *new* contract. Its preceding 20 historical
+        # rows are exact new-contract preactive candles, never old BRH1 bars.
+        store._connection.execute(
+            "UPDATE historical_sessions SET secid=? WHERE symbol=? AND trade_date=?",
+            [new_secid, _root_key(market), days[-1]],
+        )
+        new_candles=tuple(Candle(
+            open=150.0+i, close=150.0+i, high=152.0+i, low=148.0+i,
+            value=3000.0, volume=25.0+i, begin=f"{day}T10:00:00",
+            end=f"{day}T23:49:59", completed=True, source="MOEX_ISS",
+        ) for i,day in enumerate(days))
+        store.upsert_series(CandleSeries(new_instrument,"D1",new_candles))
+        key=warmup_d1_evidence_key(
+            new_secid, days[:-1], origin="RECONSTRUCTED_MOEX",
+        )
+        v2={
+            market:{
+                new_secid:{
+                    "first_active_date":days[-1],
+                    "expected_dates":list(days[:-1]),
+                    "origin":"RECONSTRUCTED_MOEX",
+                    "evidence_key":key,
+                }
+            }
+        }
+        rows, excluded, totals=make_dataset(
+            store._connection,v2,has_caps=True,
+            from_day=days[0],till_day=days[-1],
+        )
+        chosen=[r for r in rows if r["market"] == market]
+        assert len(chosen)==1
+        assert chosen[0]["secid"]==new_secid
+        assert chosen[0]["calendar_evidence_origin"]=="RECONSTRUCTED_MOEX"
+        assert chosen[0]["calendar_evidence_key"]==key
+        assert chosen[0]["features"]["features"]["sma20"]["value"] > 140.0
+        assert totals["BR"]["admitted_reconstructed"]==1
+    finally:
+        store.close()
+
+
+def test_no_reconstructed_warmup_key_must_fail_pre_roll_candidate():
+    store, days = _fixture_db()
+    try:
+        # Delete first 20 sessions from the active-root key, retaining only
+        # the last day; do not allow the older candles to qualify on their own.
+        store._connection.execute(
+            "DELETE FROM historical_sessions WHERE symbol=? AND trade_date<>?",
+            [_root_key("BR"), days[-1]],
+        )
+        rows, excluded, totals=make_dataset(
+            store._connection,{},has_caps=True,
+            from_day=days[-1],till_day=days[-1],
+        )
+        assert totals["BR"]["admitted_reconstructed"]==0
+        assert any(r["market"]=="BR" and
+                   r["reason"]=="UNVERIFIED_PREACTIVE_EXACT_SESSIONS"
+                   for r in excluded)
+    finally:
+        store.close()
