@@ -20,7 +20,7 @@ from birzha.domain import forecast as fd
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 
-VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V1"
+VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
 HORIZONS = (5, 10, 20)
 
 
@@ -101,7 +101,23 @@ def _validate_future(data, captured_at, evidence, horizon, now):
     ref = float(data["reference_price"])
     ret = (close/ref - 1)*100
     hit = ret>0 if direction=="UP" else ret<0 if direction=="DOWN" else None
+    # The canonical outcome needs only the final close. The immutable future
+    # evidence additionally commits to *every* supplied candle/time, so altered
+    # interior bars are never misclassified as an identical replay.
+    supplied = {
+        "source_sha256": _sha(evidence.source_payload),
+        "source_origin": evidence.source_origin,
+        "calendar_origin": evidence.calendar_origin,
+        "source_observed_at": pilot._stamp(observed),
+        "market": evidence.market, "secid": evidence.secid,
+        "session_dates": list(evidence.session_dates),
+        "expected_calendar_dates": list(evidence.expected_calendar_dates),
+        "candle_completed_at": [pilot._stamp(end) for end in ends],
+        "candle_close": [float(value) for value in evidence.candle_close],
+    }
     return dict(forecast_id=data["forecast_id"], horizon_sessions=horizon,
+        future_input_evidence=supplied,
+        future_input_sha256=_sha(_json(supplied).encode("utf-8")),
         market=evidence.market, secid=evidence.secid, status="OBSERVED",
         target_session=evidence.session_dates[-1], target_session_end=pilot._stamp(ends[-1]),
         target_close=close, reference_price=ref, actual_return_pct=round(ret,8),
@@ -192,6 +208,25 @@ class SingleDuckDBProspectiveStagingJournal:
             meta=json.loads(receipt)
             if (meta.get("forecast_id"),meta.get("horizon_sessions"),meta.get("future_source_sha256"))!=(fid,horizon,h):
                 raise pilot.ImmutableCollision("unbound future evidence")
+            # V2 must retain and bind the *full* input candle sequence, not
+            # merely the final close projected to the canonical Outcome.
+            supplied=meta.get("future_input_evidence")
+            if not isinstance(supplied,dict) or _sha(_json(supplied).encode("utf-8"))!=meta.get("future_input_sha256"):
+                raise pilot.ImmutableCollision("corrupt future input evidence fingerprint")
+            if (supplied.get("source_sha256"), supplied.get("market"), supplied.get("secid"),
+                    supplied.get("source_observed_at")) != (h,meta["market"],meta["secid"],meta["source_observed_at"]):
+                raise pilot.ImmutableCollision("unbound future input source or instrument")
+            dates=supplied.get("session_dates")
+            expected=supplied.get("expected_calendar_dates")
+            ends=supplied.get("candle_completed_at")
+            closes=supplied.get("candle_close")
+            if not all(isinstance(items,list) and len(items)==horizon for items in (dates,expected,ends,closes)):
+                raise pilot.ImmutableCollision("corrupt future input window")
+            if (dates[-1],ends[-1],closes[-1]) != (
+                    meta["target_session"],meta["target_session_end"],meta["target_close"]):
+                raise pilot.ImmutableCollision("future input contradicts canonical terminal facts")
+            if _sha(_json(expected).encode("utf-8"))!=meta["calendar_sha256"]:
+                raise pilot.ImmutableCollision("future calendar no longer matches input evidence")
             projected=_outcome_from_pilot(meta)
             body,digest=DuckDBOutcomeJournal.canonical_payload(projected)
             if projected.outcome_id!=oid or outcome.get(oid)!=(digest,body):
@@ -212,7 +247,19 @@ class SingleDuckDBProspectiveStagingJournal:
             if prev is not None:
                 if prev[:2]!=(digest,sourcehash):
                     raise pilot.ImmutableCollision("frozen forecast/source collision")
-                return {"status":"DUPLICATE_IDENTICAL","receipt":json.loads(prev[2])}
+                stored=json.loads(prev[2])
+                current_source={
+                    "source_origin":evidence.source_origin,
+                    "source_observed_at":pilot._stamp(pilot._when(evidence.source_observed_at)),
+                    "latest_completed_event_end":pilot._stamp(pilot._when(evidence.latest_completed_event_end)),
+                    "snapshot_id":data["snapshot_id"],
+                    "secid":data["secid"],
+                    "record_version":data["record_version"],
+                    "decision_t0":pilot._stamp(pilot._when(data["created_at_t0"])),
+                }
+                if any(stored.get(key)!=value for key,value in current_source.items()):
+                    raise pilot.ImmutableCollision("frozen source evidence metadata differs on replay")
+                return {"status":"DUPLICATE_IDENTICAL","receipt":stored}
             now=_now(self.clock)
             obs=pilot._when(evidence.source_observed_at)
             t0=pilot._when(data["created_at_t0"])
@@ -247,9 +294,9 @@ class SingleDuckDBProspectiveStagingJournal:
             calculated=_validate_future(forecast,old["captured_at"],evidence,horizon,_now(self.clock))
             if prior is not None:
                 previous=json.loads(prior[1])
-                if prior[0]!=_sha(evidence.source_payload) or any(previous.get(k)!=calculated[k] for k in
+                if prior[0]!=_sha(evidence.source_payload) or previous.get("future_input_sha256")!=calculated["future_input_sha256"] or any(previous.get(k)!=calculated[k] for k in
                     ("source_observed_at","calendar_sha256","target_session","target_close","target_session_end","future_source_sha256")):
-                    raise pilot.ImmutableCollision("cannot revise observed Outcome")
+                    raise pilot.ImmutableCollision("frozen future input evidence differs on replay")
                 return {"status":"DUPLICATE_IDENTICAL","outcome":_outcome_from_pilot(previous)}
             item=_outcome_from_pilot(calculated)
             body,digest=DuckDBOutcomeJournal.canonical_payload(item)
