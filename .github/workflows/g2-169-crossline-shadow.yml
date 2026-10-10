@@ -5,6 +5,7 @@ on:
     branches:
       - chatgpt/g2-169-crossline-shadow-20261011
       - chatgpt/g2-future-session-time-contract-20261011
+      - chatgpt/g2-timeframe-current-head-integration-20261011
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
@@ -28,11 +29,12 @@ jobs:
         run: |
           set -euo pipefail
           git merge-base --is-ancestor 93c1639a23203dc5005fdf78515053813ba8273e HEAD
-          git fetch --no-tags origin +refs/heads/codex/g2-real-source-level-report-20261010:refs/remotes/origin/g2-real-six
+          git fetch --no-tags origin +refs/heads/codex/g2-timeframe-movement-facts-20261010:refs/remotes/origin/g2-real-six
           git fetch --no-tags origin +refs/heads/codex/g2-regime-development-results-20261010:refs/remotes/origin/g2-regime
-          test "$(git rev-parse refs/remotes/origin/g2-real-six)" = "c9dbd3b4382adc2a6f59e3b6701abfdb2e20dd6a" || { echo "::error::REAL_SOURCE_HEAD_MOVED"; exit 3; }
+          test "$(git rev-parse refs/remotes/origin/g2-real-six)" = "16edfb353332cdf22aa8b5be28ab58fd676acfc7" || { echo "::error::REAL_SOURCE_HEAD_MOVED"; exit 3; }
           test "$(git rev-parse refs/remotes/origin/g2-regime)" = "82af27e1f9d79f02f8062c5756047fe1fb35ef20" || { echo "::error::REGIME_HEAD_MOVED"; exit 4; }
           git merge-base --is-ancestor c5b815dd59dd226caf288aeb387b172911fefd4c refs/remotes/origin/g2-real-six
+          git merge-base --is-ancestor c9dbd3b4382adc2a6f59e3b6701abfdb2e20dd6a refs/remotes/origin/g2-real-six
       - name: Merge only inside runner without pushing
         shell: bash
         run: |
@@ -40,7 +42,7 @@ jobs:
           git -c user.name=Ephemeral-CI -c user.email=ci@example.invalid merge --no-ff --no-edit refs/remotes/origin/g2-real-six
           git -c user.name=Ephemeral-CI -c user.email=ci@example.invalid merge --no-ff --no-edit refs/remotes/origin/g2-regime
           test -z "$(git diff --name-only --diff-filter=U)"
-          for sha in 93c1639a23203dc5005fdf78515053813ba8273e c9dbd3b4382adc2a6f59e3b6701abfdb2e20dd6a 82af27e1f9d79f02f8062c5756047fe1fb35ef20; do
+          for sha in 93c1639a23203dc5005fdf78515053813ba8273e 16edfb353332cdf22aa8b5be28ab58fd676acfc7 82af27e1f9d79f02f8062c5756047fe1fb35ef20; do
             git merge-base --is-ancestor "$sha" HEAD
           done
           echo "EXACT_HEAD_CROSSLINE_MERGE=PASS;NO_PUSH=true"
@@ -52,11 +54,11 @@ jobs:
         run: python -m pip install -e '.[dev]'
       - name: Focused receipts, storage, and linked six-market report tests
         run: |
-          python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_linked_level_report.py tests/test_g2_real_source_level_report.py tests/test_price_location.py tests/test_level_holding.py tests/test_g2_release_gate.py
+          python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_linked_level_report.py tests/test_g2_real_source_level_report.py tests/test_timeframe_movement.py tests/test_price_location.py tests/test_level_holding.py tests/test_g2_release_gate.py
       - name: Full combined suite
         run: python -m pytest -q
       - name: Compile entire merged project
-        run: python -m compileall -q src/birzha scripts/g2_real_source_level_report.py
+        run: python -m compileall -q src/birzha scripts/g2_real_source_level_report.py scripts/g2_timeframe_movement.py
       - name: Require release gate to remain blocked
         shell: bash
         run: |

@@ -16,10 +16,10 @@
       "parent_pr": 166
     },
     {
-      "area": "admitted_levels_post_t0_facts_linked_and_saved_six_market_offline_repeat",
-      "pr": 169,
-      "head": "c9dbd3b4382adc2a6f59e3b6701abfdb2e20dd6a",
-      "parent_pr": 167
+      "area": "admitted_levels_post_t0_facts_real_six_market_and_D1_H1_M15_movement",
+      "pr": 171,
+      "head": "16edfb353332cdf22aa8b5be28ab58fd676acfc7",
+      "parent_pr": 169
     },
     {
       "area": "market_regime_research",
@@ -67,7 +67,8 @@
     "167": 165,
     "168": 166,
     "169": 167,
-    "170": 168
+    "170": 168,
+    "171": 169
   },
   "evidence": {
     "synthetic_three_line_ci": {
@@ -100,12 +101,20 @@
       "focused_tests_passed": 192,
       "full_tests_passed": 1205,
       "meaning": "Exact #168/#169/#147 fetched and merged twice temporarily on GitHub runner; no push. Focused and full pytest, compile, Preflight and Security PASS. Run precedes release-pin reconciliation; final HEAD must retest."
+    },
+    "latest_168_171_147_shadow_ci": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38084842292",
+      "tested_workflow_commit": "bd090c1f44d14ccc5a33a9c29094a7cb5a327a99",
+      "focused_tests_passed": 239,
+      "full_tests_passed": 1252,
+      "meaning": "GitHub CI verified exact #168/#171/#147 local ephemeral no-push merges, 239 focused, 1252 full PASS, compile+Preflight+Security. Manifest status updated AFTER run, requires final-HEAD CI check."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
       "status": "PASS",
-      "evidence": "Exact independent #168 + #169 + #147 integration at PR #170 initial workflow commit 11baaaa65232f571f7646204affe5b4043423988, run 38083653368: 192 targeted, 1205 full pytest PASS, ephemeral two merges no push, compile, Preflight and Security PASS. This proves regression compatibility, not reviewer approval, real ex-ante evidence, or release. Final manifest HEAD requires fresh CI."
+      "evidence": "Independent exact-head #168 + #171 (includes #169/#167) + #147 CI-only temporary no-push integration: GitHub Actions 38084842292 on bd090c1f44d14ccc5a33a9c29094a7cb5a327a99 239 focused / 1252 full tests PASS, Python compile, Preflight and Security PASS. This is code compatibility only; final-HEAD rerun required after updated manifest."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
