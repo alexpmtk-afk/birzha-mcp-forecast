@@ -154,7 +154,7 @@ def test_human_report_renders_original_ids_without_recalculating(tmp_path):
     assert report.count("## ")>=7
     assert "fcst_fixture_SBER" in report and "fcst_fixture_RTSI" in report
     assert report.count("| PENDING |")==18
-    assert "Не" in report and "HOME" in report
+    assert "не развёрнуты" in report and "HOME" in report
 
 
 def test_human_report_rejects_changed_raw_source(tmp_path):
