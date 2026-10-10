@@ -4,7 +4,7 @@ One file and one connection, not two independent SQLite/DuckDB commits. Existing
 canonical table schemas are retained. No production paths, migration, or schedulers.
 """
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 import math
@@ -72,6 +72,30 @@ def _validate_record(record, evidence):
     return data
 
 
+def _session_times(dates, completed_at, observed_at):
+    """Validate caller-supplied D1 session/completion correspondence.
+
+    A D1 session can complete on its Moscow calendar date or overnight on
+    the following date. An end many days later, reused completion timestamp,
+    or invalid date cannot count as a distinct completed future session.
+    This is shape/timing validation, NOT exchange-calendar authentication.
+    """
+    try:
+        days = tuple(date.fromisoformat(item) for item in dates)
+        if any(day.isoformat() != raw for day, raw in zip(days, dates)):
+            raise ValueError("noncanonical future session date")
+    except (TypeError, ValueError) as exc:
+        raise pilot.AdmissionRefused("future sessions require canonical ISO dates") from exc
+    ends = tuple(pilot._when(stamp) for stamp in completed_at)
+    observed = pilot._when(observed_at)
+    if any(a >= b for a, b in zip(ends, ends[1:])):
+        raise pilot.AdmissionRefused("future session completion times must strictly increase")
+    if any(end > observed or not ((end.astimezone(pilot.MOEX_TIMEZONE).date() - day).days in (0, 1))
+           for day, end in zip(days, ends)):
+        raise pilot.AdmissionRefused("future completion does not match its stated MOEX session")
+    return ends, observed
+
+
 def _validate_future(data, captured_at, evidence, horizon, now):
     if horizon not in HORIZONS or not isinstance(evidence, pilot.CompletedSessions):
         raise pilot.AdmissionRefused("unknown future horizon")
@@ -82,16 +106,14 @@ def _validate_future(data, captured_at, evidence, horizon, now):
     arr = (evidence.session_dates, evidence.expected_calendar_dates, evidence.candle_completed_at, evidence.candle_close)
     if any(len(x) != horizon for x in arr):
         raise pilot.AdmissionRefused("missing future sessions")
+    # Reject malformed dates before ordering/comparing caller-declared calendars.
+    ends, observed = _session_times(evidence.session_dates, evidence.candle_completed_at, evidence.source_observed_at)
     if evidence.session_dates != evidence.expected_calendar_dates or tuple(sorted(set(evidence.session_dates))) != evidence.session_dates:
         raise pilot.AdmissionRefused("invalid calendar/duplicates")
     if (evidence.market, evidence.secid) != (data["symbol"], data["secid"]):
         raise pilot.AdmissionRefused("future exact symbol/SECID mismatch")
     if any(type(c) not in (int, float) or c <= 0 or not math.isfinite(c) for c in evidence.candle_close):
         raise pilot.AdmissionRefused("invalid completed close")
-    ends = tuple(pilot._when(x) for x in evidence.candle_completed_at)
-    observed = pilot._when(evidence.source_observed_at)
-    if tuple(sorted(ends)) != ends or any(end > observed or end.astimezone(pilot.MOEX_TIMEZONE).date().isoformat() < day for day,end in zip(evidence.session_dates,ends)):
-        raise pilot.AdmissionRefused("uncompleted/out-of-order future candles")
     if now < observed or observed <= pilot._when(captured_at) or ends[0] <= pilot._when(captured_at):
         raise pilot.AdmissionRefused("outcome source was not truly observed after capture")
     if any(day <= pilot._when(data["created_at_t0"]).date().isoformat() for day in evidence.session_dates):
@@ -225,8 +247,14 @@ class SingleDuckDBProspectiveStagingJournal:
             if (dates[-1],ends[-1],closes[-1]) != (
                     meta["target_session"],meta["target_session_end"],meta["target_close"]):
                 raise pilot.ImmutableCollision("future input contradicts canonical terminal facts")
+            if dates != expected or dates != sorted(set(dates)):
+                raise pilot.ImmutableCollision("persisted future session/calendar mismatch")
             if _sha(_json(expected).encode("utf-8"))!=meta["calendar_sha256"]:
                 raise pilot.ImmutableCollision("future calendar no longer matches input evidence")
+            try:
+                _session_times(dates, ends, supplied["source_observed_at"])
+            except (pilot.AdmissionRefused, ValueError, TypeError) as exc:
+                raise pilot.ImmutableCollision("persisted future session chronology invalid") from exc
             projected=_outcome_from_pilot(meta)
             body,digest=DuckDBOutcomeJournal.canonical_payload(projected)
             if projected.outcome_id!=oid or outcome.get(oid)!=(digest,body):

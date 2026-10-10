@@ -278,3 +278,70 @@ def test_disposable_v1_store_fails_closed_under_strict_v2_evidence_contract(tmp_
     conn.close()
     with pytest.raises(AdmissionRefused, match="incompatible staging version"):
         db(tmp_path)
+
+
+def test_two_distinct_sessions_must_not_reuse_same_completion_timestamp(tmp_path):
+    store = db(tmp_path)
+    store.capture(forecast(), original())
+    store.close()
+    store = db(tmp_path, now=T0 + timedelta(days=30))
+    original_end = future().candle_completed_at
+    repeated = (original_end[1], original_end[1], *original_end[2:])
+    # Previously accepted: sorted timestamps permit equality and both
+    # sessions' declared dates are not later than the duplicated timestamp.
+    with pytest.raises(AdmissionRefused, match="strictly increase"):
+        store.observe("atomic_fixture_01", 5, future(candle_completed_at=repeated))
+    assert store.audit()["outcomes"] == 0
+    store.close()
+
+
+def test_future_session_end_cannot_be_many_days_after_declared_session(tmp_path):
+    store = db(tmp_path)
+    store.capture(forecast(), original())
+    store.close()
+    store = db(tmp_path, now=T0 + timedelta(days=30))
+    ends = tuple(f"2026-10-{day:02d}T20:00:00Z" for day in (21, 22, 23, 24, 25))
+    # Previously accepted: completion dates only had a lower bound.
+    with pytest.raises(AdmissionRefused, match="does not match"):
+        store.observe("atomic_fixture_01", 5, future(
+            candle_completed_at=ends, source_observed_at="2026-10-26T20:01:00Z"
+        ))
+    assert store.audit()["outcomes"] == 0
+    store.close()
+
+
+def test_persisted_full_window_chronology_is_audited_against_declared_sessions(tmp_path):
+    import json
+    from hashlib import sha256
+
+    store = db(tmp_path)
+    store.capture(forecast(), original())
+    store.close()
+    store = db(tmp_path, now=T0 + timedelta(days=30))
+    assert store.observe("atomic_fixture_01", 5, future())["status"] == "APPENDED"
+    # Simulate a legacy staging V2 evidence record whose inner timestamps
+    # were internally SHA-consistent yet materially detached from sessions.
+    saved = store.db.execute(
+        "SELECT evidence_json FROM g2_atomic_futures WHERE forecast_id=? AND horizon=?",
+        ["atomic_fixture_01", 5]
+    ).fetchone()[0]
+    meta = json.loads(saved)
+    times = list(meta["future_input_evidence"]["candle_completed_at"])
+    terminal_day = times[-1][:10]
+    for i in range(4):
+        times[i] = f"{terminal_day}T{10+i:02d}:00:00Z"
+    meta["future_input_evidence"]["candle_completed_at"] = times
+    encode = lambda item: json.dumps(
+        item, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    digest = lambda text: sha256(text.encode("utf-8")).hexdigest()
+    meta["future_input_sha256"] = digest(encode(meta["future_input_evidence"]))
+    payload = encode(meta)
+    store.db.execute(
+        "UPDATE g2_atomic_futures SET evidence_json=?,evidence_sha=?"
+        " WHERE forecast_id=? AND horizon=?",
+        [payload, digest(payload), "atomic_fixture_01", 5]
+    )
+    with pytest.raises(ImmutableCollision, match="session chronology"):
+        store.audit()
+    store.close()

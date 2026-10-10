@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - chatgpt/g2-169-crossline-shadow-20261011
+      - chatgpt/g2-future-session-time-contract-20261011
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
