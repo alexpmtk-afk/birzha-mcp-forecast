@@ -309,6 +309,10 @@ def evaluate_frozen_candidates(
                     continue
                 other = [_label(r) for r in successful[name] if r["input"]["market"] == market]
                 stats = _compare(labels, other)
+                stats["by_year"] = {year: _compare(
+                    [label for row, label in zip(rows, labels) if row["input"]["session"][:4] == year],
+                    [label for row, label in zip(rows, other) if row["input"]["session"][:4] == year],
+                ) for year in ("2021", "2022")}
                 market_comparisons[name] = stats
                 ratio = stats["disagreement_all"]
                 if ratio["denominator"] and Fraction(ratio["numerator"], ratio["denominator"]) > Fraction(max_disagreement_percent, 100):
@@ -320,6 +324,10 @@ def evaluate_frozen_candidates(
                 d = row["input"]["features"]["features"]["d20_atr"]["value"]
                 baseline_labels.append(("TREND_UP" if d > 0 else "TREND_DOWN") if abs(d) >= threshold else "UNKNOWN")
             baseline[market] = _compare(labels, baseline_labels)
+            baseline[market]["by_year"] = {year: _compare(
+                [label for row, label in zip(rows, labels) if row["input"]["session"][:4] == year],
+                [label for row, label in zip(rows, baseline_labels) if row["input"]["session"][:4] == year],
+            ) for year in ("2021", "2022")}
     payload = {
         "schema": EXPERIMENT_VERSION, "completion": "ABORTED" if aborted else "COMPLETE",
         "procedure_status": "UNAPPROVED_PROPOSAL_SIMULATION",

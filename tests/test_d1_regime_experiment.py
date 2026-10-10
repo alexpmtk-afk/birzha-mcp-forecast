@@ -350,3 +350,38 @@ def test_exactly_eleven_calls_no_optimization_or_extra_search(monkeypatch):
     monkeypatch.setattr(experiment, "run_d1_descriptive_research", counting)
     evaluate(payload, prepare(payload))
     assert len(seen) == len(set(seen)) == 11
+
+def test_yearly_comparisons_partition_without_changing_selection():
+    original = synthetic_bundle()
+    original_result = evaluate(original, prepare(original))
+    manifest = json.loads(original[0])
+    rows = [json.loads(line) for line in original[1].splitlines()]
+    for index, row in enumerate(rows):
+        if index % 10 >= 5:
+            row["expected_sessions"] = [d.replace("2021", "2022") for d in row["expected_sessions"]]
+            row["session"] = row["features"]["session"] = row["session"].replace("2021", "2022")
+            row["bar_event_end_at"] = row["bar_event_end_at"].replace("2021", "2022")
+    payload = encode(manifest, rows, [])
+    result = evaluate(payload, prepare(payload))
+    assert result["proposed_candidate"] == original_result["proposed_candidate"]
+    assert result["selection_reasons"] == original_result["selection_reasons"]
+    for market in MARKETS:
+        for stats in [*result["sensitivity"][market].values(), result["baseline_comparisons"][market]]:
+            annual = [stats["by_year"][y] for y in ("2021", "2022")]
+            assert all(s["disagreement_all"]["denominator"] == 5 for s in annual)
+            for key in ("disagreement_all", "disagreement_meaningful_union",
+                        "center_coverage", "other_coverage"):
+                for field in ("numerator", "denominator"):
+                    assert sum(s[key][field] for s in annual) == stats[key][field]
+
+
+def test_empty_year_comparison_denominators_remain_null():
+    payload = synthetic_bundle()
+    result = evaluate(payload, prepare(payload))
+    for market in MARKETS:
+        for stats in [*result["sensitivity"][market].values(), result["baseline_comparisons"][market]]:
+            absent = stats["by_year"]["2022"]
+            assert absent["pairs"] == {}
+            for key in ("disagreement_all", "disagreement_meaningful_union",
+                        "center_coverage", "other_coverage"):
+                assert absent[key] == {"numerator": 0, "denominator": 0, "value": None}

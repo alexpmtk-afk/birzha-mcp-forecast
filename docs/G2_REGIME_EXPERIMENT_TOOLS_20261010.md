@@ -108,3 +108,10 @@ SHA полного отчёта:
 Инструменты реализованы, полный пример сохранён, проверки прошли.
 На рыночных данных полезность не проверена. Дальше нужно принять правила
 реального опыта и выполнить его уже готовыми средствами.
+
+## Review correction
+
+Sensitivity and baseline comparisons now include descriptive by_year entries
+for 2021 and 2022 on the same admitted rows. Empty denominators remain NULL.
+The selection criterion continues to use only the original whole-period market
+comparison; annual results introduce no new gate or optimization.
