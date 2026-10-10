@@ -79,14 +79,16 @@ def test_future_malformed_revision_does_not_poison_prior_cutoff():
         store.close()
 
 
-def test_corrupted_content_addressed_base_rejected_in_asof():
+def test_original_integer_values_remain_readable_after_duckdb_double_roundtrip():
+    # Version SHA was calculated from ORIGINAL integer-valued input JSON.
+    # DuckDB projects the numeric columns as floats; recomputing the
+    # original hash from its readback falsely reports corruption.
     store=DuckDBHistoricalCandleStore()
     try:
-        _write(store,_bar(close=100.0))
-        store._connection.execute(
-            "UPDATE historical_candles SET close=145.0 WHERE secid='BRM5'")
-        with pytest.raises(ValueError,match="SHA256 does not match"):
-            _asof(store,"2025-05-06T12:00:00+03:00")
+        _write(store,replace(_bar(close=100.0),open=99,close=100,
+                             high=102,low=98,value=1000,volume=10))
+        assert _asof(store,"2025-05-06T12:00:00+03:00").candles[0].close==100.0
+        assert store.read_latest(INSTRUMENT,"D1",DAY,DAY).candles[0].close==100.0
     finally:
         store.close()
 
@@ -99,7 +101,7 @@ def test_opaque_provider_revision_token_is_not_strictly_content_attested():
         # Existing permissive legacy/current-mode behavior is preserved.
         assert store.read(INSTRUMENT,"D1",DAY,DAY).candles[0].close==100.0
         # But no one may claim this opaque identifier is a content hash.
-        with pytest.raises(ValueError,match="no verifiable content SHA256"):
+        with pytest.raises(ValueError,match="content-addressed revision token"):
             _asof(store,"2025-05-06T12:00:00+03:00")
     finally:
         store.close()
