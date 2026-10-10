@@ -43,6 +43,8 @@ def fixture(path, *, bad_raw=False, late_receipt=False):
           "created_at_t0":t0,"reference_price":100,
           "horizons":[{"sessions":n,"direction":"UP"} for n in (5,10,20)]}
         forecast_sha=h(canon(forecast))
+        raw_forecast_bytes=canon(forecast)+b"\n"
+        file_sha=h(raw_forecast_bytes)
         src_sha=h(market.encode())
         rec={"forecast_id":fid,"snapshot_id":forecast["snapshot_id"],
           "forecast_sha256":forecast_sha,"source_sha256":src_sha,
@@ -51,10 +53,10 @@ def fixture(path, *, bad_raw=False, late_receipt=False):
           "latest_completed_event_end":"2026-10-09T20:00:00Z"}
         if late_receipt and market=="Si":
             rec["source_observed_at"]="2026-10-10T15:15:52Z"
-        contents[f"g2-frozen-forecasts/{market}/forecast_record.json"]=canon(forecast)
+        contents[f"g2-frozen-forecasts/{market}/forecast_record.json"]=raw_forecast_bytes
         contents[f"g2-frozen-forecasts/{market}/capture_receipt.json"]=canon(rec)
         rows.append({"market":market,"secid":forecast["secid"],"forecast_id":fid,
-          "snapshot_id":forecast["snapshot_id"],"forecast_record_sha256":forecast_sha,
+          "snapshot_id":forecast["snapshot_id"],"forecast_record_sha256":file_sha,
           "input_bundle_sha256":src_sha,"decision_t0":t0,
           "status":"FROZEN_REAL_SOURCE_BASELINE"})
     top={"source_manifest_sha256":h(raw_manifest),
