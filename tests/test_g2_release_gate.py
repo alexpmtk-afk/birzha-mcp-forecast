@@ -94,3 +94,42 @@ def test_reviewer_approval_is_not_inferred_from_green_tests():
             gate["status"] = "PASS"
     assert validate(policy)["release_allowed"] is False
     assert any(x["gate"] == "user_approved_home_deploy" for x in validate(policy)["blocking_requirements"])
+
+
+def test_current_release_pins_include_actual_latest_colleague_decisions_and_issuer():
+    policy = base()
+    checked = validate(policy)
+    assert set(checked["three_pinned_heads"]) == {147, 155, 156}
+    assert policy["pr_dependencies"]["154"] == 151
+    assert policy["pr_dependencies"]["155"] == 154
+    assert policy["pr_dependencies"]["153"] == 152
+    assert policy["pr_dependencies"]["156"] == 153
+    assert policy["release_gates"]["code_three_line_compatibility"]["status"] == "PASS"
+    assert policy["evidence"]["synthetic_three_line_ci"]["tests_passed"] == 999
+    assert checked["release_allowed"] is False
+
+
+def test_stale_production_branch_151_cannot_replace_current_155_release_pin():
+    policy = base()
+    policy["release_leaves"][1]["pr"] = 151
+    policy["release_leaves"][1]["head"] = "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae"
+    policy["release_leaves"][1]["parent_pr"] = 149
+    with pytest.raises(ValueError, match="heads moved"):
+        validate(policy)
+
+
+def test_latest_decision_chain_rewire_fails_closed():
+    policy = base()
+    policy["pr_dependencies"]["155"] = 151
+    with pytest.raises(ValueError, match="reordered"):
+        validate(policy)
+
+
+def test_pinned_issuer_without_actual_user_production_approval_is_blocked():
+    policy = base()
+    policy["user_approved_main_merge"] = True
+    policy["user_approved_home_deploy"] = True
+    checked = validate(policy)
+    assert checked["release_allowed"] is False
+    assert any(x["gate"] == "live_forecast_issuance_after_source_receipt"
+               for x in checked["blocking_requirements"])
