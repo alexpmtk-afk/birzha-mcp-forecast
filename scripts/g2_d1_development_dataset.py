@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, timedelta
 import hashlib
 import json
 from pathlib import Path
@@ -145,7 +145,7 @@ def _read_bars(
         FROM historical_candles
         WHERE timeframe='D1' AND secid=? AND begin >= ? AND begin < ?
         ORDER BY begin
-    """, [secid, lower, date.fromisoformat(upper).isoformat()+"Z"]).fetchall()
+    """, [secid, lower, (date.fromisoformat(upper) + timedelta(days=1)).isoformat()]).fetchall()
     # upper is an ISO calendar day; compare by day, not by time-of-day.
     rows = [r for r in rows if lower <= str(r[7])[:10] <= upper]
     if not rows:
