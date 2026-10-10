@@ -96,24 +96,26 @@ def test_reviewer_approval_is_not_inferred_from_green_tests():
     assert any(x["gate"] == "user_approved_home_deploy" for x in validate(policy)["blocking_requirements"])
 
 
-def test_current_release_pins_include_actual_latest_colleague_decisions_and_issuer():
+def test_current_release_pins_include_latest_colleague_level_reactions_and_issuer():
     policy = base()
     checked = validate(policy)
-    assert set(checked["three_pinned_heads"]) == {147, 155, 156}
+    assert set(checked["three_pinned_heads"]) == {147, 157, 156}
     assert policy["pr_dependencies"]["154"] == 151
     assert policy["pr_dependencies"]["155"] == 154
+    assert policy["pr_dependencies"]["157"] == 155
     assert policy["pr_dependencies"]["153"] == 152
     assert policy["pr_dependencies"]["156"] == 153
     assert policy["release_gates"]["code_three_line_compatibility"]["status"] == "PASS"
-    assert policy["evidence"]["synthetic_three_line_ci"]["tests_passed"] == 999
+    assert policy["evidence"]["synthetic_three_line_ci"]["tests_passed"] == 1042
+    assert policy["evidence"]["synthetic_three_line_ci"]["focused_tests_passed"] == 149
     assert checked["release_allowed"] is False
 
 
-def test_stale_production_branch_151_cannot_replace_current_155_release_pin():
+def test_stale_price_level_head_155_cannot_replace_level_reaction_157_pin():
     policy = base()
-    policy["release_leaves"][1]["pr"] = 151
-    policy["release_leaves"][1]["head"] = "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae"
-    policy["release_leaves"][1]["parent_pr"] = 149
+    policy["release_leaves"][1]["pr"] = 155
+    policy["release_leaves"][1]["head"] = "0a55a9607642cd1428a396c9d69ff404c7d0578f"
+    policy["release_leaves"][1]["parent_pr"] = 154
     with pytest.raises(ValueError, match="heads moved"):
         validate(policy)
 
@@ -133,3 +135,20 @@ def test_pinned_issuer_without_actual_user_production_approval_is_blocked():
     assert checked["release_allowed"] is False
     assert any(x["gate"] == "live_forecast_issuance_after_source_receipt"
                for x in checked["blocking_requirements"])
+
+def test_level_reaction_parent_must_remain_155():
+    policy = base()
+    policy["pr_dependencies"]["157"] = 154
+    with pytest.raises(ValueError, match="reordered"):
+        validate(policy)
+
+
+def test_reaction_source_pin_and_no_independent_review_claim():
+    policy = base()
+    result = validate(policy)
+    assert result["three_pinned_heads"][157] == "abe9a42ddf1242e30162c51bfd6207127c34e92a"
+    assert policy["release_gates"]["individual_pr_semantic_review"]["status"] == "OPEN"
+    assert policy["release_authorized"] is False
+    assert policy["user_approved_main_merge"] is False
+    assert policy["user_approved_home_deploy"] is False
+    assert len(result["blocking_requirements"]) == 12
