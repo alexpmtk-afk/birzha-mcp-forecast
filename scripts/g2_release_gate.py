@@ -28,11 +28,14 @@ RESEARCH = (132, 133, 134, 135, 136, 137, 138, 140, 142, 144, 147)
 FORECAST = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148)
 PRODUCTION = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148, 149, 151)
 REVISIONS = (132, 133, 134, 135, 136, 137, 139, 141, 143, 145, 146, 148, 152)
+SOURCE_STAGING = REVISIONS + (153, 156, 162, 164, 166, 168)
+LEVEL_FACTS = FORECAST + (149, 151, 154, 155, 157, 163, 165, 167, 169)
 EXPECTED_LEAVES = {
-    152: "e105afeda4828ec3116a2e1ec6431130a11743dc",
-    151: "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae",
+    168: "93c1639a23203dc5005fdf78515053813ba8273e",
+    169: "c9dbd3b4382adc2a6f59e3b6701abfdb2e20dd6a",
     147: "82af27e1f9d79f02f8062c5756047fe1fb35ef20",
 }
+EXPECTED_PARENTS = {168: 166, 169: 167, 147: 144}
 
 
 def validate(manifest: dict) -> dict:
@@ -48,7 +51,7 @@ def validate(manifest: dict) -> dict:
     if not isinstance(raw_edges, dict):
         raise ValueError("missing PR dependency DAG")
     edges = {int(n): parent for n, parent in raw_edges.items()}
-    for node in set(RESEARCH + FORECAST + PRODUCTION + REVISIONS):
+    for node in set(RESEARCH + FORECAST + PRODUCTION + REVISIONS + SOURCE_STAGING + LEVEL_FACTS):
         if node not in edges:
             raise ValueError("missing required PR dependency")
     if edges[132] is not None:
@@ -56,7 +59,7 @@ def validate(manifest: dict) -> dict:
     for node, parent in edges.items():
         if node != 132 and (not isinstance(parent, int) or parent not in edges):
             raise ValueError("missing or invalid PR parent")
-    for path in (RESEARCH, FORECAST, PRODUCTION, REVISIONS):
+    for path in (RESEARCH, FORECAST, PRODUCTION, REVISIONS, SOURCE_STAGING, LEVEL_FACTS):
         for parent, child in zip(path, path[1:]):
             if edges[child] != parent:
                 raise ValueError("release dependency chain was reordered")
@@ -72,10 +75,13 @@ def validate(manifest: dict) -> dict:
     if not isinstance(leaves, list) or len(leaves) != 3:
         raise ValueError("expected exactly three pinned release leaves")
     leaf_pins = {p["pr"]: p["head"] for p in leaves}
-    if leaf_pins != EXPECTED_LEAVES:
+    if len(leaf_pins) != len(leaves) or leaf_pins != EXPECTED_LEAVES:
         raise ValueError("release line heads moved without independent re-audit")
-    if {p["parent_pr"] for p in leaves} != {144, 148, 149}:
+    if {p["pr"]: p["parent_pr"] for p in leaves} != EXPECTED_PARENTS:
         raise ValueError("release line dependency not pinned")
+    for node, parent in EXPECTED_PARENTS.items():
+        if edges[node] != parent:
+            raise ValueError("release line parent does not match DAG")
 
     gates = manifest.get("release_gates")
     if not isinstance(gates, dict) or set(gates) != REQUIRED:

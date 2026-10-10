@@ -94,3 +94,29 @@ def test_reviewer_approval_is_not_inferred_from_green_tests():
             gate["status"] = "PASS"
     assert validate(policy)["release_allowed"] is False
     assert any(x["gate"] == "user_approved_home_deploy" for x in validate(policy)["blocking_requirements"])
+
+
+def test_latest_source_and_real_six_market_release_pins_are_exact():
+    policy = base()
+    heads = {p["pr"]: p["head"] for p in policy["release_leaves"]}
+    assert set(heads) == {168, 169, 147}
+    policy["release_leaves"][1]["pr"] = 167
+    policy["release_leaves"][1]["head"] = "c5b815dd59dd226caf288aeb387b172911fefd4c"
+    policy["release_leaves"][1]["parent_pr"] = 165
+    with pytest.raises(ValueError, match="heads moved"):
+        validate(policy)
+
+
+@pytest.mark.parametrize("node,wrong_parent", [("168", 164), ("169", 165)])
+def test_latest_stack_dependency_rewire_fails_closed(node, wrong_parent):
+    policy = base()
+    policy["pr_dependencies"][node] = wrong_parent
+    with pytest.raises(ValueError, match="reordered"):
+        validate(policy)
+
+
+def test_wrong_parent_of_latest_leaf_fails_even_when_heads_match():
+    policy = base()
+    policy["release_leaves"][1]["parent_pr"] = 165
+    with pytest.raises(ValueError, match="dependency not pinned"):
+        validate(policy)
