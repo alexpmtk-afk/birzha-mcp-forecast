@@ -1,0 +1,139 @@
+{
+  "schema": "G2_RELEASE_DECISION_V1",
+  "audit_date": "2026-10-10",
+  "repository": "alexpmtk-afk/birzha-mcp-forecast",
+  "state": "RELEASE_BLOCKED",
+  "main_base_sha": "b6c085db18d1811f46077a447e6a2251b2df85f0",
+  "joint_research_ancestor": {
+    "pr": 137,
+    "head": "36ac2f9a6c7d28838e3e863b613a574be37d8fa6"
+  },
+  "release_leaves": [
+    {
+      "area": "forecast_data_revision_integrity",
+      "pr": 152,
+      "head": "e105afeda4828ec3116a2e1ec6431130a11743dc",
+      "parent_pr": 148
+    },
+    {
+      "area": "production_feature_contracts",
+      "pr": 151,
+      "head": "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae",
+      "parent_pr": 149
+    },
+    {
+      "area": "market_regime_research",
+      "pr": 147,
+      "head": "82af27e1f9d79f02f8062c5756047fe1fb35ef20",
+      "parent_pr": 144
+    }
+  ],
+  "pr_dependencies": {
+    "132": null,
+    "133": 132,
+    "134": 133,
+    "135": 134,
+    "136": 135,
+    "137": 136,
+    "138": 137,
+    "139": 137,
+    "140": 138,
+    "141": 139,
+    "142": 140,
+    "143": 141,
+    "144": 142,
+    "145": 143,
+    "146": 145,
+    "147": 144,
+    "148": 146,
+    "149": 148,
+    "150": 148,
+    "151": 149,
+    "152": 148
+  },
+  "evidence": {
+    "synthetic_three_line_ci": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069916800",
+      "tests_passed": 910,
+      "meaning": "GitHub-hosted temporary merge of PR #152, #151, #147; all pytest; no push.",
+      "focused_tests_passed": 144,
+      "verified_commit": "b4487b395b39e0747a5bf06471b6f6288c8ff072"
+    },
+    "forecast_freeze": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38062814940",
+      "meaning": "Six raw-source-bound uncalibrated staging ForecastRecords created 2026-10-10; zero matured future outcomes."
+    },
+    "provenance_revision_integrity": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069237397",
+      "meaning": "Serialized historical revision payload SHA and cutoff guards; original base OHLC lacks raw bytes."
+    },
+    "research_experiment": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/147",
+      "meaning": "Development descriptive research only; not independent prospective predictive validation."
+    }
+  },
+  "release_gates": {
+    "code_three_line_compatibility": {
+      "status": "PASS",
+      "evidence": "GitHub Actions 38069916800 on b4487b395b39e0747a5bf06471b6f6288c8ff072: three exact pinned HEADs, two no-push temporary merges, 144 focused and 910 full pytest PASS, compile + Preflight/Security PASS"
+    },
+    "individual_pr_semantic_review": {
+      "status": "OPEN",
+      "evidence": "No independent full-domain code review/approved merge recorded"
+    },
+    "historical_first_receipt_attestation": {
+      "status": "BLOCKED",
+      "evidence": "Old historical base rows do not retain original raw JSON/first receipt or independently attested vintage"
+    },
+    "future_outcomes_5_10_20": {
+      "status": "BLOCKED",
+      "evidence": "As of 2026-10-10 the six forecasts' future sessions have not occurred"
+    },
+    "independent_exchange_calendar_and_clock": {
+      "status": "BLOCKED",
+      "evidence": "No independently certified complete exact SECID calendar and secure time anchor"
+    },
+    "forecast_skill_and_oos_significance": {
+      "status": "BLOCKED",
+      "evidence": "No authentic matured outcomes, untouched 2023-2024 holdout not opened"
+    },
+    "forecast_protocol08_complete": {
+      "status": "OPEN",
+      "evidence": "Roadmap's complete control-route-scenarios and quality stages not approved"
+    },
+    "durable_single_canonical_storage": {
+      "status": "OPEN",
+      "evidence": "SQLite pilot and canonical DuckDB remain separate transactions; outbox production durability unproven"
+    },
+    "home_windows_readonly_acceptance": {
+      "status": "BLOCKED",
+      "evidence": "Private protected HOME GitHub Windows runner accepted diagnostic (PR #104), but no HOME queries executed: run 38070736976 lacked pwsh; run 38070781907 was blocked by Windows PowerShell execution policy ('running scripts is disabled', PSSecurityException). Do not bypass; approved protected read-only bridge route required. No HOME branch, dirty state, database or source readiness was measured."
+    },
+    "production_backup_rollback_and_authorization": {
+      "status": "OPEN",
+      "evidence": "No verified restore/rollback for exact new deployment, no explicit merge/deploy permission"
+    },
+    "live_forecast_issuance_after_source_receipt": {
+      "status": "BLOCKED",
+      "evidence": "In default non-historical ForecastService.build, MarketSnapshotService uses max(completed candle end) as snapshot.as_of, which is propagated into ForecastRecord.created_at_t0. This is event time, not proof of source HTTP receipt or wall-clock issuance. Prospective pilot correctly rejects source observed later than t0; a verified live issuance adapter must use observed real receipt clock after exact completed bars. Confirm with regression, do not backdate live forecasts."
+    }
+  },
+  "user_approved_main_merge": false,
+  "user_approved_home_deploy": false,
+  "production_data_modified": false,
+  "holdout_2023_2024_opened": false,
+  "release_authorized": false,
+  "forbidden_without_approval": [
+    "merge",
+    "deploy",
+    "production_db_mutation",
+    "secrets",
+    "automated_trading",
+    "history_rewrite",
+    "holdout_selection"
+  ]
+}
