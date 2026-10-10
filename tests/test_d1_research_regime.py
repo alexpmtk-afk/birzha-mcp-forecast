@@ -222,4 +222,3 @@ def test_scale_invariant_when_normalized_features_unchanged():
         for name, item in data.features))
     assert classify(data).state == classify(scaled).state == "TREND"
     assert classify(data).rules == classify(scaled).rules
-

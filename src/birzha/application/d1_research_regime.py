@@ -171,4 +171,3 @@ def classify_d1_research_regime(
         evidence_key=feature_set.evidence_key,
         feature_version=feature_set.version, atr_method=feature_set.atr_method,
     )
-
