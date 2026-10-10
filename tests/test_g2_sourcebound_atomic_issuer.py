@@ -148,3 +148,138 @@ def test_incomplete_network_capture_never_reaches_issuer(monkeypatch, tmp_path):
     with pytest.raises(ValueError, match="capture failed"):
         capture_and_issue_one(object(), object(), "SBER", tmp_path / "fresh", root, clock=lambda: NOW)
     assert not list(root.iterdir())
+
+
+def test_existing_mature_outcome_does_not_block_new_independent_source_issuance(tmp_path):
+    """Per-market reusable staging must not be one-shot after its first Outcome."""
+    from birzha.application.prospective_capture import CompletedSessions
+
+    src, root = stage(tmp_path)
+    first = issue_atomic_staging(src, root, "SBER", clock=lambda: NOW)
+    dates = tuple(f"2026-10-{i:02d}" for i in range(11, 16))
+    later = CompletedSessions(
+        source_payload=b"separately observed synthetic future bars",
+        source_observed_at="2026-10-15T20:01:00Z",
+        market="SBER", secid="SBER", session_dates=dates,
+        expected_calendar_dates=dates,
+        candle_completed_at=tuple(f"{d}T20:00:00Z" for d in dates),
+        candle_close=tuple(101. + i for i in range(5))
+    )
+    recovered = SingleDuckDBProspectiveStagingJournal(
+        root / "SBER.duckdb", staging_root=root, clock=lambda: NOW + timedelta(days=20)
+    )
+    try:
+        assert recovered.observe(first["forecast_id"], 5, later)["status"] == "APPENDED"
+        assert recovered.audit()["outcomes"] == 1
+    finally:
+        recovered.close()
+
+    # A later synthetic source acquisition includes a DIFFERENT raw page
+    # and fresh declared observation time. It is not a real provider proof.
+    manifest_file = src / "manifest.json"
+    manifest = json.loads(manifest_file.read_text(encoding="utf8"))
+    raw_path = src / "SBER_SBER_D1_0.json"
+    raw = json.loads(raw_path.read_bytes())
+    raw["candles"]["data"][0][1] += .01
+    updated = json.dumps(raw, sort_keys=True, separators=(",", ":")).encode()
+    raw_path.write_bytes(updated)
+    new_sha = sha256(updated).hexdigest()
+    for page in manifest["instruments"][0]["timeframes"]["D1"]["pages"]:
+        page["sha256"] = new_sha
+    for item in manifest["all_payload_files"]:
+        if item["name"] == raw_path.name:
+            item["sha256"] = new_sha
+    for meta in manifest["instruments"][0]["timeframes"].values():
+        for page in meta["pages"]:
+            page["observed_start_utc"] = "2026-10-31T15:00:00Z"
+            page["observed_end_utc"] = "2026-10-31T15:00:05Z"
+    manifest_file.write_text(json.dumps(manifest), encoding="utf8")
+
+    second = issue_atomic_staging(
+        src, root, "SBER", clock=lambda: NOW + timedelta(days=21)
+    )
+    assert second["status"] == "APPENDED"
+    assert second["forecast_id"] != first["forecast_id"]
+    assert second["canonical_atomic_audit"] == {
+        "schema": "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2",
+        "captures": 2, "outcomes": 1, "staging_only": True
+    }
+    store = SingleDuckDBProspectiveStagingJournal(
+        root / "SBER.duckdb", staging_root=root,
+        clock=lambda: NOW + timedelta(days=21)
+    )
+    try:
+        assert store.audit()["captures"] == 2
+        assert store.audit()["outcomes"] == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("location", ["raw_root", "staging_root", "raw_parent", "page"])
+def test_symlinked_path_or_page_is_rejected_before_database_access(tmp_path, location):
+    src, root = stage(tmp_path)
+    if location == "raw_root":
+        link = tmp_path / "linked_source"
+        link.symlink_to(src, target_is_directory=True)
+        src = link
+    elif location == "staging_root":
+        link = tmp_path / "linked_staging"
+        link.symlink_to(root, target_is_directory=True)
+        root = link
+    elif location == "raw_parent":
+        parent = tmp_path / "linked_parent"
+        parent.symlink_to(src, target_is_directory=True)
+        src = parent / "."
+    else:
+        filename = src / "SBER_SBER_D1_0.json"
+        backup = src / "tmp-original-backup"
+        filename.rename(backup)
+        filename.symlink_to(backup)
+        # Actual source index still names the symlink; backup is an extra
+        # unlisted file. Both should fail without a new Forecast.
+    with pytest.raises(AdmissionRefused, match="symlink|inventory"):
+        issue_atomic_staging(src, root, "SBER", clock=lambda: NOW)
+    assert list((tmp_path / "isolated_staging").glob("*.duckdb")) == []
+
+
+def test_capture_wrapper_rejects_home_source_path_before_network_request(monkeypatch, tmp_path):
+    capture_root = tmp_path / "MCP-HOME"
+    capture_root.mkdir()
+    stage_root = tmp_path / "isolated_staging"
+    stage_root.mkdir()
+    called = []
+    def forbidden_capture(*args, **kwargs):
+        called.append(True)
+        raise AssertionError("network collector should never start")
+    monkeypatch.setattr(
+        "scripts.g2_capture_and_issue_atomic_staging.capture_all", forbidden_capture
+    )
+    with pytest.raises(AdmissionRefused, match="HOME"):
+        capture_and_issue_one(
+            object(), object(), "SBER",
+            capture_root / "raw", stage_root, clock=lambda: NOW
+        )
+    assert not called
+    assert list(stage_root.iterdir()) == []
+
+
+def test_capture_wrapper_rejects_linked_output_before_network_request(monkeypatch, tmp_path):
+    stage_root = tmp_path / "safe_staging"
+    stage_root.mkdir()
+    home = tmp_path / "some-other-directory"
+    home.mkdir()
+    linked = tmp_path / "capture_link"
+    linked.symlink_to(home, target_is_directory=True)
+    called = []
+    def forbidden_capture(*args, **kwargs):
+        called.append(True)
+        raise AssertionError("network collector started despite linked output")
+    monkeypatch.setattr(
+        "scripts.g2_capture_and_issue_atomic_staging.capture_all", forbidden_capture
+    )
+    with pytest.raises(AdmissionRefused, match="symlink"):
+        capture_and_issue_one(
+            object(), object(), "SBER", linked, stage_root, clock=lambda: NOW
+        )
+    assert not called
+    assert list(stage_root.iterdir()) == []
