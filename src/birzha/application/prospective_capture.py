@@ -292,6 +292,26 @@ class ProspectivePilotLedger:
                 raise
         return {"status":"APPENDED","outcome":result}
 
+    def get_capture_record(self, forecast_id: str) -> dict[str, Any] | None:
+        """Return immutable metadata, never original input bytes or editable state."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT forecast_json,receipt_json FROM captures WHERE forecast_id=?",
+                (forecast_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"forecast": json.loads(row[0]), "receipt": json.loads(row[1])}
+
+    def list_outcomes(self, forecast_id: str) -> list[dict[str, Any]]:
+        """Read-only pilot evidence for crash-safe canonical replay."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload_json FROM outcomes WHERE forecast_id=? ORDER BY horizon",
+                (forecast_id,),
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     def audit(self) -> dict[str, Any]:
         """Recalculate stored hashes; this is corruption detection, NOT external anchoring."""
         with self._lock:
