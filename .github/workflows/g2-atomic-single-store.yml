@@ -51,9 +51,9 @@ jobs:
       - name: Assert exact source parent and fetch independent heads
         run: |
           git merge-base --is-ancestor b148b658d3f9c828d5c2dfbc5f0e4a6eb946bcbb HEAD
-          git fetch --no-tags origin +refs/heads/codex/g2-level-holding-facts-20261010:refs/remotes/origin/g2-holding
+          git fetch --no-tags origin +refs/heads/codex/g2-price-location-facts-20261010:refs/remotes/origin/g2-holding
           git fetch --no-tags origin +refs/heads/codex/g2-regime-development-results-20261010:refs/remotes/origin/g2-research
-          test "$(git rev-parse refs/remotes/origin/g2-holding)" = "977b615c7bc8da9174a21c9057b9c2952a0d452f"
+          test "$(git rev-parse refs/remotes/origin/g2-holding)" = "4b51c92879de9a59cd808a6635ba860f6f861fa6"
           test "$(git rev-parse refs/remotes/origin/g2-research)" = "82af27e1f9d79f02f8062c5756047fe1fb35ef20"
       - name: Only temporary two local merges without push
         run: |
@@ -68,7 +68,7 @@ jobs:
       - name: Install project
         run: python -m pip install -e '.[dev]'
       - name: Focused current-head contracts
-        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_baseline_decision_contract.py
+        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_price_location.py tests/test_baseline_decision_contract.py
       - name: Full combined suite
         run: python -m pytest -q
       - name: Compile
