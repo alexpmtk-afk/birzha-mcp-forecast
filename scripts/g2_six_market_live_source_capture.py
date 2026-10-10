@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import argparse
 
 MARKETS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
-TIMEFRAMES = {"D1": (24, 115), "H1": (60, 18), "M1": (1, 3)}
+TIMEFRAMES = {"D1": (24, 115), "H1": (60, 18), "M1": (1, 0)}
 COLUMNS = "open,close,high,low,value,volume,begin,end"
 RECEIPT_VERSION = "G2_SIX_MARKET_LIVE_SOURCE_RECEIPT_V1"
 MOEX_TZ = ZoneInfo("Europe/Moscow")
