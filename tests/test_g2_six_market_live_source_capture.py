@@ -93,10 +93,34 @@ def test_refuse_unfinished_or_future(tmp_path):
     with pytest.raises(ValueError,match="outside pinned"):
         _parse_page(bad,earliest=FIXED.date()-__import__('datetime').timedelta(days=1),latest=FIXED.date(),observed=FIXED)
 
-def test_refuse_source_paginated_without_cursor(tmp_path):
+def test_cursorless_full_page_is_not_mistaken_for_a_complete_market(tmp_path):
     bunch=[[100,101,102,99,None,None,"2026-10-09 10:00:00","2026-10-09 18:50:00"]]*500
-    with pytest.raises(ValueError,match="pagination"):
-        _parse_page(page(bunch),earliest=FIXED.date()-__import__('datetime').timedelta(days=1),latest=FIXED.date(),observed=FIXED)
+    rows, total, page_size = _parse_page(
+        page(bunch),earliest=FIXED.date()-__import__('datetime').timedelta(days=1),
+        latest=FIXED.date(),observed=FIXED)
+    assert len(rows)==500 and total is None and page_size==500
+
+
+def test_cursorless_pages_continue_until_short_page(tmp_path):
+    from datetime import timedelta
+    start = datetime(2026,10,9,10,0)
+    def make_rows(offset,count):
+        rows=[]
+        for i in range(offset,offset+count):
+            begin = start + timedelta(minutes=i)
+            end = begin + timedelta(seconds=59)
+            rows.append([100,101,102,99,None,None,
+                         begin.strftime("%Y-%m-%d %H:%M:%S"),
+                         end.strftime("%Y-%m-%d %H:%M:%S")])
+        return rows
+    class PageProvider(Provider):
+        def _request(self,path,params):
+            self.calls.append((path,params))
+            return page(make_rows(0,500) if params['start']==0 else make_rows(500,2))
+    provider=PageProvider()
+    meta=collect_one(provider,MarketData().resolve('SBER'),'M1',FIXED,clock,tmp_path)
+    assert meta['total_completed']==502 and len(meta['pages'])==2
+    assert [p[1]['start'] for p in provider.calls]==[0,500]
 
 def test_refuse_duplicate_candle_end_in_multi_page(tmp_path):
     p=Provider()
