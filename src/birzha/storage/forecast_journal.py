@@ -6,6 +6,7 @@ remote backend without changing forecast identity semantics.
 """
 
 from __future__ import annotations
+from birzha.domain.price_levels import PriceLevelEvidence
 
 import hashlib
 import json
@@ -194,6 +195,7 @@ def _record_from_dict(payload: dict[str, object]) -> ForecastRecord:
             float(item) for item in (payload.get("target_levels") or [])
         ),
         decision_status=str(payload["decision_status"]) if payload.get("decision_status") is not None else None,
+        level_evidence=tuple(PriceLevelEvidence(**item) for item in payload.get("level_evidence", [])),
         abstention_reasons=tuple(str(item) for item in (payload.get("abstention_reasons") or [])),
         reversal_condition=(
             str(payload["reversal_condition"])

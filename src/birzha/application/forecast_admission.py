@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from birzha.application.price_levels import build_price_level_evidence
 from birzha.application.features import _finite_price
 from birzha.application.market_state import _feature_status, _timeframe_quality
 from birzha.domain.snapshot import MarketSnapshot
@@ -53,9 +54,10 @@ def admit_baseline_snapshot(snapshot: MarketSnapshot) -> tuple[MarketSnapshot, t
     profile = snapshot.volume_profile
     if profile is not None:
         available, _ = status('distance_to_poc_atr')
-        known_method = normalized is not None and normalized.profile_method == profile.method and profile.method in {'PUBLIC_TRADES_PRICE_QUANTITY_V1', 'CANDLE_VOLUME_PROXY_V1'}
+        known_method = normalized is not None and normalized.profile_method == profile.method and profile.method in {'PUBLIC_TRADES_PRICE_QUANTITY_V1', 'CANDLE_VOLUME_PROXY_V1', 'CANDLE_TYPICAL_PRICE_VOLUME_PROXY_V1'}
         geometry = all(_finite_price(v) for v in (profile.val, profile.poc, profile.vah)) and profile.val <= profile.poc <= profile.vah
-        if available not in {'AVAILABLE', 'AVAILABLE_APPROXIMATE'} or not known_method or not geometry:
+        level_profile = build_price_level_evidence(snapshot)[-3:]
+        if available not in {'AVAILABLE', 'AVAILABLE_APPROXIMATE'} or not known_method or not geometry or any(item.price is None for item in level_profile):
             profile = None
             disabled.append('PROFILE')
     admitted = replace(snapshot, d1=states['D1'], h1=states['H1'], m15=states['M15'], volume_profile=profile)

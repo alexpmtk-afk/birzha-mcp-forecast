@@ -4,7 +4,7 @@ import pytest
 
 from test_production_feature_contracts import snapshot, instrument
 from birzha.application.forecast import build_forecast_from_snapshot, ForecastParameters
-from birzha.domain.forecast import BASELINE_EVIDENCE_RECORD_VERSION, FORECAST_RECORD_CONTRACT_VERSION
+from birzha.domain.forecast import LEVEL_EVIDENCE_RECORD_VERSION, BASELINE_EVIDENCE_RECORD_VERSION, FORECAST_RECORD_CONTRACT_VERSION
 from birzha.domain.snapshot import market_snapshot_id
 from birzha.storage.forecast_journal import DuckDBForecastJournal, ForecastCollisionError, _record_from_dict
 
@@ -14,7 +14,7 @@ def test_direction_is_an_estimate_and_never_claims_full_control_route():
     record=build_forecast_from_snapshot(snap)
     payload=record.to_dict()
     assert record.direction=='UP'
-    assert record.record_version==BASELINE_EVIDENCE_RECORD_VERSION
+    assert record.record_version==LEVEL_EVIDENCE_RECORD_VERSION
     assert record.decision_status=='BASELINE_DIRECTIONAL_ESTIMATE'
     assert record.control=='UNKNOWN' and record.route=='UNAVAILABLE'
     assert record.abstention_reasons==()

@@ -12,6 +12,7 @@ import json
 import math
 from dataclasses import dataclass
 
+from birzha.application.price_levels import build_price_level_evidence
 from birzha.application.forecast_admission import admit_baseline_snapshot
 from birzha.application.features import _finite_price
 from birzha.domain.normalized_features import NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
@@ -20,7 +21,7 @@ from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.forecast import (
     FORECAST_RECORD_CONTRACT_VERSION,
-    BASELINE_EVIDENCE_RECORD_VERSION,
+    LEVEL_EVIDENCE_RECORD_VERSION,
     ForecastRecord,
     HorizonForecast,
 )
@@ -28,7 +29,7 @@ from birzha.domain.snapshot import MarketSnapshot, market_snapshot_id
 
 
 ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
-FULL_WINDOWS_ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_6_EVIDENCE_DECISION"
+FULL_WINDOWS_ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_7_LEVEL_EVIDENCE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +89,7 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         raise ValueError('forecast scale and direction threshold must be positive')
     source_snapshot = snapshot
     evidence_contract = snapshot.normalized_features is not None and snapshot.normalized_features.version == NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
-    record_version = BASELINE_EVIDENCE_RECORD_VERSION if evidence_contract else FORECAST_RECORD_CONTRACT_VERSION
+    record_version = LEVEL_EVIDENCE_RECORD_VERSION if evidence_contract else FORECAST_RECORD_CONTRACT_VERSION
     abstention_reasons: tuple[str, ...] = ()
     disabled: tuple[str, ...] = ()
     if evidence_contract:
@@ -176,9 +177,12 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         else snapshot.d1.last_close
     )
 
-    primary, alternative, confirmation, invalidation, levels = _scenarios(snapshot, direction, reference_price)
+    level_evidence = build_price_level_evidence(source_snapshot) if evidence_contract else ()
     if evidence_contract:
         primary = alternative = confirmation = invalidation = None
+        levels = tuple(sorted({item.price for item in level_evidence if item.price is not None}))
+    else:
+        primary, alternative, confirmation, invalidation, levels = _scenarios(snapshot, direction, reference_price)
 
     return ForecastRecord(
         forecast_id=f"fcst_{digest}",
@@ -200,6 +204,7 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         confirmation_level=confirmation,
         invalidation_level=invalidation,
         key_levels=levels,
+        level_evidence=level_evidence,
         record_version=record_version,
         decision_status=decision_status,
         abstention_reasons=abstention_reasons,
