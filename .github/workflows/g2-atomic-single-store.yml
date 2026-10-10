@@ -29,11 +29,11 @@ jobs:
       - name: Install project including actual DuckDB
         run: python -m pip install -e '.[dev]'
       - name: Focused atomicity and prior staged bridge
-        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_staging_bridge.py tests/test_prospective_capture.py
+        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_prospective_capture.py
       - name: Full own-line pytest
         run: python -m pytest -q
       - name: Compile new single-store layer
-        run: python -m compileall -q src/birzha/storage/prospective_single_store.py tests/test_prospective_single_store.py
+        run: python -m compileall -q src/birzha/storage/prospective_single_store.py tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py
       - name: Confirm this is not a production migration
         run: echo "ATOMIC_STAGING_ONLY=true;NO_HOME=true;NO_PROD_DB=true;RELEASE_ALLOWED=false"
 
@@ -66,7 +66,7 @@ jobs:
       - name: Install project
         run: python -m pip install -e '.[dev]'
       - name: Focused current-head contracts
-        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_baseline_decision_contract.py
+        run: python -m pytest -q tests/test_prospective_single_store.py tests/test_prospective_single_store_process_recovery.py tests/test_prospective_staging_bridge.py tests/test_level_reaction.py tests/test_baseline_decision_contract.py
       - name: Full combined suite
         run: python -m pytest -q
       - name: Compile
