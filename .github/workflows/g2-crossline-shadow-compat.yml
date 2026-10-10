@@ -22,7 +22,7 @@ jobs:
       - name: Exact forecast branch commit guard
         shell: bash
         run: |
-          test "$(git rev-parse HEAD)" = "282497d5d3e43b35277856f84767faf834a98f59" || {
+          test "$(git rev-parse HEAD^)" = "282497d5d3e43b35277856f84767faf834a98f59" || {
             echo "::error::FORECAST_HEAD_MOVED: inspect before rerunning"
             exit 4
           }
