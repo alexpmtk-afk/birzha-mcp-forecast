@@ -384,3 +384,25 @@ def test_classifier_internal_failure_cannot_return_partial_output(tmp_path, monk
             *payload, trusted_manifest_sha256=sha256(payload[0]), parameters=params())
     assert len(calls) == 2
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("state,direction", [
+    ("BROKEN", None), ("BALANCE", "UP"), ("TREND", None), ("TREND", "SIDEWAYS"),
+    ("UNKNOWN", "UP"),
+])
+def test_invalid_classifier_state_or_direction_aborts(state, direction, tmp_path, monkeypatch):
+    from dataclasses import replace
+    import birzha.application.d1_research_runner as runner
+    monkeypatch.chdir(tmp_path)
+    original = runner.classify_d1_research_regime
+    def broken(*args, **kwargs):
+        result = replace(original(*args, **kwargs), state=state, direction=direction)
+        if state == "UNKNOWN":
+            result = replace(result, reasons=("OUTSIDE_DECLARED_REGIME_HYPOTHESES",))
+        return result
+    monkeypatch.setattr(runner, "classify_d1_research_regime", broken)
+    payload = encode(*fixtures())
+    with pytest.raises(ValueError, match="classifier"):
+        runner.run_d1_descriptive_research(
+            *payload, trusted_manifest_sha256=sha256(payload[0]), parameters=params())
+    assert list(tmp_path.iterdir()) == []

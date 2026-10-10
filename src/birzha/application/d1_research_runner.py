@@ -46,13 +46,20 @@ def run_d1_descriptive_research(
     for row in dataset.rows:
         result = classify_d1_research_regime(row.features, parameters=parameters)
         if result.state == "UNKNOWN":
-            if result.reasons != ("OUTSIDE_DECLARED_REGIME_HYPOTHESES",):
+            if (result.direction is not None
+                    or result.reasons != ("OUTSIDE_DECLARED_REGIME_HYPOTHESES",)):
                 raise ValueError("validated input rejected by classifier; whole run aborted")
             key = "UNKNOWN_TRANSITION"
         elif result.state == "TREND":
+            if result.direction not in ("UP", "DOWN"):
+                raise ValueError("invalid classifier TREND direction; whole run aborted")
             key = "TREND_" + result.direction
-        else:
+        elif result.state == "BALANCE":
+            if result.direction is not None:
+                raise ValueError("invalid classifier BALANCE direction; whole run aborted")
             key = "BALANCE"
+        else:
+            raise ValueError("unknown classifier state; whole run aborted")
         summary[row.market][key] += 1
         results.append({"input": json.loads(row.original_json), "regime": result.to_dict()})
     payload = {
