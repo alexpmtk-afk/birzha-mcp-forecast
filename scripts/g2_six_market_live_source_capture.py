@@ -90,7 +90,8 @@ def _parse_page(response, *, earliest, latest, observed):
             raise ValueError("invalid or missing positive OHLC")
         if prices[2] < max(prices[0], prices[1]) or prices[3] > min(prices[0], prices[1]):
             raise ValueError("inconsistent candle high/low")
-        result.append({"begin": begin.isoformat(), "end": end.isoformat(),
+        result.append({"begin": begin.astimezone(timezone.utc).isoformat(),
+                       "end": end.astimezone(timezone.utc).isoformat(),
                        "open": prices[0], "close": prices[1], "high": prices[2],
                        "low": prices[3], "volume": row.get("volume"), "value": row.get("value")})
     cursor = payload.get("candles.cursor") or {}
