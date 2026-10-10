@@ -16,10 +16,10 @@
       "parent_pr": 166
     },
     {
-      "area": "admitted_levels_movement_and_combined_T0_vs_later_observations",
-      "pr": 173,
-      "head": "f22624b804e8057af61a72ae12e812177d7121cf",
-      "parent_pr": 171
+      "area": "admitted_levels_movement_combined_six_market_explanations_and_input_diagnostics",
+      "pr": 179,
+      "head": "1097e67ae240b797e9e7d62e276745dc0bb4294d",
+      "parent_pr": 178
     },
     {
       "area": "market_regime_research",
@@ -71,7 +71,13 @@
     "171": 169,
     "172": 170,
     "173": 171,
-    "174": 172
+    "174": 172,
+    "175": 173,
+    "176": 174,
+    "177": 176,
+    "178": 175,
+    "179": 178,
+    "180": 177
   },
   "evidence": {
     "synthetic_three_line_ci": {
@@ -120,12 +126,20 @@
       "focused_tests_passed": 265,
       "full_tests_passed": 1278,
       "meaning": "Exact #168/#173/#147 two temporary runner-only merges PASS, all focused/full tests PASS. The final manifest-change HEAD must rerun before fully accepted."
+    },
+    "latest_168_179_147_shadow_ci": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38088027415",
+      "tested_workflow_commit": "967f190ec9440a5efbe64b7e8320739ca96f021f",
+      "focused_tests_passed": 375,
+      "full_tests_passed": 1428,
+      "meaning": "CI verified #168 + #179 (includes #175/#178) + #147 temporary SHA-exact merges and full tests. Subsequent explicit /opt/mcp root denial and negative tests require final-head repeat; do not count this as fully final."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
       "status": "PASS",
-      "evidence": "GitHub-hosted no-push exact #168 + #173 (includes #171/#169/#167) + #147 integration at run 38085524574, workflow commit 81874b1f7b2d6831d05bdec1b0c6791f2fca4ce2. 265 targeted and 1278 full pytest PASS, compile, Security, Preflight PASS. This is compatibility only; final-HEAD audit rerun required after manifest update."
+      "evidence": "SHA-pinned CI-only #168 (93c1639a...), #179 (1097e67a..., includes #175/#178), #147 (82af27e1...) ephemeral two-merge integration no push at Actions 38088027415, head 967f190ec9440a5efbe64b7e8320739ca96f021f: 375 focused, 1428 full pytest PASS, compile, Preflight, Security PASS. Subsequently strengthened exact /opt/mcp directory guard and added negative tests; FINAL-HEAD rerun is required and is separate."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
