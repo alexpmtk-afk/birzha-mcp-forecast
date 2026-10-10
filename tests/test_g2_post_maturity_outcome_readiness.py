@@ -119,3 +119,29 @@ def test_future_zip_wrong_contract_cannot_mature_any_horizon(tmp_path):
     result=readiness(p,future_zip=q)
     assert result["status_counts"]=={"FUTURE_EXACT_CONTRACT_NOT_AVAILABLE":18}
     assert result["canonical_outcomes_appended"]==0
+
+
+def test_future_twenty_closes_still_require_independent_calendar(tmp_path):
+    p=fixture(tmp_path/"frozen.zip")
+    q=tmp_path/"later.zip"
+    from zoneinfo import ZoneInfo
+    base=datetime(2026,10,12,20,0,tzinfo=ZoneInfo("Europe/Moscow"))
+    rows=[]
+    for i in range(20):
+        day=base+timedelta(days=i)
+        # Synthetic weekdays are NOT used to certify a real exchange calendar.
+        rows.append([100+i,day.strftime("%Y-%m-%d %H:%M:%S")])
+    body=canon({"candles":{"columns":["close","end"],"data":rows}})
+    future={
+      "instruments":[{"market":"SBER","resolved_secid":"SBER","timeframes":{
+        "D1":{"pages":[{"path":"SBER_SBER_D1_0.json",
+          "sha256":h(body),"observed_end_utc":"2026-11-20T20:00:00Z"}]}}}],
+      "failed_markets":[]}
+    with ZipFile(q,"w") as z:
+        z.writestr("g2-raw-sources/manifest.json",canon(future))
+        z.writestr("g2-raw-sources/SBER_SBER_D1_0.json",body)
+    result=readiness(p,future_zip=q)
+    sber=[o for o in result["outcomes"] if o["market"]=="SBER"]
+    assert len(sber)==3
+    assert all(o["status"]=="PENDING_VERIFIED_SESSION_CALENDAR" for o in sber)
+    assert result["canonical_outcomes_appended"]==0
