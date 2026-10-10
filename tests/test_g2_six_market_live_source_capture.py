@@ -136,3 +136,57 @@ def test_nan_or_bad_high_low_is_rejected():
     invalid=page([[100,101,100,99,None,None,"2026-10-09 10:00:00","2026-10-09 18:50:00"]])
     with pytest.raises(ValueError,match="high/low"):
         _parse_page(invalid,earliest=FIXED.date()-__import__("datetime").timedelta(days=1),latest=FIXED.date(),observed=FIXED)
+
+
+def test_M1_window_covers_multiple_sessions_without_relaxing_page_limit(tmp_path):
+    """Real smoke showed 36 M15 from one day; 50 must not be faked."""
+    from datetime import timedelta
+    assert TIMEFRAMES["M1"] == (1, 5)
+    assert MAX_PAGES == 8
+    provider = Provider()
+    meta = collect_one(
+        provider, MarketData().resolve("SBER"), "M1", FIXED, clock, tmp_path
+    )
+    cutoff = FIXED.astimezone(__import__("zoneinfo").ZoneInfo("Europe/Moscow")).date() - timedelta(days=1)
+    assert provider.calls[0][1]["from"] == (cutoff - timedelta(days=5)).isoformat()
+    assert provider.calls[0][1]["till"] == cutoff.isoformat()
+    assert meta["requested_from"] == provider.calls[0][1]["from"]
+    assert meta["requested_till"] == provider.calls[0][1]["till"]
+
+
+def test_minute_page_limit_is_bounded_and_separate_from_daily_hourly():
+    from scripts.g2_six_market_live_source_capture import M1_MAX_PAGES
+    assert MAX_PAGES == 8
+    assert M1_MAX_PAGES == 32
+    assert MAX_PAGES < M1_MAX_PAGES <= 32
+
+
+def test_minute_capture_rejects_still_full_at_page_32(tmp_path):
+    """Even a 5-day M1 request cannot silently truncate source page 33."""
+    from datetime import timedelta
+    from scripts.g2_six_market_live_source_capture import M1_MAX_PAGES
+    base = datetime(2026, 10, 4, 10, 0)
+
+    class NeverEndingProvider(Provider):
+        def _request(self, path, params):
+            self.calls.append((path, params))
+            index = int(params["start"]) // 100
+            rows = []
+            for step in range(100):
+                begin = base + timedelta(minutes=index * 100 + step)
+                end = begin + timedelta(seconds=59)
+                rows.append([100,101,102,99,None,None,
+                             begin.strftime("%Y-%m-%d %H:%M:%S"),
+                             end.strftime("%Y-%m-%d %H:%M:%S")])
+            return page(rows, cursor=[100 * (M1_MAX_PAGES + 1),100])
+
+    provider = NeverEndingProvider()
+    with pytest.raises(ValueError, match="maximum governed source pages exceeded"):
+        collect_one(
+            provider, MarketData().resolve("SBER"), "M1",
+            FIXED, clock, tmp_path
+        )
+    assert len(provider.calls) == M1_MAX_PAGES
+    assert [request["start"] for _, request in provider.calls] == [
+        100 * i for i in range(M1_MAX_PAGES)
+    ]

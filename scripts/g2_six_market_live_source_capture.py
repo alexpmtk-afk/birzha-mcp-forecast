@@ -19,11 +19,16 @@ from zoneinfo import ZoneInfo
 import argparse
 
 MARKETS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
-TIMEFRAMES = {"D1": (24, 115), "H1": (60, 18), "M1": (1, 0)}
+# At least 50 completed M15 bars require >1 SBER trading session.
+# Keep five-day calendar window bounded by MAX_PAGES; do not fabricate bars.
+TIMEFRAMES = {"D1": (24, 115), "H1": (60, 18), "M1": (1, 5)}
 COLUMNS = "open,close,high,low,value,volume,begin,end"
 RECEIPT_VERSION = "G2_SIX_MARKET_LIVE_SOURCE_RECEIPT_V1"
 MOEX_TZ = ZoneInfo("Europe/Moscow")
 MAX_PAGES = 8
+# M1 needs at least 750 genuine minute bars for 50 complete M15 buckets.
+# MOEX often paginates 100 per request; cap remains finite and per-timeframe.
+M1_MAX_PAGES = 32
 
 
 def stable(data):
@@ -123,7 +128,8 @@ def collect_one(provider, instrument, timeframe, now, clock, folder):
     candles = []
     expected_total = None
     page_size = None
-    for index in range(MAX_PAGES):
+    page_limit = M1_MAX_PAGES if timeframe == "M1" else MAX_PAGES
+    for index in range(page_limit):
         start = 0 if page_size is None else page_size * index
         response, started, ended, header_date = _source_request(provider,path,{**params,"start":start},clock)
         # Original HTTP response bytes MUST survive even an invalid page.
