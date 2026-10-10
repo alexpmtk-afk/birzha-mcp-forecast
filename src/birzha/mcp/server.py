@@ -319,12 +319,12 @@ def data_flow_backfill_causal_availability(dry_run: bool = True) -> dict[str, ob
     }
 
 
-@mcp.tool(name="forecast.build", description="Build an explainable ex-ante BIRZHA baseline forecast without persistence. Use forecast.create for an operational forecast that must enter the journal.")
+@mcp.tool(name="forecast.build", description="Build a read-only UNVALIDATED baseline preview from event-time market candles. This is NOT an attested prospective issue T0; does not write any Forecast Journal record.")
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _forecast.build(symbol, as_of_date=as_of_date).to_dict()
 
 
-@mcp.tool(name="forecast.create", description="Create an ex-ante forecast and append it immutably to the configured Forecast Journal. Identical duplicate writes are idempotent; conflicting content is rejected.")
+@mcp.tool(name="forecast.create", description="PROTECTED: refuse operational forecast journal writes while actual source first-receipt and fresh issued-at T0 are unverified. This legacy event-time route cannot certify prospective issuance.")
 def forecast_create(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
     return _journal.create_and_save(symbol, as_of_date=as_of_date)
 
