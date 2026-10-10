@@ -10,16 +10,16 @@
   },
   "release_leaves": [
     {
-      "area": "forecast_data_revision_integrity",
-      "pr": 152,
-      "head": "e105afeda4828ec3116a2e1ec6431130a11743dc",
-      "parent_pr": 148
+      "area": "source_bound_forecast_issuance_and_data_revision",
+      "pr": 156,
+      "head": "5f091403510a7af0a4c036404db7c04af959120d",
+      "parent_pr": 153
     },
     {
-      "area": "production_feature_contracts",
-      "pr": 151,
-      "head": "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae",
-      "parent_pr": 149
+      "area": "baseline_decisions_and_price_level_evidence",
+      "pr": 155,
+      "head": "0a55a9607642cd1428a396c9d69ff404c7d0578f",
+      "parent_pr": 154
     },
     {
       "area": "market_regime_research",
@@ -49,16 +49,21 @@
     "149": 148,
     "150": 148,
     "151": 149,
-    "152": 148
+    "152": 148,
+    "153": 152,
+    "154": 151,
+    "155": 154,
+    "156": 153,
+    "158": 156
   },
   "evidence": {
     "synthetic_three_line_ci": {
       "status": "PASS",
-      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069916800",
-      "tests_passed": 910,
-      "meaning": "GitHub-hosted temporary merge of PR #152, #151, #147; all pytest; no push.",
-      "focused_tests_passed": 144,
-      "verified_commit": "b4487b395b39e0747a5bf06471b6f6288c8ff072"
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38078049456",
+      "tests_passed": 999,
+      "focused_tests_passed": 106,
+      "verified_commit": "a2584c09c59c8c8333e8e63cffacb6e1df7e1b39",
+      "meaning": "CI-only local merge exact current HEADs PR #156 source issuance, PR #155 baseline decisions / price levels and PR #147 regime research; full pytest 999 PASS; no repository push."
     },
     "forecast_freeze": {
       "status": "PASS",
@@ -79,7 +84,7 @@
   "release_gates": {
     "code_three_line_compatibility": {
       "status": "PASS",
-      "evidence": "GitHub Actions 38069916800 on b4487b395b39e0747a5bf06471b6f6288c8ff072: three exact pinned HEADs, two no-push temporary merges, 144 focused and 910 full pytest PASS, compile + Preflight/Security PASS"
+      "evidence": "GitHub Actions 38078049456 (shadow CI-only HEAD a2584c09c59c8c8333e8e63cffacb6e1df7e1b39): exact PR #156 + #155 + #147 temporary no-push merges, 106 focused and 999 full pytest PASS, compile, Security and Preflight PASS."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
@@ -119,7 +124,7 @@
     },
     "live_forecast_issuance_after_source_receipt": {
       "status": "BLOCKED",
-      "evidence": "In default non-historical ForecastService.build, MarketSnapshotService uses max(completed candle end) as snapshot.as_of, which is propagated into ForecastRecord.created_at_t0. This is event time, not proof of source HTTP receipt or wall-clock issuance. Prospective pilot correctly rejects source observed later than t0; a verified live issuance adapter must use observed real receipt clock after exact completed bars. Confirm with regression, do not backdate live forecasts."
+      "evidence": "In default non-historical ForecastService.build, MarketSnapshotService uses max(completed candle end) as snapshot.as_of, which is propagated into ForecastRecord.created_at_t0. This is event time, not proof of source HTTP receipt or wall-clock issuance. Prospective pilot correctly rejects source observed later than t0; a verified live issuance adapter must use observed real receipt clock after exact completed bars. Confirm with regression, do not backdate live forecasts. New reusable prospective issuer PR #156 staging-only PASS after 925 tests; NOT yet mandatory in all production/live ForecastService callers; new PR #155 contract compatibility passed with 999 tests. Does not prove authenticated provider first receipt."
     }
   },
   "user_approved_main_merge": false,
