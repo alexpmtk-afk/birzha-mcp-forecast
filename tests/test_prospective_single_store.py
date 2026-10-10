@@ -239,3 +239,42 @@ def test_identical_retries_after_restart_still_preserve_receipts_and_outcomes(tm
     assert store.observe("atomic_fixture_01",5,future())["outcome"]==first_outcome["outcome"]
     assert store.audit()["captures"]==1 and store.audit()["outcomes"]==1
     store.close()
+
+
+def test_replayed_future_input_fingerprint_is_audited_on_reopen(tmp_path):
+    store=db(tmp_path)
+    store.capture(forecast(),original())
+    store.close()
+    store=db(tmp_path,now=T0+timedelta(days=30))
+    store.observe("atomic_fixture_01",5,future())
+    store.close()
+
+    import duckdb
+    import hashlib
+    import json
+    conn=duckdb.connect(str(tmp_path/"atomic.duckdb"))
+    body=json.loads(conn.execute("SELECT evidence_json FROM g2_atomic_futures").fetchone()[0])
+    assert body["future_input_evidence"]["candle_close"][0]==101.0
+    body["future_input_evidence"]["candle_close"][0]=999.0
+    # Even recomputing the *outer* row hash cannot hide a stale inner input
+    # fingerprint. This is local consistency only, NOT an external signature.
+    encoded=json.dumps(body,sort_keys=True,ensure_ascii=False,separators=(",",":"),allow_nan=False)
+    conn.execute("UPDATE g2_atomic_futures SET evidence_json=?,evidence_sha=?",
+                 [encoded,hashlib.sha256(encoded.encode()).hexdigest()])
+    conn.close()
+    store=db(tmp_path,now=T0+timedelta(days=30))
+    with pytest.raises(ImmutableCollision, match="future input evidence fingerprint"):
+        store.audit()
+    store.close()
+
+
+def test_disposable_v1_store_fails_closed_under_strict_v2_evidence_contract(tmp_path):
+    store=db(tmp_path)
+    store.capture(forecast(),original())
+    store.close()
+    import duckdb
+    conn=duckdb.connect(str(tmp_path/"atomic.duckdb"))
+    conn.execute("UPDATE g2_atomic_meta SET version='G2_ATOMIC_SINGLE_DUCKDB_STAGING_V1'")
+    conn.close()
+    with pytest.raises(AdmissionRefused, match="incompatible staging version"):
+        db(tmp_path)
