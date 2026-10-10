@@ -328,6 +328,20 @@ class DuckDBHistoricalCandleStore:
                 receipt = _receipt_utc(str(observed_at) if observed_at is not None else None)
                 if receipt is None or receipt > knowledge_cutoff:
                     continue
+            # Unlike the base table, the revisions table retains the
+            # ORIGINAL canonical payload JSON, so SHA verification does not
+            # depend on lossy DuckDB INTEGER/FLOAT round-trip formatting.
+            token = str(revision)
+            content_addressed = (
+                len(token) == 64
+                and all(ch in "0123456789abcdefABCDEF" for ch in token)
+            )
+            if content_addressed:
+                actual_sha = hashlib.sha256(str(payload_json).encode("utf-8")).hexdigest()
+                if actual_sha != token.lower():
+                    raise ValueError("candle version SHA256 does not match stored revision payload")
+            elif knowledge_cutoff is not None:
+                raise ValueError("historical T0 candle revision has no content-addressed SHA256")
             payload = json.loads(str(payload_json))
             if not isinstance(payload, dict) or payload.get("begin") != str(begin):
                 raise ValueError("revision payload does not match stored candle begin")
@@ -366,22 +380,21 @@ class DuckDBHistoricalCandleStore:
                                 continue
                         except ValueError:
                             continue
-                # Content-addressed version identity is independently checked
-                # against the actual selected OHLC bytes; otherwise an
-                # overwritten revision payload could silently alter as-of T0.
-                # Legacy non-hash tokens remain readable only in explicit
-                # non-strict first/latest modes, not certified historical T0.
+                # The base table does not preserve original numeric JSON:
+                # values such as 100 and 100.0 round-trip to the same
+                # DuckDB DOUBLE. Its content SHA cannot safely be recomputed
+                # from the projected Candle without creating false failures.
+                # Existing base timestamps and original receipts still obey
+                # the opt-in causal cutoff, but historical vintage/legacy
+                # bytes are NOT independently certified by this read.
                 token = item.revision
-                content_sha, _ = _candle_revision(item, item.source or "")
                 is_sha256 = (
                     isinstance(token, str)
                     and len(token) == 64
                     and all(ch in "0123456789abcdefABCDEF" for ch in token)
                 )
-                if is_sha256 and token.lower() != content_sha:
-                    raise ValueError("candle version SHA256 does not match stored OHLC payload")
                 if knowledge_cutoff is not None and not is_sha256:
-                    raise ValueError("historical T0 candle version has no verifiable content SHA256")
+                    raise ValueError("historical T0 candle lacks a content-addressed revision token")
                 candidates.append((item, observed))
             if not candidates:
                 continue
