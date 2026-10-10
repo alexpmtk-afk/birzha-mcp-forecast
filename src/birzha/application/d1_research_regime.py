@@ -129,6 +129,8 @@ def classify_d1_research_regime(
             issues.append(f"MISSING_FEATURE:{name}")
         elif item.status != "AVAILABLE":
             issues.append(f"UNAVAILABLE_FEATURE:{name}:{item.status}")
+            if item.reason is not None:
+                issues.append(f"FEATURE_REASON:{name}:{item.reason}")
         elif not _finite_number(item.value):
             issues.append(f"INVALID_FEATURE_VALUE:{name}")
         else:

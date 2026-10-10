@@ -222,3 +222,20 @@ def test_scale_invariant_when_normalized_features_unchanged():
         for name, item in data.features))
     assert classify(data).state == classify(scaled).state == "TREND"
     assert classify(data).rules == classify(scaled).rules
+
+
+@pytest.mark.parametrize("reason", [
+    "zero_20_step_closing_path",
+    "invalid_or_unfinished_exact_session_ohlc",
+    "requires_21_exact_sessions_got_20",
+])
+def test_unavailable_feature_preserves_upstream_reason(reason):
+    data = inputs()
+    data = replace(data, features=tuple(
+        (key, ResearchFeature(None, "UNAVAILABLE", reason))
+        if key == "er20" else (key, item) for key, item in data.features))
+    result = classify(data)
+    assert result.state == "UNKNOWN"
+    assert result.rules == ()
+    assert "UNAVAILABLE_FEATURE:er20:UNAVAILABLE" in result.reasons
+    assert f"FEATURE_REASON:er20:{reason}" in result.to_dict()["reasons"]
