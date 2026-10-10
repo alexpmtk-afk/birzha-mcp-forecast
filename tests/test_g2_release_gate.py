@@ -99,17 +99,18 @@ def test_reviewer_approval_is_not_inferred_from_green_tests():
 def test_current_release_pins_include_actual_latest_colleague_decisions_and_issuer():
     policy = base()
     checked = validate(policy)
-    assert set(checked["three_pinned_heads"]) == {147, 155, 156}
+    assert set(checked["three_pinned_heads"]) == {147, 157, 156}
     assert policy["pr_dependencies"]["154"] == 151
     assert policy["pr_dependencies"]["155"] == 154
+    assert policy["pr_dependencies"]["157"] == 155
     assert policy["pr_dependencies"]["153"] == 152
     assert policy["pr_dependencies"]["156"] == 153
-    assert policy["release_gates"]["code_three_line_compatibility"]["status"] == "PASS"
+    assert policy["release_gates"]["code_three_line_compatibility"]["status"] == "PENDING"
     assert policy["evidence"]["synthetic_three_line_ci"]["tests_passed"] == 999
     assert checked["release_allowed"] is False
 
 
-def test_stale_production_branch_151_cannot_replace_current_155_release_pin():
+def test_stale_production_branch_151_cannot_replace_current_157_release_pin():
     policy = base()
     policy["release_leaves"][1]["pr"] = 151
     policy["release_leaves"][1]["head"] = "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae"
@@ -133,3 +134,25 @@ def test_pinned_issuer_without_actual_user_production_approval_is_blocked():
     assert checked["release_allowed"] is False
     assert any(x["gate"] == "live_forecast_issuance_after_source_receipt"
                for x in checked["blocking_requirements"])
+
+
+def test_previous_colleague_155_head_rejected_after_157_pin():
+    policy = base()
+    policy["release_leaves"][1].update({"pr": 155, "head": "0a55a9607642cd1428a396c9d69ff404c7d0578f", "parent_pr": 154})
+    with pytest.raises(ValueError, match="heads moved"):
+        validate(policy)
+
+
+def test_missing_reaction_dependency_and_false_ci_pass_are_rejected():
+    policy = base()
+    del policy["pr_dependencies"]["157"]
+    with pytest.raises(ValueError, match="missing required PR dependency"):
+        validate(policy)
+    policy = base()
+    policy["pr_dependencies"]["157"] = 154
+    with pytest.raises(ValueError, match="reordered"):
+        validate(policy)
+    policy = base()
+    policy["release_authorized"] = True
+    with pytest.raises(ValueError, match="release_authorized contradicts"):
+        validate(policy)
