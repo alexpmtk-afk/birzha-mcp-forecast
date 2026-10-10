@@ -16,10 +16,10 @@
       "parent_pr": 153
     },
     {
-      "area": "baseline_decisions_and_price_level_evidence",
-      "pr": 155,
-      "head": "0a55a9607642cd1428a396c9d69ff404c7d0578f",
-      "parent_pr": 154
+      "area": "baseline_decision_price_levels_and_post_t0_reaction_facts",
+      "pr": 157,
+      "head": "abe9a42ddf1242e30162c51bfd6207127c34e92a",
+      "parent_pr": 155
     },
     {
       "area": "market_regime_research",
@@ -54,16 +54,19 @@
     "154": 151,
     "155": 154,
     "156": 153,
-    "158": 156
+    "157": 155,
+    "158": 156,
+    "159": 158,
+    "160": 159
   },
   "evidence": {
     "synthetic_three_line_ci": {
       "status": "PASS",
-      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38078049456",
-      "tests_passed": 999,
-      "focused_tests_passed": 106,
-      "verified_commit": "a2584c09c59c8c8333e8e63cffacb6e1df7e1b39",
-      "meaning": "CI-only local merge exact current HEADs PR #156 source issuance, PR #155 baseline decisions / price levels and PR #147 regime research; full pytest 999 PASS; no repository push."
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38079241225",
+      "tests_passed": 1042,
+      "focused_tests_passed": 149,
+      "verified_commit": "a5683ce936a53687b2c3f37605509b124369e061",
+      "meaning": "GitHub Actions isolated runner-only no-push merge of source-bound issuer #156 5f091403, post-T0 level reaction #157 abe9a42d (including decisions and price levels #155), descriptive regime #147 82af27e; 149 targeted and 1042 full project pytest PASS. Does NOT prove real exchange receipts, calendar, holding, acceptance or forecasting skill."
     },
     "forecast_freeze": {
       "status": "PASS",
@@ -79,12 +82,17 @@
       "status": "PASS",
       "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/147",
       "meaning": "Development descriptive research only; not independent prospective predictive validation."
+    },
+    "level_reaction_facts": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38077936521",
+      "meaning": "Separate immutable SQLite journal of later completed OHLC observations against nine earlier frozen level sources, with SECID and received-time guards. Synthetic-only and colleague-tested; no independent market admissibility or semantic approval."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
       "status": "PASS",
-      "evidence": "GitHub Actions 38078049456 (shadow CI-only HEAD a2584c09c59c8c8333e8e63cffacb6e1df7e1b39): exact PR #156 + #155 + #147 temporary no-push merges, 106 focused and 999 full pytest PASS, compile, Security and Preflight PASS."
+      "evidence": "GitHub Actions run 38079241225 at CI-only commit a5683ce936a53687b2c3f37605509b124369e061: exact #156+#157+#147 temporary no-push merges, 149 focused and 1042 full pytest PASS, compile, Preflight and Security PASS; no production/main/HOME changes."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
@@ -124,7 +132,7 @@
     },
     "live_forecast_issuance_after_source_receipt": {
       "status": "BLOCKED",
-      "evidence": "In default non-historical ForecastService.build, MarketSnapshotService uses max(completed candle end) as snapshot.as_of, which is propagated into ForecastRecord.created_at_t0. This is event time, not proof of source HTTP receipt or wall-clock issuance. Prospective pilot correctly rejects source observed later than t0; a verified live issuance adapter must use observed real receipt clock after exact completed bars. Confirm with regression, do not backdate live forecasts. New reusable prospective issuer PR #156 staging-only PASS after 925 tests; NOT yet mandatory in all production/live ForecastService callers; new PR #155 contract compatibility passed with 999 tests. Does not prove authenticated provider first receipt."
+      "evidence": "In default non-historical ForecastService.build, MarketSnapshotService uses max(completed candle end) as snapshot.as_of, which is propagated into ForecastRecord.created_at_t0. This is event time, not proof of source HTTP receipt or wall-clock issuance. Prospective pilot correctly rejects source observed later than t0; a verified live issuance adapter must use observed real receipt clock after exact completed bars. Confirm with regression, do not backdate live forecasts. New reusable prospective issuer PR #156 staging-only PASS after 925 tests; NOT yet mandatory in all production/live ForecastService callers; new PR #155 contract compatibility passed with 999 tests. Does not prove authenticated provider first receipt. New #157 reaction compatibility CI (1042 tests) does not prove a source-first real issue clock, independently attested calendar, or a trusted later price observation."
     }
   },
   "user_approved_main_merge": false,
