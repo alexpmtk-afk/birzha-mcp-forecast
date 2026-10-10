@@ -33,7 +33,21 @@ jobs:
         run: python -m pytest -q
       - name: Run forecast baseline, receipt and actual DuckDB journal integration tests
         run: |
-          python -m pytest -q tests/test_g2_first_forecast_development.py tests/test_prospective_capture.py tests/test_prospective_staging_bridge.py
+          python -m pytest -q tests/test_g2_first_forecast_development.py tests/test_prospective_capture.py tests/test_prospective_staging_bridge.py tests/test_g2_moex_raw_capture_probe.py
+      - name: Read-only actual MOEX original response probe (non-blocking external provider)
+        id: moex_raw
+        continue-on-error: true
+        run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE/src:$GITHUB_WORKSPACE"
+          python -m scripts.g2_moex_raw_capture_probe --output-dir "$RUNNER_TEMP/g2-real-moex-capture"
+      - name: Preserve real MOEX raw response evidence if provider probe passed
+        if: steps.moex_raw.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: g2-moex-original-response-readonly
+          path: ${{ runner.temp }}/g2-real-moex-capture/
+          if-no-files-found: error
+          retention-days: 7
       - name: Compile own modules and tests
         run: |
           python -m compileall -q src/birzha/application/prospective_capture.py src/birzha/application/prospective_staging_bridge.py tests/test_prospective_capture.py tests/test_prospective_staging_bridge.py
