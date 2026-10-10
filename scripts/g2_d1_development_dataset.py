@@ -21,12 +21,12 @@ from typing import Any
 from birzha.application.d1_research_features import (
     D1_RESEARCH_FEATURE_VERSION, build_d1_research_features,
 )
+from birzha.application.historical_data import _verification_symbol
 from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
 from birzha.domain.market import Candle, CandleSeries, Instrument
 
 MARKETS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
 FUTURES = frozenset(("Si", "BR", "GOLD"))
-CALENDAR_SUFFIX = "ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V2_ACTIVITY"
 DEVELOPMENT_START = "2021-01-01"
 DEVELOPMENT_END = "2022-12-31"
 EXTRACTOR_VERSION = "G2_SIX_MARKET_D1_DEVELOPMENT_DATASET_V1"
@@ -51,7 +51,14 @@ def _canonical(data: Any) -> str:
 
 
 def _root_key(market: str) -> str:
-    return f"{market}#{CALENDAR_SUFFIX}"
+    """Use the same D1 session namespace as HistoricalDataService.
+
+    Rolling futures roots have an extra rolling-history component;
+    equities and indices do not. Never accept a guessed legacy key.
+    """
+    if market not in MARKETS:
+        raise ValueError(f"unsupported research market: {market}")
+    return _verification_symbol(market, "D1", is_root=market in FUTURES)
 
 
 def load_v2(path: Path, archive_hash: str) -> dict[str, dict[str, Any]]:
