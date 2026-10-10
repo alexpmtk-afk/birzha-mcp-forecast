@@ -43,16 +43,20 @@ def capture(provider: Any, output: Path, *, clock: Callable[[], datetime] = lamb
     output = Path(output)
     if output.exists() and any(output.iterdir()):
         raise ValueError('refusing non-empty capture directory overwrite')
-    before = clock().astimezone(timezone.utc)
-    if before.utcoffset() is None:
+    clock_before = clock()
+    if clock_before.tzinfo is None or clock_before.utcoffset() is None:
         raise ValueError('wall clock must be timezone aware')
+    before = clock_before.astimezone(timezone.utc)
     until = before.astimezone(TZ).date() - timedelta(days=1)
     start = until - timedelta(days=13)
     params = {'iss.meta':'off','iss.only':'candles','from':start.isoformat(),
               'till':until.isoformat(),'interval':24,'candles.columns':COLUMNS,'start':0}
     # This method is governed by MoexIssClient's policy; no raw unmetered HTTP.
     response = provider._request(ISS_PATH, params)
-    after = clock().astimezone(timezone.utc)
+    clock_after = clock()
+    if clock_after.tzinfo is None or clock_after.utcoffset() is None:
+        raise ValueError('wall clock must be timezone aware')
+    after = clock_after.astimezone(timezone.utc)
     if after < before or (after-before).total_seconds() > 90:
         raise ValueError('clock reversed or provider request took >90 seconds')
     if response.status_code != 200 or not isinstance(response.body, bytes) or not response.body:
