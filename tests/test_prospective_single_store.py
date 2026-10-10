@@ -179,3 +179,63 @@ def test_all_three_future_outcomes_one_file_one_canonical_journal(tmp_path):
     assert store.audit()["outcomes"]==3
     store.close()
     assert [p.name for p in tmp_path.glob("*.duckdb")]==["atomic.duckdb"]
+
+
+def test_repeated_capture_rejects_mutated_source_observed_at_even_with_same_raw_sha(tmp_path):
+    store=db(tmp_path)
+    store.capture(forecast(),original())
+    with pytest.raises(ImmutableCollision, match="source evidence"):
+        store.capture(forecast(),original(source_observed_at="2026-10-10T11:59:26Z"))
+    assert store.audit()["captures"]==1
+    store.close()
+
+
+def test_repeated_capture_rejects_mutated_last_completed_event_end(tmp_path):
+    store=db(tmp_path)
+    store.capture(forecast(),original())
+    with pytest.raises(ImmutableCollision, match="source evidence"):
+        store.capture(forecast(),original(latest_completed_event_end="2026-10-08T20:00:00Z"))
+    assert store.audit()["captures"]==1
+    store.close()
+
+
+def test_repeated_outcome_rejects_changed_intermediate_close_not_just_last_close(tmp_path):
+    store=db(tmp_path)
+    store.capture(forecast(),original())
+    store.close()
+    store=db(tmp_path,now=T0+timedelta(days=30))
+    assert store.observe("atomic_fixture_01",5,future())["status"]=="APPENDED"
+    with pytest.raises(ImmutableCollision, match="future input"):
+        store.observe("atomic_fixture_01",5,
+            future(candle_close=(999.,102.,103.,104.,105.)))
+    assert store.audit()["outcomes"]==1
+    store.close()
+
+
+def test_repeated_outcome_rejects_changed_intermediate_completed_at(tmp_path):
+    store=db(tmp_path)
+    store.capture(forecast(),original())
+    store.close()
+    store=db(tmp_path,now=T0+timedelta(days=30))
+    assert store.observe("atomic_fixture_01",5,future())["status"]=="APPENDED"
+    stamps=list(future().candle_completed_at)
+    stamps[0]=stamps[0].replace("20:00:00", "19:00:00")
+    with pytest.raises(ImmutableCollision, match="future input"):
+        store.observe("atomic_fixture_01",5,
+            future(candle_completed_at=tuple(stamps)))
+    assert store.audit()["outcomes"]==1
+    store.close()
+
+
+def test_identical_retries_after_restart_still_preserve_receipts_and_outcomes(tmp_path):
+    store=db(tmp_path)
+    first=store.capture(forecast(),original())
+    store.close()
+    store=db(tmp_path,now=T0+timedelta(days=30))
+    first_outcome=store.observe("atomic_fixture_01",5,future())
+    store.close()
+    store=db(tmp_path,now=T0+timedelta(days=30))
+    assert store.capture(forecast(),original())["receipt"]==first["receipt"]
+    assert store.observe("atomic_fixture_01",5,future())["outcome"]==first_outcome["outcome"]
+    assert store.audit()["captures"]==1 and store.audit()["outcomes"]==1
+    store.close()
