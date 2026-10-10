@@ -35,3 +35,11 @@ Local checks refuse explicitly symlinked ancestors and typical HOME/production r
 5. Full Protocol 08, production backup/restore/atomic migration, future +5/+10/+20 genuine completed sessions and out-of-sample validation; explicit two user permissions for merge and deploy are last, separate requirements.
 
 Current release manifest must remain `RELEASE_BLOCKED`; success or failure of a synthetic CI may update ONLY the code-compatibility gate, never these ten factual/approval requirements.
+
+## Re-test and release boundary
+
+First exact-head #168+#179+#147 job [38088027415](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38088027415), HEAD `967f190ec9440a5efbe64b7e8320739ca96f021f`: **375 targeted / 1,428 full pytest PASS**, real DuckDB, no-push merge, compiler, Repository Preflight and Public Security PASS. Machine compatibility was **PENDING**, so the first run correctly counted **13** blockers (11 evidence gates + 2 user permissions). No fake PASS was assigned.
+
+After reviewing the boundary again, the exact `/opt/mcp` root (not just its descendants) was explicitly denied by the input path guard; 3 negative tests added. Machine compatibility is now set to PASS for the **previously proven** exact leaves, preserving the remaining 12 release blockers. A fresh final-HEAD CI is still necessary for this latest code and manifest; the previous 1,428 tests are not silently transferred to it.
+
+Source freshness is still measured from **locally declared** receipt data, not independently signed exchange time. An altered source receipt manifest whose digests are recomputed is not the same as an authenticated provider bundle. Those remain distinct BLOCKED criteria.
