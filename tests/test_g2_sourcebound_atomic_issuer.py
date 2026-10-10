@@ -303,3 +303,35 @@ def test_public_live_smoke_error_diagnostics_never_echo_provider_detail():
     assert "TOKEN-SHOULD-NOT-LEAK" not in _safe_failure_diagnostic([
         {"detail": "opaque provider header TOKEN-SHOULD-NOT-LEAK"}
     ])
+
+
+@pytest.mark.parametrize("status,expected", [
+    (429, "HTTP_429_RATE_LIMIT"),
+    (403, "HTTP_403_ACCESS_DENIED"),
+    (503, "HTTP_503_UNAVAILABLE"),
+    (500, "HTTP_5XX_UPSTREAM"),
+    (404, "HTTP_OTHER_NON_200"),
+])
+def test_safe_error_categorization_extracts_only_http_code(status, expected):
+    from scripts.g2_capture_and_issue_atomic_staging import _safe_failure_diagnostic
+    private_path = "/resource?token=SECRET-SHOULD-NOT-LEAK"
+    reported = _safe_failure_diagnostic([{
+        "error_type": "MoexIssError",
+        "detail": f"MOEX ISS returned HTTP {status} for {private_path}",
+    }])
+    assert reported == expected
+    assert private_path not in reported and "SECRET" not in reported
+
+
+@pytest.mark.parametrize("error_type,expected", [
+    ("ReadTimeout", "UPSTREAM_TIMEOUT_OR_TRANSPORT"),
+    ("ConnectError", "UPSTREAM_TIMEOUT_OR_TRANSPORT"),
+    ("UnsafeUpstreamConfiguration", "UPSTREAM_GOVERNOR_BLOCKED"),
+    ("OtherSecretError", "UNCLASSIFIED_SOURCE_FAILURE"),
+])
+def test_safe_error_categorization_fails_closed_for_other_exceptions(error_type, expected):
+    from scripts.g2_capture_and_issue_atomic_staging import _safe_failure_diagnostic
+    assert _safe_failure_diagnostic([{
+        "error_type": error_type,
+        "detail": "UNTRUSTED TEXT secret=DO-NOT-PRINT",
+    }]) == expected

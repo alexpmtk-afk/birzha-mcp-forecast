@@ -10,6 +10,7 @@ on:
       - chatgpt/g2-live-forecast-unattested-write-guard-20261011
       - chatgpt/g2-sourcebound-single-duckdb-issuer-20261011
       - chatgpt/g2-prev-stages-independent-hardening-20261011
+      - chatgpt/g2-safe-provider-failure-classification-20261011
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
