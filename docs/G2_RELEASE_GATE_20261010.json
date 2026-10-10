@@ -10,16 +10,16 @@
   },
   "release_leaves": [
     {
-      "area": "forecast_data_revision_integrity",
-      "pr": 152,
-      "head": "e105afeda4828ec3116a2e1ec6431130a11743dc",
-      "parent_pr": 148
+      "area": "source_bound_forecast_and_immutable_single_duckdb_staging_evidence",
+      "pr": 168,
+      "head": "93c1639a23203dc5005fdf78515053813ba8273e",
+      "parent_pr": 166
     },
     {
-      "area": "production_feature_contracts",
-      "pr": 151,
-      "head": "0fdba4b057cee4f249751e2dcc7b9c6be1f9a0ae",
-      "parent_pr": 149
+      "area": "admitted_levels_post_t0_facts_linked_and_saved_six_market_offline_repeat",
+      "pr": 169,
+      "head": "c9dbd3b4382adc2a6f59e3b6701abfdb2e20dd6a",
+      "parent_pr": 167
     },
     {
       "area": "market_regime_research",
@@ -49,7 +49,25 @@
     "149": 148,
     "150": 148,
     "151": 149,
-    "152": 148
+    "152": 148,
+    "153": 152,
+    "154": 151,
+    "155": 154,
+    "156": 153,
+    "157": 155,
+    "158": 156,
+    "159": 158,
+    "160": 159,
+    "161": 159,
+    "162": 156,
+    "163": 157,
+    "164": 162,
+    "165": 163,
+    "166": 164,
+    "167": 165,
+    "168": 166,
+    "169": 167,
+    "170": 168
   },
   "evidence": {
     "synthetic_three_line_ci": {
@@ -74,12 +92,20 @@
       "status": "PASS",
       "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/147",
       "meaning": "Development descriptive research only; not independent prospective predictive validation."
+    },
+    "latest_168_169_147_shadow_ci": {
+      "status": "PASS",
+      "run_url": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38083653368",
+      "tested_workflow_commit": "11baaaa65232f571f7646204affe5b4043423988",
+      "focused_tests_passed": 192,
+      "full_tests_passed": 1205,
+      "meaning": "Exact #168/#169/#147 fetched and merged twice temporarily on GitHub runner; no push. Focused and full pytest, compile, Preflight and Security PASS. Run precedes release-pin reconciliation; final HEAD must retest."
     }
   },
   "release_gates": {
     "code_three_line_compatibility": {
       "status": "PASS",
-      "evidence": "GitHub Actions 38069916800 on b4487b395b39e0747a5bf06471b6f6288c8ff072: three exact pinned HEADs, two no-push temporary merges, 144 focused and 910 full pytest PASS, compile + Preflight/Security PASS"
+      "evidence": "Exact independent #168 + #169 + #147 integration at PR #170 initial workflow commit 11baaaa65232f571f7646204affe5b4043423988, run 38083653368: 192 targeted, 1205 full pytest PASS, ephemeral two merges no push, compile, Preflight and Security PASS. This proves regression compatibility, not reviewer approval, real ex-ante evidence, or release. Final manifest HEAD requires fresh CI."
     },
     "individual_pr_semantic_review": {
       "status": "OPEN",
@@ -107,7 +133,7 @@
     },
     "durable_single_canonical_storage": {
       "status": "OPEN",
-      "evidence": "SQLite pilot and canonical DuckDB remain separate transactions; outbox production durability unproven"
+      "evidence": "PR #168 contains disposable one-file DuckDB atomic staging and process-restart/cold-backup evidence PASS, but there is no authorized canonical production migration, independently verified physical power-loss/remote replication or live recovery acceptance."
     },
     "home_windows_readonly_acceptance": {
       "status": "BLOCKED",
@@ -119,7 +145,7 @@
     },
     "live_forecast_issuance_after_source_receipt": {
       "status": "BLOCKED",
-      "evidence": "In default non-historical ForecastService.build, MarketSnapshotService uses max(completed candle end) as snapshot.as_of, which is propagated into ForecastRecord.created_at_t0. This is event time, not proof of source HTTP receipt or wall-clock issuance. Prospective pilot correctly rejects source observed later than t0; a verified live issuance adapter must use observed real receipt clock after exact completed bars. Confirm with regression, do not backdate live forecasts."
+      "evidence": "PR #156 source-bound issuer enforces fresh UTC T0 after receipt in staging tests; default ForecastService.build event-time mode and all actual HOME live producers have not been independently certified as routed through it. Original provider timestamps are not independently attested."
     }
   },
   "user_approved_main_merge": false,
