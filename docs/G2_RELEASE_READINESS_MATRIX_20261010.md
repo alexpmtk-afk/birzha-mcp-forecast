@@ -24,13 +24,13 @@ The later #149 and #151 were created after the earlier two-line compatibility ru
 - PR #149 production window: **576 full pytest PASS**, [Actions 38066043715](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38066043715).
 - PR #151 production feature versioning: **630 full pytest PASS**, [Actions 38068704468](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38068704468).
 - PR #152 revision correction: **528 own-line pytest PASS**, [Actions 38069237397](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069237397); previous two-line shadow merge with #147 **792 combined PASS**, [run 38069237422](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069237422).
-- **New three-line gate** in this PR requires the exact head of #152 + #151 + #147, merges them only in an isolated GitHub runner (no push), validates all tests, and explicitly refuses to infer production permission from green CI. Its final result must be separately recorded from GitHub logs.
+- **Three-line gate independently verified:** [GitHub Actions 38069916800](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069916800) on CI-only commit `b4487b395b39e0747a5bf06471b6f6288c8ff072`: exact HEADs #152 + #151 + #147 merged **twice only inside isolated GitHub runner**, 144 targeted tests PASS (4.81s), **910 full tests PASS (41.41s)**, compile PASS and no push/production action, Security/Preflight PASS. The very same run explicitly printed `G2_RELEASE_ALLOWED=false`; only the code regression gate becomes PASS.
 
 ## Formal release-decision matrix
 
 | Gate | Current state | Blocking reason / proof to obtain |
 |---|---|---|
-| Three-line source/forecast/feature/research code regression | PENDING at first publication | New transient exact-head combined CI, full pytest and compiler |
+| Three-line source/forecast/feature/research code regression | **PASS** | GitHub Actions [38069916800](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38069916800): 144 focused/910 full pytest, exact three HEADs, ephemeral 2 merge commits **not pushed**, compile/Preflight/Security PASS |
 | Independent human/architectural review of all affected commits | OPEN | Human reviewer approval of causality, interfaces and recovered failure paths, not just test count |
 | True historical original first receipt and provider metadata vintage | BLOCKED | Legacy DuckDB base row stores no original raw JSON bytes/attested historical receipt; cannot reconstruct past PIT |
 | Matured post-forecast +5/+10/+20 genuine sessions | BLOCKED | As of 10 October 2026, future sessions have not occurred; 18 outcomes must remain PENDING |
@@ -52,3 +52,7 @@ Release order in a future explicitly approved process would follow parent/child 
 **Technical code regression PASS does not mean full G2/P08 project completed.** Never retrofit signed timestamps onto archived development rows or evaluate a first-touch protocol with only horizon-end close. Existing ForecastRecords issued 10 October are immutable. Later actual observations belong in a separately sourced append-only Outcome only after verified maturity. No third-party/source plugin bridge or working local Codex was used to create this report.
 
 **No merges, deploys, production reads/writes or protected OOS data access were performed.**
+
+## After three-line gate PASS
+
+The gate report in `G2_RELEASE_GATE_20261010.json` now records **code_three_line_compatibility: PASS** and run 38069916800. This **does not** close the nine other factual release gates, and main/HOME merge/deploy approvals remain false: 11 release blockers including the two user approvals. The manifest's next CI run validates this preserved fail-closed outcome. The first 10 October frozen uncalibrated forecasts retain 18 PENDING outcomes and are not modified by the release audit.
