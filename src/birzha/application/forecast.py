@@ -12,6 +12,8 @@ import json
 import math
 from dataclasses import dataclass
 
+from birzha.application.features import _finite_price
+from birzha.domain.normalized_features import NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
 from birzha.application.prediction import build_prediction_contract
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -24,6 +26,7 @@ from birzha.domain.snapshot import MarketSnapshot, market_snapshot_id
 
 
 ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
+FULL_WINDOWS_ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_5_FULL_WINDOWS"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +79,7 @@ class ForecastService:
 
 
 def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: ForecastParameters = DEFAULT_FORECAST_PARAMETERS) -> ForecastRecord:
+    engine_version = (FULL_WINDOWS_ENGINE_VERSION if snapshot.normalized_features is not None and snapshot.normalized_features.version == NORMALIZED_FEATURES_FULL_WINDOWS_VERSION else ENGINE_VERSION)
     score = _combined_score(snapshot, parameters)
     strength = min(1.0, abs(score) / parameters.strength_scale)
     if score >= parameters.direction_threshold:
@@ -127,7 +131,7 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         "symbol": snapshot.symbol,
         "secid": snapshot.secid,
         "t0": snapshot.as_of,
-        "engine": ENGINE_VERSION,
+        "engine": engine_version,
         "snapshot_id": snapshot_id,
         "horizons": [5, 10, 20],
     }
@@ -151,7 +155,7 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
         symbol=snapshot.symbol,
         secid=snapshot.secid,
         created_at_t0=snapshot.as_of,
-        engine_version=ENGINE_VERSION if parameters == DEFAULT_FORECAST_PARAMETERS else f"{ENGINE_VERSION}:CAL:{parameters.name}",
+        engine_version=engine_version if parameters == DEFAULT_FORECAST_PARAMETERS else f"{engine_version}:CAL:{parameters.name}",
         direction=direction,
         signal_strength=round(strength, 4),
         control=control,
@@ -197,14 +201,18 @@ def _flow_adjustment(snapshot: MarketSnapshot) -> float:
     flow = snapshot.flow
     if flow is None:
         return 0.0
+    normalized = snapshot.normalized_features
+    full_windows = normalized is not None and normalized.version == NORMALIZED_FEATURES_FULL_WINDOWS_VERSION
+    delta = normalized.delta_volume_ratio if full_windows else flow.volume_delta_ratio
     adjustment = 0.0
-    if flow.volume_delta_ratio is not None:
-        clipped = max(-0.30, min(0.30, flow.volume_delta_ratio))
+    if _finite_price(delta):
+        clipped = max(-0.30, min(0.30, delta))
         adjustment += 1.5 * clipped
     price = flow.price_change_pct
     oi_open = flow.algopack_oi_open
     oi_change = flow.algopack_oi_change
-    if price not in {None, 0.0} and oi_open not in {None, 0.0} and oi_change not in {None, 0.0}:
+    oi_allowed = not full_windows or normalized.oi_change_ratio is not None
+    if oi_allowed and all(_finite_price(v) for v in (price, oi_open, oi_change)) and price != 0 and oi_open > 0 and oi_change != 0:
         price_sign = 1.0 if price > 0 else -1.0
         adjustment += 0.30 * price_sign if oi_change > 0 else -0.10 * price_sign
     return max(-0.75, min(0.75, adjustment))
@@ -255,8 +263,8 @@ def _fmt(value: float | None) -> str:
 
 def _scenarios(snapshot: MarketSnapshot, direction: str, reference_price: float | None) -> tuple[str, str, float | None, float | None, tuple[float, ...]]:
     profile = snapshot.volume_profile
-    support = snapshot.h1.support_20 or snapshot.d1.support_20
-    resistance = snapshot.h1.resistance_20 or snapshot.d1.resistance_20
+    support = snapshot.h1.support_20 if snapshot.h1.support_20 is not None else snapshot.d1.support_20
+    resistance = snapshot.h1.resistance_20 if snapshot.h1.resistance_20 is not None else snapshot.d1.resistance_20
     levels = [value for value in (
         profile.val if profile else None,
         profile.poc if profile else None,
