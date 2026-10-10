@@ -21,6 +21,7 @@ REQUIRED = frozenset({
     "forecast_protocol08_complete",
     "durable_single_canonical_storage",
     "home_windows_readonly_acceptance",
+    "live_forecast_issuance_after_source_receipt",
     "production_backup_rollback_and_authorization",
 })
 RESEARCH = (132, 133, 134, 135, 136, 137, 138, 140, 142, 144, 147)
