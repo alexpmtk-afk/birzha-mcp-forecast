@@ -142,6 +142,10 @@ def assess_levels_and_route(
         ]
         profile,profile_reason=_exact_profile_levels(snapshot,instrument)
         levels.extend(profile)
+        if (snapshot.normalized_features is not None
+            and snapshot.normalized_features.profile_is_exact is True
+            and profile_reason is not None):
+            reasons.append("CLAIMED_EXACT_PROFILE_FAILED_PROVENANCE")
     else:
         reasons.append("CONTROL_HOLDING_NOT_CONFIRMED")
     if (regime["snapshot_id"]!=control["snapshot_id"]
