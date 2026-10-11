@@ -102,7 +102,11 @@ def audit_time_anchor_rows(db):
                 or evidence.get("caller_supplied_ca_sha256")!=casha
                 or evidence.get("untrusted_chain_sha256")!=chainsha
                 or evidence.get("forecast_claimed_t0")!=claimed_t0
+                or evidence.get("local_crypto_verification")!="SIGNATURE_NONCE_AND_IMPRINT_VERIFIED"
                 or evidence.get("external_ca_independently_approved") is not False
+                or evidence.get("forecast_t0_independently_measured") is not False
+                or evidence.get("independent_provider_and_calendar_attested") is not False
+                or evidence.get("before_future_outcome_cutoff_certified") is not False
                 or evidence.get("production_authorized") is not False):
                 raise ValueError("timestamp evidence contract changed")
         except (ValueError,KeyError,TypeError,UnicodeError) as exc:
