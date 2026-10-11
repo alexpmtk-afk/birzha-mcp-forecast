@@ -12,6 +12,7 @@ from scripts.g2_prospective_baseline_scorecard import (
     LEDGER_VERSION,
     ScorecardRefused,
     build_scorecard,
+    main,
 )
 
 
@@ -141,6 +142,41 @@ def test_scorecard_leaves_missing_outcomes_pending(tmp_path: Path) -> None:
     assert row["directional_forecasts_scored"] == 1
 
 
+def test_scorecard_refuses_rehashed_session_time_mismatch(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        raw = db.execute("SELECT payload_json FROM outcomes WHERE forecast_id='f-up' AND horizon=5").fetchone()[0]
+        outcome = json.loads(raw)
+        outcome["target_session"] = "2026-10-17"
+        changed = _encoded(outcome)
+        db.execute("UPDATE outcomes SET payload_json=?,payload_sha=? WHERE forecast_id='f-up' AND horizon=5", (changed, _sha(changed.encode())))
+    with pytest.raises(ScorecardRefused, match="target session and close time disagree"):
+        build_scorecard(ledger)
+
+
+@pytest.mark.parametrize("suffix", ["", "-wal", "-shm", "-journal", ".wal"])
+def test_scorecard_output_cannot_overwrite_ledger_or_sidecars(tmp_path: Path, suffix: str) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = ledger.read_bytes()
+    output = Path(str(ledger) + suffix)
+    assert main(["--ledger", str(ledger), "--output", str(output)]) == 2
+    assert ledger.read_bytes() == before
+    if suffix:
+        assert not output.exists()
+
+
+def test_scorecard_output_cannot_overwrite_a_hardlinked_ledger(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    alias = tmp_path / "report.json"
+    alias.hardlink_to(ledger)
+    before = ledger.read_bytes()
+    assert main(["--ledger", str(ledger), "--output", str(alias)]) == 2
+    assert ledger.read_bytes() == before
+
+
 def _make_duckdb_ledger(path: Path) -> None:
     duckdb = pytest.importorskip("duckdb")
     db = duckdb.connect(str(path))
@@ -239,4 +275,3 @@ def test_scorecard_refuses_duckdb_future_evidence_tampering(tmp_path: Path) -> N
 
     with pytest.raises(ScorecardRefused, match="future evidence hash mismatch"):
         build_scorecard(ledger)
-

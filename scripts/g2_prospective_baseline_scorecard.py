@@ -131,7 +131,7 @@ def _read_sqlite_pilot(path: Path) -> tuple[list[dict[str, Any]], list[dict[str,
     outcome_rows: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
     for fid, horizon, raw, digest, source, source_digest in outcomes:
-        if _sha(raw.encode("utf-8")) != digest or _sha(source) != source_digest:
+        if not source or _sha(raw.encode("utf-8")) != digest or _sha(source) != source_digest:
             raise ScorecardRefused(f"outcome evidence hash mismatch: {fid}/{horizon}")
         outcome = _json_object(raw, f"outcome {fid}/{horizon}")
         if _canonical_json(outcome).decode("utf-8") != raw:
@@ -438,8 +438,11 @@ def _check_outcome(
         target_day = date.fromisoformat(outcome.get("target_session"))
     except (TypeError, ValueError) as exc:
         raise ScorecardRefused(f"invalid outcome target session: {fid}/{horizon}") from exc
+    target_close_day = target_end.astimezone(ZoneInfo("Europe/Moscow")).date()
     if target_day <= t0.date():
         raise ScorecardRefused(f"outcome is not after forecast date: {fid}/{horizon}")
+    if target_day.isoformat() != outcome.get("target_session") or (target_close_day - target_day).days not in (0, 1):
+        raise ScorecardRefused(f"outcome target session and close time disagree: {fid}/{horizon}")
 
     reference = _finite_number(forecast.get("reference_price"), f"forecast reference price {fid}")
     target = _finite_number(outcome.get("target_close"), f"target close {fid}/{horizon}")
@@ -537,6 +540,11 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         "scorecard_version": SCORECARD_VERSION,
         "ledger_version": LEDGER_VERSION if path.suffix == ".sqlite3" else DUCKDB_LEDGER_VERSION,
         "storage_format": "sqlite3 pilot" if path.suffix == ".sqlite3" else "DuckDB staging journal",
+        "future_evidence_validation": (
+            "SQLite pilot: source-byte hash binding and recorded price/time consistency only; individual future candles are not preserved as structured evidence."
+            if path.suffix == ".sqlite3" else
+            "DuckDB staging: source-byte hash binding and complete structured future-input window matched to canonical Outcome; raw source bytes are not parsed by this evaluator."
+        ),
         "read_only": True,
         "comparison": "fixed always-UP reference on the same completed outcomes as directional forecasts",
         "metric": "horizon-end close direction; a flat return is incorrect for either directional call",
@@ -558,6 +566,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ledger", required=True, type=Path, help="явный путь к изолированному опытному журналу .sqlite3 или .duckdb")
     parser.add_argument("--output", type=Path, help="необязательный путь для сводки JSON; без него печать в окно")
     args = parser.parse_args(argv)
+    if args.output is not None:
+        try:
+            protected = [args.ledger, *(Path(str(args.ledger) + suffix) for suffix in ("-wal", "-shm", "-journal", ".wal"))]
+            output_path = args.output.resolve()
+            if any(output_path == path.resolve() or (
+                args.output.exists() and path.exists() and args.output.samefile(path)
+            ) for path in protected):
+                print("Сводка не записана: выходной файл совпадает с журналом данных или его служебным файлом.", file=sys.stderr)
+                return 2
+        except OSError:
+            print("Сводка не записана: не удалось проверить путь выходного файла.", file=sys.stderr)
+            return 2
     try:
         report = build_scorecard(args.ledger)
     except ScorecardRefused as exc:
@@ -578,4 +598,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
