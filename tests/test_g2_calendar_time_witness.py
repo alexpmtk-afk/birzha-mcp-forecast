@@ -221,3 +221,36 @@ def test_tsa_preimage_is_canonical_journal_payload_not_caller_recreated_forecast
         ).hexdigest()
     finally:
         reopened.close()
+
+
+def test_exact_history_witness_is_tied_to_canonical_stored_D1_source(tmp_path):
+    from birzha.application.g2_calendar_witness import concordance_from_atomic_staging
+    from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
+    from scripts.g2_issue_sourcebound_atomic_staging import issue_atomic_staging
+    from test_g2_freeze_real_forecast_from_source_receipts import NOW, source_fixture
+
+    src=tmp_path/"raw"
+    root=tmp_path/"isolated"
+    source_fixture(src)
+    root.mkdir()
+    frozen=issue_atomic_staging(src,root,"SBER",clock=lambda:NOW)
+    store=SingleDuckDBProspectiveStagingJournal(
+        root/"SBER.duckdb",staging_root=root,clock=lambda:NOW
+    )
+    try:
+        witness=_witness()
+        witness["pages"][0]["observed_start_utc"]="2026-10-10T15:00:02Z"
+        witness["pages"][0]["observed_end_utc"]="2026-10-10T15:00:07Z"
+        outcome=concordance_from_atomic_staging(
+            store, frozen["forecast_id"],witness
+        )
+        assert outcome["immutable_forecast_id"] == frozen["forecast_id"]
+        assert outcome["last_active_history_session"] == "2026-10-09"
+        assert outcome["exchange_schedule_independently_certified"] is False
+        witness["board"] = "OTHER"
+        with pytest.raises(CalendarWitnessRefused):
+            concordance_from_atomic_staging(
+                store, frozen["forecast_id"], witness
+            )
+    finally:
+        store.close()
