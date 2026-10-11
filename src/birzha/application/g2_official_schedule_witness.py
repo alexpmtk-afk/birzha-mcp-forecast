@@ -137,6 +137,7 @@ def verified_schedule_candidate(
             if fingerprint in observed_docs:
                 raise ValueError("duplicate official document digest")
             observed_docs[fingerprint] = _time(doc["observed_at_utc"])
+        referenced_documents = set()
         previous_hash = None
         previous_published = None
         previous_observed = None
@@ -151,6 +152,7 @@ def verified_schedule_candidate(
             source = revision.get("source_document_sha256")
             if source not in observed_docs:
                 raise ValueError("revision refers to unretained MOEX original")
+            referenced_documents.add(source)
             published = _time(revision.get("published_at_utc"))
             captured = observed_docs[source]
             if published > captured or captured > issued:
@@ -182,6 +184,8 @@ def verified_schedule_candidate(
                 current = revision
             previous_hash = digest(canonical(revision))
             previous_published, previous_observed = published, captured
+        if referenced_documents != set(observed_docs):
+            raise ValueError("unreviewed schedule document has no linked revision")
         if current is None:
             raise ValueError("latest official notice cancels this session")
         first = _time(current["first_future_event_utc"])
@@ -202,6 +206,8 @@ def verified_schedule_candidate(
             "effective_revision_sha256": previous_hash,
             "official_domain_claim_checked": True,
             "original_source_bytes_archived": True,
+            "notice_inventory_completeness_independently_verified": False,
+            "published_at_time_independently_authenticated": False,
             "source_identity_cryptographically_authenticated": False,
             "instrument_eligibility_independently_certified": False,
             "session_event_time_independently_certified": False,

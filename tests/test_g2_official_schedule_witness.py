@@ -319,3 +319,27 @@ def test_snapshot_does_not_create_fake_schedule_for_missing_forecast(tmp_path):
             )
     finally:
         db.close()
+
+
+def test_newly_discovered_unreviewed_notice_never_silently_ignored():
+    record=witness()
+    extra=b"<html>synthetic unreviewed schedule amendment</html>"
+    record["source_documents"].append(_document(
+        extra,"https://www.moex.com/n99998","2026-10-10T14:05:00Z",
+    ))
+    with pytest.raises(ExternalProofRefused):
+        verified_schedule_candidate(
+            original_bytes(record),forecast_id="PLACEHOLDER",
+            instrument=INSTRUMENT,forecast_t0=T0,
+        )
+
+
+def test_positive_notice_chain_explicitly_denies_provider_auth_and_completeness():
+    record=witness()
+    result=verified_schedule_candidate(
+        original_bytes(record),forecast_id="PLACEHOLDER",
+        instrument=INSTRUMENT,forecast_t0=T0,
+    )
+    assert result["notice_inventory_completeness_independently_verified"] is False
+    assert result["published_at_time_independently_authenticated"] is False
+    assert result["source_identity_cryptographically_authenticated"] is False
