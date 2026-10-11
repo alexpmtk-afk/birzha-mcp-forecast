@@ -139,7 +139,7 @@ def verify_rfc3161(
         return proc.stdout.decode("utf8", errors="replace")
     original_query = checked([openssl, "ts", "-query", "-in",
                               str(query_path), "-text"])
-    if not re.search(r"^Nonce:\\s*0x[0-9a-fA-F]+\\s*$", original_query, re.MULTILINE):
+    if not re.search(r"^Nonce:\s*0x[0-9a-fA-F]+\s*$", original_query, re.MULTILINE):
         raise ExternalProofRefused("original RFC3161 query lacks random nonce")
     extra = ["-untrusted", str(untrusted_chain_path)] if untrusted_chain_path else []
     base = [openssl, "ts", "-verify", "-in", str(response_path), "-CAfile",
