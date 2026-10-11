@@ -10,6 +10,7 @@ on:
     paths:
       - "scripts/g2_prospective_baseline_scorecard.py"
       - "tests/test_g2_prospective_baseline_scorecard.py"
+      - "tests/test_g2_scorecard_writer_compatibility.py"
       - "docs/G2_PROSPECTIVE_BASELINE_SCORECARD_20261011.md"
       - ".github/workflows/g2-prospective-scorecard.yml"
 
@@ -37,3 +38,33 @@ jobs:
       - name: Check SQLite and DuckDB scorecards
         run: python -m pytest -q tests/test_g2_prospective_baseline_scorecard.py
 
+  current-writer-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact writer version from PR 202
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 5f623a1d828ce5eb68adb468d0e047845b78fcf0
+          path: peer-code
+          persist-credentials: false
+      - name: Checkout this exact scorecard version
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: scorecard-code
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - name: Combine only scorecard files inside disposable runner
+        run: |
+          cp scorecard-code/scripts/g2_prospective_baseline_scorecard.py peer-code/scripts/
+          cp scorecard-code/tests/test_g2_prospective_baseline_scorecard.py peer-code/tests/
+          cp scorecard-code/tests/test_g2_scorecard_writer_compatibility.py peer-code/tests/
+          python -m pip install -e './peer-code[dev]'
+      - name: Require actual writer and run scorecard compatibility tests
+        working-directory: peer-code
+        run: |
+          python -c "from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal"
+          python -m pytest -q tests/test_g2_prospective_baseline_scorecard.py tests/test_g2_scorecard_writer_compatibility.py
