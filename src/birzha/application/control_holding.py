@@ -38,9 +38,9 @@ def _finite(value: object, *, positive=False) -> bool:
     )
 
 
-def _pressure(snapshot: MarketSnapshot, end: datetime) -> dict:
+def _pressure(snapshot: MarketSnapshot, end: datetime, instrument: Instrument) -> dict:
     flow=snapshot.flow
-    if flow is None:
+    if flow is None or "TRADESTATS" not in instrument.data_capabilities:
         return {"status":"UNAVAILABLE","side":None,"delta_ratio":None,
                 "reason":"FLOW_MISSING"}
     try:
@@ -91,11 +91,19 @@ def control_holding_from_snapshot(
         reason.append("INSTRUMENT_OR_TIMEFRAME_MISMATCH")
     if "CANDLES" not in instrument.data_capabilities:
         reason.append("CANDLES_CAPABILITY_MISSING")
+    if "VOLUME" not in instrument.data_capabilities:
+        reason.append("VOLUME_CAPABILITY_MISSING")
     if snapshot.data_quality!="PASS" or (
         snapshot.quality_contract is not None
         and snapshot.quality_contract.status!="PASS"
     ):
         reason.append("DATA_QUALITY_NOT_PASS")
+    if snapshot.quality_contract is not None:
+        matches=[q for q in snapshot.quality_contract.timeframes if q.timeframe=="M15"]
+        if (len(matches)!=1 or matches[0].status!="PASS"
+            or matches[0].candles!=snapshot.m15.candles
+            or matches[0].minimum_required>snapshot.m15.candles):
+            reason.append("M15_QUALITY_CONTRACT_NOT_PASS")
     if len(series.candles)<MIN_CANDLES or len(series.candles)!=snapshot.m15.candles:
         reason.append("M15_COMPLETE_HISTORY_MISMATCH")
 
@@ -133,7 +141,7 @@ def control_holding_from_snapshot(
     atr=normalized.d1_atr_price_scale if normalized is not None else None
     if not _finite(atr,positive=True):
         reason.append("ATR_SCALE_UNAVAILABLE")
-    pressure=_pressure(snapshot,asof) if asof is not None else {
+    pressure=_pressure(snapshot,asof,instrument) if asof is not None else {
         "status":"UNAVAILABLE","side":None,"delta_ratio":None,
         "reason":"SNAPSHOT_TIME_INVALID",
     }
