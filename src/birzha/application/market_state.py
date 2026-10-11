@@ -92,6 +92,18 @@ class MarketStateService:
         )
         return build_market_state_vector(snapshot, instrument).to_dict()
 
+    def classify(
+        self, symbol: str, *, as_of_date: str | None = None,
+    ) -> dict[str, object]:
+        """Explicit research-only regime scoring; old build() API unchanged."""
+        from birzha.application.market_state_classifier import (
+            classify_market_state_from_snapshot,
+        )
+        snapshot, instrument = self.snapshots.build_with_instrument(
+            symbol, as_of_date=as_of_date,
+        )
+        return classify_market_state_from_snapshot(snapshot, instrument)
+
 
 def build_market_state_vector(
     snapshot: MarketSnapshot,
