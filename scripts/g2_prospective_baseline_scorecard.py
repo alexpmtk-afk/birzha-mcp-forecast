@@ -119,6 +119,8 @@ def _read_sqlite_pilot(path: Path) -> tuple[list[dict[str, Any]], list[dict[str,
             raise ScorecardRefused(f"capture receipt hash mismatch: {fid}")
         forecast = _json_object(raw, f"forecast {fid}")
         receipt = _json_object(receipt_raw, f"receipt {fid}")
+        if _canonical_json(forecast).decode("utf-8") != raw or _canonical_json(receipt).decode("utf-8") != receipt_raw:
+            raise ScorecardRefused(f"noncanonical forecast or receipt JSON: {fid}")
         if forecast.get("forecast_id") != fid or receipt.get("forecast_id") != fid:
             raise ScorecardRefused(f"forecast identity mismatch: {fid}")
         if receipt.get("forecast_sha256") != digest or receipt.get("source_sha256") != source_digest:
@@ -132,6 +134,8 @@ def _read_sqlite_pilot(path: Path) -> tuple[list[dict[str, Any]], list[dict[str,
         if _sha(raw.encode("utf-8")) != digest or _sha(source) != source_digest:
             raise ScorecardRefused(f"outcome evidence hash mismatch: {fid}/{horizon}")
         outcome = _json_object(raw, f"outcome {fid}/{horizon}")
+        if _canonical_json(outcome).decode("utf-8") != raw:
+            raise ScorecardRefused(f"noncanonical outcome JSON: {fid}/{horizon}")
         identity = (fid, int(horizon))
         if identity in seen:
             raise ScorecardRefused(f"duplicate outcome identity: {fid}/{horizon}")
@@ -207,6 +211,8 @@ def _read_duckdb_staging(path: Path) -> tuple[list[dict[str, Any]], list[dict[st
             raise ScorecardRefused(f"capture receipt hash mismatch: {fid}")
         forecast = _json_object(raw, f"forecast {fid}")
         receipt = _json_object(receipt_raw, f"receipt {fid}")
+        if _canonical_json(forecast).decode("utf-8") != raw or _canonical_json(receipt).decode("utf-8") != receipt_raw:
+            raise ScorecardRefused(f"noncanonical forecast or receipt JSON: {fid}")
         if (
             forecast.get("forecast_id") != fid or forecast.get("symbol") != symbol
             or forecast.get("secid") != secid or forecast.get("created_at_t0") != t0
@@ -256,6 +262,9 @@ def _read_duckdb_staging(path: Path) -> tuple[list[dict[str, Any]], list[dict[st
             raise ScorecardRefused(f"canonical outcome identity mismatch: {fid}/{horizon}")
         evidence = _json_object(evidence_raw, f"future evidence {fid}/{horizon}")
         canonical_outcome = _json_object(payload_raw, f"canonical outcome {fid}/{horizon}")
+        if (_canonical_json(evidence).decode("utf-8") != evidence_raw
+                or _canonical_json(canonical_outcome).decode("utf-8") != payload_raw):
+            raise ScorecardRefused(f"noncanonical future evidence or Outcome JSON: {fid}/{horizon}")
         future_input = evidence.get("future_input_evidence")
         if not isinstance(future_input, dict):
             raise ScorecardRefused(f"future input evidence is missing: {fid}/{horizon}")
@@ -376,7 +385,11 @@ def _decision(forecast: dict[str, Any], horizon: dict[str, Any]) -> str:
     if status == "ABSTAIN":
         if direction != "NEUTRAL" or not isinstance(reasons, list) or not reasons:
             raise ScorecardRefused("abstention must have neutral direction and explicit reasons")
+        if not all(isinstance(reason, str) and reason.strip() for reason in reasons):
+            raise ScorecardRefused("abstention reasons must be nonempty text")
         return "ABSTAIN"
+    if reasons:
+        raise ScorecardRefused("abstention reasons require an explicit ABSTAIN decision")
     if status == "BASELINE_NEUTRAL":
         if direction != "NEUTRAL" or reasons:
             raise ScorecardRefused("neutral decision conflicts with horizon direction")
