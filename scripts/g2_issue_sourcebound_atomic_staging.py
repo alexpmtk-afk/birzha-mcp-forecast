@@ -17,7 +17,7 @@ from birzha.application.prospective_capture import AdmissionRefused, CaptureEvid
 from birzha.application.prospective_issuance import prepare_source_bound_forecast
 from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
 from scripts.g2_freeze_real_forecast_from_source_receipts import (
-    EXPECTED_SOURCE, assemble_snapshot,
+    EXPECTED_SOURCE, assemble_snapshot, validate_source_page_freshness, parse_time,
 )
 
 VERSION = "G2_SOURCE_BOUND_ATOMIC_STAGING_ISSUER_V1"
@@ -30,6 +30,9 @@ def _safe_isolated_path(path: str | Path, *, existing_directory: bool) -> Path:
     would erase the very symlink evidence we must refuse. This is a local
     staging guard, not a substitute for process filesystem permissions.
     """
+    supplied = os.fspath(path).replace("\\", "/").casefold().rstrip("/")
+    if supplied == "/opt/mcp" or supplied.startswith("/opt/mcp/"):
+        raise AdmissionRefused("no HOME or production path permitted")
     raw = Path(os.path.abspath(os.fspath(path)))
     if any(part.casefold() in {"mcp-home", "production"} for part in raw.parts):
         raise AdmissionRefused("no HOME or production path permitted")
@@ -154,6 +157,7 @@ def issue_atomic_staging(
         contract_version=snapshot.contract_version
     )
     prepared = prepare_source_bound_forecast(snapshot, evidence, clock=clock)
+    validate_source_page_freshness(entry, parse_time(prepared.record.created_at_t0))
     # Store itself refuses HOME/production destinations and unrelated files.
     destination = root / f"{market}.duckdb"
     store = SingleDuckDBProspectiveStagingJournal(

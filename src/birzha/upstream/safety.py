@@ -8,6 +8,8 @@ shared pacing gate from the application-level request governor.
 from __future__ import annotations
 
 import math
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import random
 import threading
 import time
@@ -35,7 +37,11 @@ class UpstreamRequestBudgetExceeded(RuntimeError):
 
 
 class UpstreamRateLimited(RuntimeError):
-    """Raised when the upstream explicitly rate-limits or remains unavailable."""
+    """Final attempt diagnosis; safe fields never contain provider text."""
+
+    def __init__(self, message: str, *, safe_reason: str = "UPSTREAM_RETRIES_EXHAUSTED"):
+        super().__init__(message)
+        self.safe_reason = safe_reason
 
 
 class UnsafeUpstreamConfiguration(RuntimeError):
@@ -168,11 +174,13 @@ class SafeRequestExecutor:
         gate: PacingGate | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._policy = policy
         self._gate = gate or ProcessPacingGate(sleeper=sleeper)
         self._sleeper = sleeper
         self._jitter = jitter
+        self._wall_clock = wall_clock
         self._requests_used = 0
         self._total_requests_used = 0
 
@@ -205,10 +213,11 @@ class SafeRequestExecutor:
         self._requests_used += 1
         self._total_requests_used += 1
 
-    @staticmethod
-    def _retry_after_seconds(response: ResponseLike) -> float | None:
+    def _retry_after_seconds(self, response: ResponseLike) -> float | None:
+        # HTTP field names are case insensitive; httpx dict keys are lowercase.
         try:
-            raw = response.headers.get("Retry-After")  # type: ignore[attr-defined]
+            raw = next((v for k, v in response.headers.items()
+                        if str(k).lower() == "retry-after"), None)
         except AttributeError:
             return None
         if raw is None:
@@ -216,8 +225,14 @@ class SafeRequestExecutor:
         try:
             value = float(raw)
         except (TypeError, ValueError):
-            return None
-        return value if value >= 0 else None
+            try:
+                deadline = parsedate_to_datetime(raw)
+                if deadline.tzinfo is None:
+                    return None
+                value = max(0.0, (deadline - self._wall_clock()).total_seconds())
+            except (TypeError, ValueError, OverflowError):
+                return None
+        return value if math.isfinite(value) and value >= 0 else None
 
     def _backoff_seconds(self, attempt: int, response: ResponseLike) -> float:
         retry_after = self._retry_after_seconds(response)
@@ -249,6 +264,13 @@ class SafeRequestExecutor:
                 break
             self._sleeper(self._backoff_seconds(attempt, response))
 
+        # Transport failures are synthetic 503 responses, not provider HTTP 503.
+        transport = getattr(response, "transport_failure", False)
+        reason = ("UPSTREAM_TIMEOUT_OR_TRANSPORT" if transport else
+                  "HTTP_429_RATE_LIMIT" if last_status == 429 else
+                  "HTTP_503_UNAVAILABLE" if last_status == 503 else
+                  "HTTP_5XX_UPSTREAM")
         raise UpstreamRateLimited(
-            f"upstream remained rate-limited/unavailable after retries; last_status={last_status}"
+            f"upstream remained rate-limited/unavailable after retries; last_status={last_status}",
+            safe_reason=reason,
         )

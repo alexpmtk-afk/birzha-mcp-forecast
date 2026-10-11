@@ -134,6 +134,23 @@ def contiguous_m15(m1: CandleSeries):
     return CandleSeries(instrument=m1.instrument,timeframe="M15",candles=tuple(verified)),discarded
 
 
+def validate_source_page_freshness(entry, decision):
+    """Every contributing page must still be fresh, not only the last page.
+
+    This checks local receipt declarations, not independent source attestation.
+    Keep source_observed_at as completion of the entire bundle.
+    """
+    from birzha.application.prospective_capture import MAX_CAPTURE_LAG_SECONDS
+    for tf in ("D1", "H1", "M1"):
+        for page in entry["timeframes"][tf]["pages"]:
+            seen = parse_time(page["observed_end_utc"])
+            began = parse_time(page["observed_start_utc"])
+            if not began <= seen <= decision:
+                raise ValueError("invalid source page receipt chronology")
+            if (decision - seen).total_seconds() > MAX_CAPTURE_LAG_SECONDS:
+                raise ValueError("stale source page at forecast issuance")
+
+
 def assemble_snapshot(entry, source_dir: Path, *, clock):
     if entry["status"]!="SOURCE_CAPTURE_COMPLETE":
         raise ValueError("refusing incomplete market source")
@@ -155,6 +172,7 @@ def assemble_snapshot(entry, source_dir: Path, *, clock):
     decision=parse_time(utc_text(now))
     if decision < max(times) or (decision-max(times)).total_seconds()>300:
         raise ValueError("first forecast T0 must immediately follow original observed source")
+    validate_source_page_freshness(entry, decision)
     for series in (evidence["D1"], evidence["H1"],m15):
         if any(parse_time(c.end)>decision for c in series.candles):
             raise ValueError("snapshot contains future/unfinished candle")

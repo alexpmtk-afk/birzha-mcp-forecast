@@ -201,6 +201,7 @@ def capture_all(provider, market_data, out_dir, *, clock=clock_now, markets=MARK
             # Keep original bytes of partial captures as evidence but refuse
             # to certify this instrument's completeness.
             failed.append({"market":market,"error_type":type(exc).__name__,
+                           "safe_reason":getattr(exc,"safe_reason",None),
                            "detail":str(exc)[:300],"status":"SOURCE_CAPTURE_INCOMPLETE"})
     files=sorted(p for p in out_dir.glob("*.json") if p.name!="manifest.json")
     total_pages=sum(len(v["timeframes"][tf]["pages"]) for v in instruments for tf in TIMEFRAMES)
