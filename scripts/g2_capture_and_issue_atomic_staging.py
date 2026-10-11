@@ -10,6 +10,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from birzha.upstream.capture_scope import bounded_market_capture
+
 from scripts.g2_issue_sourcebound_atomic_staging import (
     issue_atomic_staging, _safe_isolated_path, _separate_scopes,
 )
