@@ -1,0 +1,23 @@
+# G2 — Market State six-regime RESEARCH classifier, strict nonproduction (2026-10-11)
+
+## Canonical requirements and scope
+
+Input contract: the user's original Google Drive document `08 - Прогнозирование движения цены.txt` / Universal Market Forecasting Protocol v1.0 and the existing `MARKET_STATE_VECTOR_V0` causal evidence contract. This PR builds on Draft #199, which found that the current published Forecast v0.4 computes `control=BUYERS/SELLERS` and `route=TREND` from the *same* directional heuristic. Neither label constitutes Protocol08 Control/Route proof. The original 15-point Alignment formula is still TBD.
+
+New separate module `src/birzha/application/market_state_classifier.py` implements a **versioned candidate scorer** for the six regime names:
+`TREND_UP`, `TREND_DOWN`, `BALANCE`, `ACCUMULATION`, `DISTRIBUTION`, `EVENT`.
+
+- It receives **only** the causal, availability-masked `MarketStateVector` derived from the **same MarketSnapshot and instrument**, not a second network fetch. Existing `MarketStateService.build()` behavior stays `NOT_CLASSIFIED`; the new `MarketStateService.classify()` is an explicit opt-in method.
+- D1, H1 and M15 require `PASS` timeframe-quality evidence and at least 50 completed candles. Snapshot quality must be `PASS`, instrument must support candles and claimed T0 must be timezone-aware. Nine core features (ATR-normalized multi-timeframe returns, efficiency and range price location) must all be `AVAILABLE`, finite and in applicable physical ranges; missing or approximate evidence is **not** filled with zero. If any mandatory input is absent/invalid, return `ABSTAIN` with machine-readable cause and all scores NULL.
+- `TREND_UP/DOWN` score weights: **0.55** directional ATR-scaled return agreement, **0.25** mean D1/H1/M15 efficiency, **0.20** mean relative price-range position. Direction additionally requires D1 sign and at least two of three timeframes aligned. No control/holding inference.
+- `BALANCE`: **0.45** low normalized displacement, **0.35** low efficiency, **0.20** central range position. This is a candidate explanation rather than a forecast of a bounded range.
+- `ACCUMULATION/DISTRIBUTION` require actual `AVAILABLE` D1 relative volume and `AVAILABLE` Delta/Volume from the existing causal flow layer. They score **0.40** high relative volume, **0.35** lack of D1 price result, **0.25** opposite signed flow. Contradictions are candidate *effort/result* divergence, never certainty of large-buyer/seller absorption or Control.
+- `EVENT` additionally requires `AVAILABLE` D1/H1 relative volume and simultaneous abnormal volume + ATR-normalized D1 displacement. The label means price-volume anomaly **only**, with no claim about external news cause.
+- An eligible winner must score at least **6.5/10** with margin at least **1.25** over the next eligible state; otherwise `ABSTAIN`. All score weights, cutoff thresholds and conditions are a **transparent engineering research proposal**, not calibrated or user-approved. The six-slot score vector exposes NULL for inapplicable regimes. A score is not a probability.
+- Candidate output is `PROVISIONAL_CANDIDATE`, never `CLASSIFIED` as independent Protocol08 acceptance, and explicitly includes `independent_market_state_approved=false`, `control_and_route_established=false`, `scenario_or_execution_authorized=false`, `external_calendar_and_clock_verified=false` and `production_authorized=false`.
+
+## Genuine verification boundaries
+
+Unit tests use only constructed causal snapshots and capability-restricted instruments: strong trend both sides, balance, proposed accumulation and distribution, price-volume anomaly, no Delta, degraded flow, insufficient D1/H1, missing candles, poor snapshot quality, naïve T0, nonfinite/invalid features, competing direction and consistency of the new same-snapshot service path. No existing Forecast/Outcome/MarketStateVector V0 payload is rewritten. This test cannot establish real market predictive accuracy, valid regime thresholds or future trader confidence. Parameters must be frozen, preregistered and measured on new prospective outcomes with OOS before independently approving this classifier.
+
+**Not done and not implied:** Protocol08 Control holding evidence, level role and strength, obstacle-aware Route, 0–15 approved Alignment allocation, calibrated scenario, trusted MOEX+TSA time, independent external reviewer, protected holdout examination, automatic trades, HOME, main, production or any release-gate modification. All **12 outstanding G2 production blockers remain**. Do not merge/deploy without separate explicit permission.
