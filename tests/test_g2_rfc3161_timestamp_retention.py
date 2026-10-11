@@ -133,7 +133,7 @@ def test_rehashed_time_verification_receipt_still_fails_blob_binding(tmp_path,fi
 def test_failed_signature_does_not_append_untrusted_timestamp(tmp_path):
     journal,_,fid=staging(tmp_path)
     files=materials(tmp_path)
-    def denied(*args,**kwargs):
+    def denied(args, input=None, **kwargs):
         if "-query" in args:
             return FakeProc(b"Nonce: 0x1234\n")
         return FakeProc(code=1)
@@ -197,5 +197,29 @@ def test_nonce_missing_must_fail_even_if_crypto_mock_says_valid(tmp_path):
                 journal,fid,runner=missing_nonce,**files
             )
         assert read_signed_time_evidence(journal,fid) is None
+    finally:
+        journal.close()
+
+
+def test_forged_release_flag_is_rejected_even_after_receipt_sha_recalculated(tmp_path):
+    journal,_,fid=staging(tmp_path)
+    files=materials(tmp_path)
+    try:
+        append_signed_time_evidence(journal,fid,runner=synthetic_openssl,**files)
+        old=journal.db.execute(
+            "SELECT verification_json FROM g2_atomic_time_anchors WHERE forecast_id=?",
+            [fid],
+        ).fetchone()[0]
+        receipt=json.loads(old)
+        receipt["forecast_t0_independently_measured"]=True
+        receipt["before_future_outcome_cutoff_certified"]=True
+        forged=json.dumps(receipt,ensure_ascii=False,sort_keys=True,separators=(",",":"))
+        journal.db.execute(
+            "UPDATE g2_atomic_time_anchors SET verification_json=?,verification_sha=? "
+            "WHERE forecast_id=?",
+            [forged,sha256(forged.encode()).hexdigest(),fid],
+        )
+        with pytest.raises(ImmutableCollision,match="RFC3161"):
+            journal.audit()
     finally:
         journal.close()
