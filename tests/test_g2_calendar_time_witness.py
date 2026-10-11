@@ -173,7 +173,7 @@ def test_rfc3161_verifier_requires_nonce_and_original_data_imprint(tmp_path):
     assert outcome["independent_exchange_calendar_verified"] is False
     assert len(calls) == 3
     assert "-queryfile" in calls[0][0] and "-CAfile" in calls[0][0]
-    assert "-data" in calls[1][0] and calls[1][1] == statement
+    assert "-digest" in calls[1][0] and calls[1][0][-1] == sha256(statement).hexdigest()
 
 
 @pytest.mark.parametrize("failure", ["nonce", "imprint", "late"])
@@ -184,7 +184,7 @@ def test_rfc3161_verify_fails_closed_on_missing_request_proof_or_late_stamp(tmp_
     def fake(args, input=None, **kwargs):
         if "-queryfile" in args and failure == "nonce":
             return _Proc(code=1)
-        if "-data" in args and failure == "imprint":
+        if "-digest" in args and failure == "imprint":
             return _Proc(code=1)
         if "-text" in args:
             return _Proc(b"Time stamp: Oct 11 10:55:00 2026 GMT\n" if failure=="late"
