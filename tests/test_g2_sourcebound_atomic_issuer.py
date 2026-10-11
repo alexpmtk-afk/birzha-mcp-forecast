@@ -335,3 +335,78 @@ def test_safe_error_categorization_fails_closed_for_other_exceptions(error_type,
         "error_type": error_type,
         "detail": "UNTRUSTED TEXT secret=DO-NOT-PRINT",
     }]) == expected
+
+
+def test_original_manifest_all_page_receipts_survive_single_db_restart(tmp_path):
+    from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
+    src, root = stage(tmp_path)
+    raw_manifest = (src / "manifest.json").read_bytes()
+    result = issue_atomic_staging(src, root, "SBER", clock=lambda: NOW)
+    reopened = SingleDuckDBProspectiveStagingJournal(
+        root / "SBER.duckdb", staging_root=root, clock=lambda: NOW,
+    )
+    try:
+        assert reopened.audit()["captures"] == 1
+        persisted = reopened.read_original_source_manifest(result["forecast_id"])
+        assert persisted == raw_manifest
+        document = json.loads(persisted)
+        assert document["instruments"][0]["resolved_secid"] == "SBER"
+        assert set(document["instruments"][0]["timeframes"]) == {"D1", "H1", "M1"}
+        for tf in ("D1", "H1", "M1"):
+            page = document["instruments"][0]["timeframes"][tf]["pages"][0]
+            assert page["observed_start_utc"]
+            assert page["observed_end_utc"]
+            assert page["sha256"]
+    finally:
+        reopened.close()
+
+
+def test_mutated_manifest_fails_audit_even_if_receipt_hash_is_recomputed(tmp_path):
+    import base64
+    from birzha.application.prospective_capture import ImmutableCollision
+    from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
+    src, root = stage(tmp_path)
+    result = issue_atomic_staging(src, root, "SBER", clock=lambda: NOW)
+    db = SingleDuckDBProspectiveStagingJournal(
+        root / "SBER.duckdb", staging_root=root, clock=lambda: NOW,
+    )
+    try:
+        original = db.db.execute(
+            "SELECT receipt_json FROM g2_atomic_captures WHERE forecast_id=?",
+            [result["forecast_id"]],
+        ).fetchone()[0]
+        receipt = json.loads(original)
+        raw_manifest = json.loads(base64.b64decode(receipt["original_source_manifest_b64"]))
+        raw_manifest["instruments"][0]["timeframes"]["D1"]["pages"][0]["sha256"] = "f" * 64
+        altered = json.dumps(raw_manifest, sort_keys=True).encode()
+        receipt["original_source_manifest_b64"] = base64.b64encode(altered).decode()
+        receipt["original_source_manifest_sha256"] = sha256(altered).hexdigest()
+        changed = json.dumps(receipt, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        db.db.execute(
+            "UPDATE g2_atomic_captures SET receipt_json=?,receipt_sha=? WHERE forecast_id=?",
+            [changed, sha256(changed.encode()).hexdigest(), result["forecast_id"]],
+        )
+        with pytest.raises(ImmutableCollision, match="original source manifest"):
+            db.audit()
+    finally:
+        db.close()
+
+
+def test_same_source_reissue_with_changed_original_manifest_is_not_identical(tmp_path):
+    from birzha.application.prospective_capture import ImmutableCollision
+    src, root = stage(tmp_path)
+    first = issue_atomic_staging(src, root, "SBER", clock=lambda: NOW)
+    manifest_file = src / "manifest.json"
+    source = json.loads(manifest_file.read_bytes())
+    source["audit_replay_note"] = "new label must not replace original manifest"
+    manifest_file.write_text(json.dumps(source), encoding="utf8")
+    with pytest.raises(ImmutableCollision, match="original source manifest differs"):
+        issue_atomic_staging(src, root, "SBER", clock=lambda: NOW)
+    db = SingleDuckDBProspectiveStagingJournal(
+        root / "SBER.duckdb", staging_root=root, clock=lambda: NOW,
+    )
+    try:
+        assert db.audit()["captures"] == 1
+        assert db.read_original_source_manifest(first["forecast_id"]) != manifest_file.read_bytes()
+    finally:
+        db.close()
