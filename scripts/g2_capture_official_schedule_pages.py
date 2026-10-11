@@ -74,13 +74,18 @@ def _get_original_page(client: httpx.Client, url: str, clock) -> _PageResponse:
             status=rsp.status_code
             headers={
                 str(k).lower():str(v) for k,v in rsp.headers.items()
-                if str(k).lower() in {"content-type","date","retry-after","location"}
+                if str(k).lower() in {"content-type","content-encoding","date","retry-after","location"}
             }
             # Do not load an unbounded HTML document even when Content-Length is absent.
             if status != 200:
                 return _PageResponse(status,headers,b"",started,_now(clock))
+            # We assert byte identity with the captured HTTP entity. iter_bytes()
+            # silently decompresses gzip/br/deflate and loses those originals.
+            # Require identity encoding and read raw streamed bytes instead.
+            if headers.get("content-encoding", "identity").strip().lower() != "identity":
+                return _PageResponse(status,headers,b"",started,_now(clock),True)
             content=bytearray()
-            for chunk in rsp.iter_bytes():
+            for chunk in rsp.iter_raw():
                 if len(content) + len(chunk) > MAX_RAW_DOCUMENT:
                     return _PageResponse(status,headers,b"",started,_now(clock),True)
                 content.extend(chunk)
@@ -114,6 +119,7 @@ def capture_official_schedule_pages(
             verify=True,trust_env=False,follow_redirects=False,
             timeout=httpx.Timeout(10.0), headers={
                 "Accept":"text/html,application/pdf,text/plain",
+                "Accept-Encoding":"identity",
                 "User-Agent":"BIRZHA-G2-SCHEDULE-RECEIPT/1.0",
             },
         )
