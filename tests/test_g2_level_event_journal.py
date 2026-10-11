@@ -117,7 +117,10 @@ def test_append_only_and_chain_detect_external_corruption(tmp_path):
     db.execute("DROP TRIGGER level_receipts_no_update")
     db.execute("UPDATE level_receipts SET raw_sha='hacked' WHERE id=1")
     db.commit(); db.close()
-    with pytest.raises(Collision): LevelEventPilot(p,clock=clock)
+    # A weakened existing journal is refused before its later hash audit.
+    # Either explicit refusal or a collision is fail-closed; the new opener
+    # deliberately prioritizes missing-trigger detection.
+    with pytest.raises(Refused): LevelEventPilot(p,clock=clock)
 
 def test_cannot_overwrite_unrelated_database(tmp_path):
     p=tmp_path/"other.sqlite3"
