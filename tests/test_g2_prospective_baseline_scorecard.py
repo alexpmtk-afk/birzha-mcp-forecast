@@ -189,6 +189,67 @@ def test_scorecard_refuses_a_changed_forecast_body(tmp_path: Path) -> None:
         build_scorecard(ledger)
 
 
+@pytest.mark.parametrize("storage", ["sqlite3", "duckdb"])
+def test_report_is_repeatable_after_reopening_and_copying(tmp_path: Path, storage: str) -> None:
+    ledger = tmp_path / ("original." + storage)
+    (_make_ledger if storage == "sqlite3" else _make_duckdb_ledger)(ledger)
+    before = ledger.read_bytes()
+    first = build_scorecard(ledger)
+    second = build_scorecard(ledger)
+    copied = tmp_path / ("different-name." + storage)
+    copied.write_bytes(before)
+    third = build_scorecard(copied)
+    assert first == second == third
+    assert render_scorecard_text(first, include_details=True) == render_scorecard_text(third, include_details=True)
+    unsigned = dict(first)
+    checksum = unsigned.pop("report_sha256")
+    assert checksum == _sha(_encoded(unsigned).encode())
+    assert ledger.read_bytes() == copied.read_bytes() == before
+    for row in first["observations"]:
+        assert len(row["capture_receipt_sha256"]) == len(row["capture_source_sha256"]) == 64
+        assert (row["outcome_sha256"] is not None) == (row["outcome_status"] == "OBSERVED")
+
+
+def test_report_is_independent_of_physical_row_order(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    first = build_scorecard(ledger)
+    with sqlite3.connect(ledger) as db:
+        for table in ("captures", "outcomes"):
+            rows = db.execute(f"SELECT * FROM {table}").fetchall()
+            db.execute(f"DELETE FROM {table}")
+            placeholders = ",".join("?" for _ in rows[0])
+            db.executemany(f"INSERT INTO {table} VALUES ({placeholders})", reversed(rows))
+    assert build_scorecard(ledger) == first
+
+
+def test_report_checksum_changes_when_an_outcome_is_still_pending(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    first = build_scorecard(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id='f-down' AND horizon=5")
+    second = build_scorecard(ledger)
+    assert first["report_sha256"] != second["report_sha256"]
+    row = next(row for row in second["observations"] if row["forecast_id"] == "f-down" and row["horizon_sessions"] == 5)
+    assert row["outcome_sha256"] is None
+    assert row["candidate_correct"] is None
+
+
+def test_duplicate_sqlite_outcome_is_refused_without_counting_it_twice(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("CREATE TABLE duplicates AS SELECT * FROM outcomes")
+        db.execute("INSERT INTO duplicates SELECT * FROM outcomes WHERE forecast_id='f-up' AND horizon=5")
+        db.execute("DROP TABLE outcomes")
+        db.execute("ALTER TABLE duplicates RENAME TO outcomes")
+    before = ledger.read_bytes()
+    with pytest.raises(ScorecardRefused, match="duplicate outcome identity"):
+        build_scorecard(ledger)
+    assert ledger.read_bytes() == before
+
+
 def test_text_report_keeps_directional_denominator_and_reference_rows(tmp_path: Path) -> None:
     ledger = tmp_path / "pilot.sqlite3"
     _make_ledger(ledger)

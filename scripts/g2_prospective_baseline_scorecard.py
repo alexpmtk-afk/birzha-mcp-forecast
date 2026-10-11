@@ -493,12 +493,15 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 "created_at_t0": forecast.get("created_at_t0"),
                 "captured_at": receipt.get("captured_at"),
                 "forecast_sha256": receipt.get("forecast_sha256"),
+                "capture_receipt_sha256": _sha(_canonical_json(receipt)),
+                "capture_source_sha256": receipt.get("source_sha256"),
                 "reference_price": forecast.get("reference_price"),
                 "outcome_status": "PENDING", "comparison_included": False,
                 "comparison_exclusion_reasons": reasons,
                 "actual_return_pct": None, "target_close": None,
                 "target_session": None, "target_session_end": None,
                 "future_source_sha256": None,
+                "outcome_sha256": None,
                 "candidate_correct": None, "always_up_correct_same_row": None,
             }
             expected[(fid, horizon)] = {"item": item, "decision": decision, "group": key,
@@ -519,6 +522,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         for field in ("target_close", "target_session", "target_session_end", "future_source_sha256"):
             observation[field] = outcome.get(field)
         observation["actual_return_pct"] = actual_return
+        observation["outcome_sha256"] = _sha(_canonical_json(outcome))
         direction = linked["decision"]
         if direction in {"UP", "DOWN"}:
             model_correct = actual_return > 0 if direction == "UP" else actual_return < 0
@@ -567,7 +571,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
             ),
             "directional_coverage_of_frozen_forecasts": directional / value["captured"] if value["captured"] else None,
         })
-    return {
+    report = {
         "scorecard_version": SCORECARD_VERSION,
         "ledger_version": LEDGER_VERSION if path.suffix == ".sqlite3" else DUCKDB_LEDGER_VERSION,
         "storage_format": "sqlite3 pilot" if path.suffix == ".sqlite3" else "DuckDB staging journal",
@@ -589,6 +593,10 @@ def build_scorecard(path: Path) -> dict[str, Any]:
             "Pending outcomes remain pending and are never filled with zero or inferred from a later forecast.",
         ],
     }
+    # Covers the entire canonical report before adding the checksum itself.
+    # No current clock or file path is included: identical evidence is repeatable.
+    report["report_sha256"] = _sha(_canonical_json(report))
+    return report
 
 
 def render_scorecard_text(report: dict[str, Any], *, include_details: bool = False) -> str:
@@ -605,6 +613,7 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
         "Сравнивается направление цены в конце срока с правилом «всегда рост».",
         "Оба правила проверяются на одних и тех же завершённых направленных прогнозах.",
         "Один прогноз представлен отдельно для каждого срока; строки разных сроков не являются независимыми прогнозами.",
+        f"Контрольная сумма отчёта: {report['report_sha256']}.",
     ]
     if not report["groups"]:
         lines.extend(["", "Сохранённых прогнозов нет."])
