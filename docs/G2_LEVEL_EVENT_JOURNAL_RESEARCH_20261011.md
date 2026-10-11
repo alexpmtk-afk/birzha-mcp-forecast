@@ -35,3 +35,8 @@ Q-085 engineering acceptance requires successful exact-head ephemeral
 CI on #168/#179/#147 source dependencies, security/preflight and unchanged
 release gate of 12 blockers. No authority for main merge, HOME deployment,
 production execution, current Forecast V1/Outcome edits, or protected OOS.
+
+A later identical retry of an already accepted bar is allowed even when the current
+clock has advanced; it is read-only and always preserves the FIRST receipt time.
+A new stale bar is still refused. This distinction is regression-tested across
+SQLite process reopen and conflicting-source retry.

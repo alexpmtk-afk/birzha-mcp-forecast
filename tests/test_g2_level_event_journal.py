@@ -125,3 +125,25 @@ def test_cannot_overwrite_unrelated_database(tmp_path):
     d.execute("CREATE TABLE unrelated(x INTEGER)");d.close()
     with pytest.raises(Refused): LevelEventPilot(p)
     with pytest.raises(Refused): LevelEventPilot(":memory:")
+
+def test_stale_exact_retry_is_read_only_after_restart(tmp_path):
+    path=tmp_path/"a.sqlite3"
+    clock=Clock()
+    with LevelEventPilot(path,clock=clock) as j:
+        fresh=put(j,clock,0)
+        assert fresh["status"]=="NEW_RECEIPT"
+    clock.now+=timedelta(days=1)
+    with LevelEventPilot(path,clock=clock) as j:
+        same=j.append(inst(),bar(0),original_source_bytes=b"RAW-0",
+                      atr_price_scale=2.)
+        assert same["status"]=="DUPLICATE_IDENTICAL"
+        assert same["first_received_at"]==fresh["first_received_at"]
+        assert j.verify()["receipt_count"]==1
+        with pytest.raises(Collision):
+            j.append(inst(),bar(0),original_source_bytes=b"DIFFERENT",
+                     atr_price_scale=2.)
+        with pytest.raises(Refused):
+            j.append(inst(),bar(1),original_source_bytes=b"NEW_LATE",
+                     atr_price_scale=2.)
+        assert j.verify()["receipt_count"]==1
+

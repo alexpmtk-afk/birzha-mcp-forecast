@@ -154,10 +154,8 @@ class LevelEventPilot:
         start, end, avail, observed = (
             utc(bar.begin), utc(bar.end), utc(bar.available_at), utc(bar.observed_at))
         if (end-start != timedelta(minutes=15) or
-            not start < end <= avail <= observed <= now or
-            (now-observed).total_seconds() > 300 or
-            (now-end).total_seconds() > 900):
-            raise Refused("noncausal or stale M15 receipt; no backfill")
+            not start < end <= avail <= observed <= now):
+            raise Refused("noncausal M15 receipt")
         values = [bar.open, bar.high, bar.low, bar.close, bar.volume]
         if (any(type(v) not in (float,int) or not math.isfinite(v) for v in values)
             or min(values[:4]) <= 0 or bar.volume < 0
@@ -182,6 +180,11 @@ class LevelEventPilot:
                 self.db.execute("COMMIT")
                 return {"status":"DUPLICATE_IDENTICAL", "receipt_id":duplicate[0],
                         "first_received_at":duplicate[3], "new_events":0}
+            # Only NEW receipts must be fresh. A later identical retry must
+            # remain idempotent after restart; it cannot backdate a new row.
+            if ((now-observed).total_seconds() > 300 or
+                (now-end).total_seconds() > 900):
+                raise Refused("stale M15 receipt; historical backfill forbidden")
             last = self.db.execute(
                 "SELECT bar_start,bar_end,observed,bar_json FROM level_receipts WHERE stream=? ORDER BY id DESC LIMIT 1",
                 (stream,)).fetchone()
