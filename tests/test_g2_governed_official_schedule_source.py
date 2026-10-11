@@ -231,3 +231,26 @@ def test_unchanged_source_sha_is_not_proof_notice_completeness():
         assert result["trading_session_interpretation_certified"] is False
     finally:
         client.close()
+
+
+@pytest.mark.parametrize("encoding",["gzip","br","deflate","zstd"])
+def test_original_http_entity_cannot_be_silently_decompressed(encoding):
+    """httpx.iter_bytes decodes content: unsigned stored bytes would change."""
+    fake=FakeClock()
+    called=[]
+    def reply(req):
+        called.append(str(req.url))
+        return httpx.Response(
+            200,content=b"not actually compressed; rejection occurs before decoding",
+            headers={"Content-Type":"text/html","Content-Encoding":encoding},
+        )
+    client,control=settings(fake,reply)
+    try:
+        with pytest.raises(ScheduleCaptureRefused,match="SCHEDULE_BODY_TOO_LARGE_OR_EMPTY"):
+            capture_official_schedule_pages(
+                (FIRST,),clock=fake.utc,monotonic=fake.monotonic,
+                client=client,control_plane=control,
+            )
+        assert called==[FIRST]
+    finally:
+        client.close()
