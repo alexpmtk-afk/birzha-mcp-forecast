@@ -1,4 +1,4 @@
-"""Strict one-shot source-receipt в†’ issued Forecast в†’ one atomic DuckDB staging file.
+"""Strict one-shot source-receipt → issued Forecast → one atomic DuckDB staging file.
 
 Never accesses production journals, HOME, credentials, protected OOS or trading.
 MOEX response bytes and local receipt declarations are verified for internal
