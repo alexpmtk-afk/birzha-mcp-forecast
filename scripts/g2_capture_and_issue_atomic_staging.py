@@ -80,6 +80,7 @@ def _safe_failure_diagnostic(failures):
 def capture_and_issue_one(
     provider, market_data, market, capture_dir: Path, staging_root: Path, *,
     clock=lambda: datetime.now(timezone.utc), fault_hook=None,
+    capture_monotonic=None, capture_deadline_seconds=240.0, capture_max_attempts=120,
 ):
     if market not in MARKETS:
         raise ValueError("unsupported market root")
