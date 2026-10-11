@@ -11,7 +11,7 @@ from birzha.application.market_state_classifier import classify_market_state_fro
 from birzha.domain.snapshot import MarketSnapshot
 from birzha.domain.market import Instrument, CandleSeries
 
-SCHEMA="ALIGNMENT15_RESEARCH_PROPOSAL_V1"
+SCHEMA="ALIGNMENT15_RESEARCH_PROPOSAL_V2"
 WEIGHTS={"market_state":2,"control":3,"location":2,"pressure":1,
          "efficiency":2,"effort_result":2,"route":3}
 assert sum(WEIGHTS.values())==15
@@ -64,10 +64,20 @@ def _score(side, snapshot, state, control, route, location):
     features=snapshot.normalized_features
     efficiencies=(features.d1_efficiency_20,features.h1_efficiency_20,
                   features.m15_efficiency_20) if features else ()
-    if (len(efficiencies)==3 and all(type(v) in (int,float)
-        and math.isfinite(v) and 0<=v<=1 for v in efficiencies)):
+    moves=(features.d1_return_5_atr,features.h1_return_5_atr,
+           features.m15_return_5_atr) if features else ()
+    if (len(efficiencies)==3 and len(moves)==3
+        and all(type(v) in (int,float) and math.isfinite(v)
+                and 0<=v<=1 for v in efficiencies)
+        and all(type(v) in (int,float) and math.isfinite(v) for v in moves)):
+        # Efficiency Ratio is unsigned. This research directional guard still
+        # overlaps Market State, and is NOT an approved scoring methodology.
+        oriented=tuple(v if side=="LONG" else -v for v in moves)
+        supports=(oriented[0]>0 and sum(v>0 for v in oriented[1:])>=1
+                  and all(v>-.5 for v in oriented[1:]))
         mean=sum(efficiencies)/3
-        points["efficiency"]=2 if mean>=.65 else 1 if mean>=.4 else 0
+        points["efficiency"]=(2 if mean>=.65 else 1 if mean>=.4 else 0
+                              ) if supports else 0
     else: points["efficiency"]=None
     evidence=control["reaction_holding_evidence"]
     volume=control["candle_activity"]
@@ -93,6 +103,11 @@ def _score(side, snapshot, state, control, route, location):
             "factors":{key:{"points":points[key],"maximum":maximum}
                        for key,maximum in WEIGHTS.items()},
             "complete_proposed_scorecard":complete,
+            "factor_independence_status":"NOT_DEMONSTRATED",
+            "known_overlapping_evidence_pairs":[
+                ["market_state","efficiency"],["control","effort_result"],
+                ["control","route"],["market_state","route"],
+            ],
             "missing_evidence_reason_codes":[f"MISSING_{key.upper()}" for key,value in points.items() if value is None]}
 
 
@@ -111,7 +126,8 @@ def propose_alignment_and_no_trade(snapshot: MarketSnapshot, instrument: Instrum
     loc=_location(snapshot,route)
     scores={side:_score(side,snapshot,state,control,route,loc)
             for side in ("LONG","SHORT")}
-    reasons=["ALIGNMENT15_FORMULA_TBD_USER_APPROVAL"]
+    reasons=["ALIGNMENT15_FORMULA_TBD_USER_APPROVAL",
+             "ALIGNMENT_EVIDENCE_DEPENDENCIES_NOT_INDEPENDENT"]
     for side,score in scores.items():
         val=score["total_score_out_of_15_not_probability"]
         if val is None: reasons.append(side+"_EVIDENCE_INCOMPLETE")

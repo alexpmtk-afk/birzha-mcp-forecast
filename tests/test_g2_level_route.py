@@ -187,3 +187,20 @@ def test_type_and_payload_boundary_rejects_caller_spoofed_regime():
         assess_levels_and_route(snap,ins,series,market_state_candidate={
             "candidate_regime":"TREND_UP","classification_status":"CLASSIFIED",
         })
+
+
+def test_profile_flow_older_than_last_completed_m15_is_not_used_as_location_or_obstacle():
+    snapshot, instrument, series = prepared("BUYERS")
+    exact = _profile("PUBLIC_TRADES_PRICE_QUANTITY_V1")
+    flow = replace(snapshot.flow, volume_profile=exact,
+                   as_of="2026-10-10T12:29:00Z")
+    snap = replace(snapshot, flow=flow, volume_profile=exact,
+                   normalized_features=replace(snapshot.normalized_features,
+                                               profile_method=exact.method,
+                                               profile_is_exact=True))
+    route = assess_levels_and_route(snap, instrument, series)
+    assert route["profile_admission_reason"] == "PROFILE_FLOW_PREDATES_LAST_COMPLETED_M15"
+    assert not any(item["exact_trade_volume_profile"]
+                   for item in route["level_candidates"])
+    assert "CLAIMED_EXACT_PROFILE_FAILED_PROVENANCE" in route["reason_codes"]
+    assert route["scenario_or_trade_authorized"] is False

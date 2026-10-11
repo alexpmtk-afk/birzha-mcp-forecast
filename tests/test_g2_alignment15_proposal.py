@@ -37,10 +37,13 @@ def test_draft_weight_proposal_exactly_15_and_distinguishes_both_sides():
     proposal=propose_alignment_and_no_trade(snap,inst,m15)
     assert proposal["location_exact_profile_candidate"]=="BELOW_VAL"
     assert proposal["scorecards"]["LONG"]["total_score_out_of_15_not_probability"]==12
-    assert proposal["scorecards"]["SHORT"]["total_score_out_of_15_not_probability"]==5
+    assert proposal["scorecards"]["SHORT"]["total_score_out_of_15_not_probability"]==3
     assert proposal["scorecards"]["LONG"]["factors"]["pressure"]["points"]==0
     assert proposal["scorecards"]["SHORT"]["factors"]["pressure"]["points"]==1
     assert proposal["selected_decision"]=="NO_TRADE"
+    assert proposal["schema"]=="ALIGNMENT15_RESEARCH_PROPOSAL_V2"
+    assert proposal["scorecards"]["LONG"]["factor_independence_status"]=="NOT_DEMONSTRATED"
+    assert "ALIGNMENT_EVIDENCE_DEPENDENCIES_NOT_INDEPENDENT" in proposal["reason_codes"]
     assert proposal["engine3_accepted"] is False
     assert proposal["user_scoring_formula_approved"] is False
     assert proposal["scenario_or_execution_authorized"] is False
@@ -144,3 +147,33 @@ def test_pure_score_fail_closed_on_untrusted_missing_factors():
     score=_score("LONG",snap,s,h,r,None)
     assert score["complete_proposed_scorecard"] is False
     assert score["total_score_out_of_15_not_probability"] is None
+
+
+def test_unsigned_efficiency_never_rewards_opposite_direction():
+    from birzha.application.level_route import assess_levels_and_route
+    from birzha.application.control_holding import control_holding_from_snapshot
+    from birzha.application.market_state_classifier import classify_market_state_from_snapshot
+    snap, inst, series = prepared("BUYERS")
+    state = classify_market_state_from_snapshot(snap, inst)
+    control = control_holding_from_snapshot(snap, inst, series)
+    route = assess_levels_and_route(snap, inst, series)
+    long_score = _score("LONG", snap, state, control, route, None)
+    short_score = _score("SHORT", snap, state, control, route, None)
+    assert long_score["factors"]["efficiency"]["points"] == 2
+    assert short_score["factors"]["efficiency"]["points"] == 0
+    assert long_score["factor_independence_status"] == "NOT_DEMONSTRATED"
+
+
+def test_missing_directional_returns_never_credit_efficiency():
+    from birzha.application.level_route import assess_levels_and_route
+    from birzha.application.control_holding import control_holding_from_snapshot
+    from birzha.application.market_state_classifier import classify_market_state_from_snapshot
+    snap, inst, series = prepared("BUYERS")
+    snap = replace(snap, normalized_features=replace(
+        snap.normalized_features, h1_return_5_atr=None))
+    state = classify_market_state_from_snapshot(snap, inst)
+    control = control_holding_from_snapshot(snap, inst, series)
+    route = assess_levels_and_route(snap, inst, series)
+    result = _score("LONG", snap, state, control, route, None)
+    assert result["factors"]["efficiency"]["points"] is None
+    assert result["complete_proposed_scorecard"] is False

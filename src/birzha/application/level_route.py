@@ -67,7 +67,7 @@ def _historical_level(name, price, prior, atr):
     }
 
 
-def _exact_profile_levels(snapshot, instrument):
+def _exact_profile_levels(snapshot, instrument, series):
     """Require matching original flow profile, not a self-declared snapshot flag."""
     profile=snapshot.volume_profile
     flow=snapshot.flow
@@ -95,6 +95,16 @@ def _exact_profile_levels(snapshot, instrument):
             return [],"PROFILE_FUTURE_OR_NAIVE_TIME"
     except (AttributeError,TypeError,ValueError):
         return [],"PROFILE_FUTURE_OR_NAIVE_TIME"
+    # Flow evidence must cover at least the latest completed source M15 bar.
+    # It remains unverified externally even when this causal guard passes.
+    try:
+        latest=datetime.fromisoformat(series.candles[-1].end.replace("Z","+00:00"))
+        if latest.tzinfo is None or latest.utcoffset() is None:
+            return [],"M15_LAST_END_NOT_VERIFIED"
+        if end<latest:
+            return [],"PROFILE_FLOW_PREDATES_LAST_COMPLETED_M15"
+    except (AttributeError,IndexError,TypeError,ValueError):
+        return [],"M15_LAST_END_NOT_VERIFIED"
     levels=[("POC",profile.poc),("VAH",profile.vah),("VAL",profile.val)]
     levels.extend(("HVN",p) for p in profile.hvn)
     levels.extend(("LVN",p) for p in profile.lvn)
@@ -140,7 +150,7 @@ def assess_levels_and_route(
             _historical_level("PRIOR_SUPPORT",prices["support"],prior,atr),
             _historical_level("PRIOR_RESISTANCE",prices["resistance"],prior,atr),
         ]
-        profile,profile_reason=_exact_profile_levels(snapshot,instrument)
+        profile,profile_reason=_exact_profile_levels(snapshot,instrument,series)
         levels.extend(profile)
         if (snapshot.normalized_features is not None
             and snapshot.normalized_features.profile_is_exact is True
