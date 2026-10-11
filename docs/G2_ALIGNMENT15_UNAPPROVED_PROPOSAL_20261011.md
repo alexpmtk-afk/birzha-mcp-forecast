@@ -28,7 +28,7 @@ Until policy approval, output always `selected_decision=NO_TRADE`, `user_scoring
 
 ### Example on synthetic source data only
 
-An invented buyer Control (high confidence) with bullish research regime but seller-favored Delta and a profile location BELOW_VAL can sum **12/15 for LONG**, while SHORT sums **5/15**. This is not an instruction to trade: a 12/15 research score can coexist with major profile disagreement, unapproved formula, unauthenticated provider/clock and missing market calibration, and the result remains NO_TRADE.
+An invented buyer Control (high confidence) with bullish research regime but seller-favored Delta and a profile location BELOW_VAL can sum **12/15 for LONG**, while SHORT sums **3/15**. This is not an instruction to trade: a 12/15 research score can coexist with major profile disagreement, unapproved formula, unauthenticated provider/clock and missing market calibration, and the result remains NO_TRADE.
 
 ## Requirements for true Engine 3
 
@@ -38,3 +38,29 @@ An invented buyer Control (high confidence) with bullish research regime but sel
 4. Only then do independently reviewed acceptance, explicit main merge authorization and separate HOME deploy permission. Until then, `forecast_protocol08_complete` OPEN, all **12 G2 release blockers** remain.
 
 Sources: user-owned original Protocol 08 (not amended) and chained Draft #202, #201, #200, #199. This document is a **decision proposal** rather than an approved trading methodology.
+
+
+## Independent review: unapproved V2 safeguards (11 October 2026)
+
+`ALIGNMENT15_RESEARCH_PROPOSAL_V2` keeps seven provisional weights and
+`NO_TRADE` but no longer gives signed LONG and SHORT both positive
+Efficiency Ratio points from the same unsigned ER. Only a sign-consistent
+D1 move, at least one confirming intraday move and no significant opposite
+H1/M15 displacement can receive the previous provisional efficiency points.
+All D1/H1/M15 displacement/ER inputs must be observed or the factor is NULL.
+This is a research hypothesis, not a validated advantage.
+
+Dependencies remain: Market State/Efficiency, Control/Effort→Result,
+Control/Route, Market State/Route share some underlying evidence. Code
+explicitly marks independence NOT_DEMONSTRATED. The sum is **not** seven
+statistically independent confirmations and must not be promoted to policy.
+
+Matching public-trade Profile may not be used if flow.as_of predates the
+last completed M15 bar in the same evaluation. Passing this guard does not
+establish trade coverage or source authenticity. Rolling-extreme levels
+also still need an event-time first-known history to avoid ex-post
+selection optimism before their claimed historical strength is accepted.
+
+Weights and 7/10 thresholds remain unapproved; genuine T0, TSA/calendar,
+outcome/OOS, independent review, merge and HOME release gates remain OPEN.
+No existing Forecast, storage, orders or production integration change.
