@@ -9,7 +9,7 @@ Builds on Draft #201 Control/Holding and #200 separate Market State research can
 ## Typed levels
 
 For a Control candidate only, generate `PRIOR_SUPPORT` and `PRIOR_RESISTANCE` from **20 candles completed before** the final three-candle reaction/holding window. Each record includes:
-- price, role `SUPPORT`/`RESISTANCE`, `WEAK`/`MEDIUM`/`STRONG` **research label** based on 0–1/2/3+ distinct earlier held tests;
+- price, role `SUPPORT`/`RESISTANCE`, `WEAK`/`MEDIUM`/`STRONG` **research label** based on 0–1/2/3+ distinct held tests **after** that exact rolling-extreme price first became observable;
 - an explicit immutable list of original candle end times, `LEVEL_TEST_HELD` events, evidence from finished M15 bars, and a cooldown preventing adjacent bars being counted as independent repeated tests;
 - `role_flip_history_status=NOT_ESTABLISHED_FROM_ROLLING_EXTREME`, because this rolling extremum does **not** actually prove when a prior support turned resistance. Never fabricate a historical role flip.
 
@@ -25,3 +25,37 @@ Optional `POC/VAH/VAL/HVN/LVN` obstacles are admitted only if a `PUBLIC_TRADES_P
 Offline tests cover both directions, complete pre-reaction event history, no look-ahead, near obstacle, unknown free space, missing/partial source, contrary regimes, BALANCE abstention, proxy volume-profile exclusion, bogus exact profile fail-closed and matching exact flow profile with acknowledged external trust limit. Tests prove code contracts on synthetic examples, **not independent source truth, profitability or future forecasting quality**.
 
 Remaining real Protocol 08 scope: verified level role-flip and multi-test provenance from longer original preserved tick/price-volume history; independent validation/calibration of Control/Route on prospective post-T0 +5/+10/+20 outcomes; separate approved Alignment 0–15 scoring table; first genuine source/TSA attestation and exact MOEX exchange session proof; independent domain review; recovery and authorized HOME acceptance; separately authorized main merge and deploy. **All 12 G2 release blockers remain open.**
+
+
+## Q-084: first-observable price and post-discovery history (2026-10-11)
+
+Version `LEVEL_HISTORY_RESEARCH_V2` / `OBSTACLE_ROUTE_RESEARCH_V2` corrects a
+specific hindsight problem: the final rolling-20-bar low/high price used to be
+applied retroactively across all preceding bars, allowing near-touches
+**before that exact extremum first appeared** to boost its strength.
+
+Research history now records the first completed source M15 bar containing the
+eventual exact min(low) / max(high) and its offset-aware `observed_at` as
+`price_first_observable_at_utc`. The discovery bar is **not** counted as a
+separate confirming retest. Only subsequent chronologically observed completed
+bars with qualifying reaction/hold, and the pre-existing one-bar separation,
+may count as distinct tests. An out-of-order or duplicated observation time
+makes all candidate price-level strengths `UNVERIFIED` and the Route ABSTAIN.
+
+**Crucial evidence distinction:** an archived bar and its `observed_at` can
+indicate when the *price* became observable within this source dataset; they
+do NOT prove that the system recognized the level or published a forecast at
+that historical moment. Labels explicitly say
+`POST_FIRST_OBSERVABLE_TESTS_RECONSTRUCTED_NOT_EX_ANTE_CERTIFIED` and
+`level_detected_ex_ante_proven=false`. The historic source may still lack
+independent first-receipt proof, so no ex-ante/prospective qualification follows.
+
+Synthetic negative tests cover late-created supports and resistances with
+many earlier near-touches, an uncounted discovery candle, the regular
+post-discovery tests, and disordered `observed_at` producing fail-closed
+ABSTAIN. Existing control reaction, 15-point draft Alignment weights,
+`NO_TRADE`, Forecast V1, OOS, and all 12 release gates are unchanged.
+
+Remaining: independent origin/clock attestation, a live event-time level
+journal, real level role-flips, calibration by instrument/regime and untouched
+prospective 5/10/20 horizons. NO merge, HOME deploy or production approval.

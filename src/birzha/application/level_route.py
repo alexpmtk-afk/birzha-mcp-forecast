@@ -20,8 +20,8 @@ from birzha.application.normalized_features import EXACT_PROFILE_METHOD
 from birzha.domain.market import CandleSeries, Instrument
 from birzha.domain.snapshot import MarketSnapshot
 
-LEVEL_VERSION="LEVEL_HISTORY_RESEARCH_V1"
-ROUTE_VERSION="OBSTACLE_ROUTE_RESEARCH_V1"
+LEVEL_VERSION="LEVEL_HISTORY_RESEARCH_V2"
+ROUTE_VERSION="OBSTACLE_ROUTE_RESEARCH_V2"
 
 
 def _number(value, *, strictly_positive=True):
@@ -37,22 +37,41 @@ def _timestamp(t):
 
 
 def _historical_level(name, price, prior, atr):
-    """Touch history is observed BEFORE the Control reaction, not reconstructed."""
+    """Research price-level tests only AFTER its price is first observable.
+
+    The rolling extreme is selected at evaluation time; even historical
+    `observed_at` proves when the price was available, NOT that a real-time
+    strategy already recognized this level. Historical labels remain research.
+    """
     role="SUPPORT" if name=="PRIOR_SUPPORT" else "RESISTANCE"
+    # Price comes from min(low)/max(high) of the same completed prior window.
+    # Near-touches before the actual extreme first occurred are NOT evidence.
+    first_index=next((i for i,c in enumerate(prior)
+                      if (c.low if role=="SUPPORT" else c.high)==price),None)
+    if first_index is None:
+        raise ValueError("rolling level absent from its original source")
+    observed=[_timestamp(c.observed_at) for c in prior]
+    chronological=all(observed[i]>observed[i-1]
+                      for i in range(1,len(observed)))
+    first_observable=observed[first_index] if chronological else None
     touches=[]
-    cooldown=0
-    for i,c in enumerate(prior):
-        touched=(c.low<=price+.15*atr) if role=="SUPPORT" else (c.high>=price-.15*atr)
-        confirmed=(c.close>=price+.25*atr) if role=="SUPPORT" else (c.close<=price-.25*atr)
-        if touched and confirmed and i>=cooldown:
-            touches.append({
-                "observed_end_utc":_timestamp(c.end),
-                "event":"LEVEL_TEST_HELD",
-                "level_role":role,
-            })
-            cooldown=i+2  # at least one intervening complete bar
-    n=len(touches)
-    strength="WEAK" if n<=1 else "MEDIUM" if n==2 else "STRONG"
+    cooldown=first_index+1
+    if chronological:
+        for i in range(first_index+1,len(prior)):
+            c=prior[i]
+            touched=(c.low<=price+.15*atr) if role=="SUPPORT" else (c.high>=price-.15*atr)
+            confirmed=(c.close>=price+.25*atr) if role=="SUPPORT" else (c.close<=price-.25*atr)
+            if touched and confirmed and i>=cooldown:
+                touches.append({
+                    "observed_end_utc":_timestamp(c.end),
+                    "source_observed_at_utc":observed[i],
+                    "event":"LEVEL_TEST_HELD_AFTER_PRICE_FIRST_OBSERVABLE",
+                    "level_role":role,
+                })
+                cooldown=i+2  # require an intervening completed bar
+    n=len(touches) if chronological else None
+    strength=("UNVERIFIED" if n is None else
+              "WEAK" if n<=1 else "MEDIUM" if n==2 else "STRONG")
     return {
         "type":name,
         "price":price,
@@ -60,6 +79,13 @@ def _historical_level(name, price, prior, atr):
         "strength":strength,
         "distinct_prior_test_count":n,
         "observed_test_history":touches,
+        "price_first_observable_at_utc":first_observable,
+        "price_first_observable_bar_end_utc":(
+            _timestamp(prior[first_index].end) if chronological else None),
+        "history_reconstruction_status":(
+            "POST_FIRST_OBSERVABLE_TESTS_RECONSTRUCTED_NOT_EX_ANTE_CERTIFIED"
+            if chronological else "UNVERIFIED_OBSERVATION_ORDER"),
+        "level_detected_ex_ante_proven":False,
         "role_flip_history_status":"NOT_ESTABLISHED_FROM_ROLLING_EXTREME",
         "price_source":"COMPLETED_M15_ROLLING_EXTREME",
         "exact_trade_volume_profile":False,
@@ -120,6 +146,10 @@ def _exact_profile_levels(snapshot, instrument, series):
             "strength":"UNVERIFIED",
             "distinct_prior_test_count":None,
             "observed_test_history":[],
+            "price_first_observable_at_utc":None,
+            "price_first_observable_bar_end_utc":None,
+            "history_reconstruction_status":"NO_LEVEL_TEST_HISTORY",
+            "level_detected_ex_ante_proven":False,
             "role_flip_history_status":"NO_CAUSAL_HISTORY",
             "price_source":"MATCHING_FLOW_PUBLIC_TRADE_PRICE_QUANTITY",
             "exact_trade_volume_profile":True,
@@ -152,6 +182,9 @@ def assess_levels_and_route(
         ]
         profile,profile_reason=_exact_profile_levels(snapshot,instrument,series)
         levels.extend(profile)
+        if any(x["history_reconstruction_status"]=="UNVERIFIED_OBSERVATION_ORDER"
+               for x in levels if x["price_source"]=="COMPLETED_M15_ROLLING_EXTREME"):
+            reasons.append("LEVEL_HISTORY_EVENT_ORDER_UNVERIFIED")
         if (snapshot.normalized_features is not None
             and snapshot.normalized_features.profile_is_exact is True
             and profile_reason is not None):

@@ -45,8 +45,17 @@ def test_route_uses_prior_level_history_and_independent_same_snapshot_regime(
     for level in result["level_candidates"]:
         assert level["strength"]=="STRONG"
         assert level["role_flip_history_status"]=="NOT_ESTABLISHED_FROM_ROLLING_EXTREME"
-        assert all(e["event"]=="LEVEL_TEST_HELD" for e in level["observed_test_history"])
-        assert all(e["observed_end_utc"]<"2026-10-10T11:45:00Z"
+        assert all(e["event"]=="LEVEL_TEST_HELD_AFTER_PRICE_FIRST_OBSERVABLE"
+                   for e in level["observed_test_history"])
+        assert level["price_first_observable_at_utc"] is not None
+        assert all(e["source_observed_at_utc"]>level["price_first_observable_at_utc"]
+                   for e in level["observed_test_history"])
+        assert level["level_detected_ex_ante_proven"] is False
+        assert level["history_reconstruction_status"]==(
+            "POST_FIRST_OBSERVABLE_TESTS_RECONSTRUCTED_NOT_EX_ANTE_CERTIFIED")
+        # The final *pre-reaction* completed bar is eligible as a retest,
+        # so its end may equal the exact boundary of the prior-only window.
+        assert all(e["observed_end_utc"]<=series.candles[-4].end.replace("+00:00","Z")
                    for e in level["observed_test_history"])
     assert result["source_independently_authenticated"] is False
     assert result["route_thresholds_externally_calibrated"] is False
@@ -204,3 +213,67 @@ def test_profile_flow_older_than_last_completed_m15_is_not_used_as_location_or_o
                    for item in route["level_candidates"])
     assert "CLAIMED_EXACT_PROFILE_FAILED_PROVENANCE" in route["reason_codes"]
     assert route["scenario_or_trade_authorized"] is False
+
+
+@pytest.mark.parametrize("side,level_kind", [
+    ("BUYERS", "PRIOR_SUPPORT"), ("SELLERS", "PRIOR_RESISTANCE"),
+])
+def test_historical_near_touches_preceding_first_exact_extreme_are_not_tests(
+        side,level_kind):
+    snapshot,instrument,series=prepared(side)
+    bars=list(series.candles)
+    # Prior bars look like many touches near the final level, but the actual
+    # final 20-bar extremum first appears on the LAST prior completed bar.
+    # The old implementation counted 10 tests despite this late discovery.
+    for i in range(len(bars)-23,len(bars)-3):
+        if side=="BUYERS":
+            bars[i]=replace(bars[i],low=100.2)
+        else:
+            bars[i]=replace(bars[i],high=109.8)
+    if side=="BUYERS":
+        bars[-4]=replace(bars[-4],low=100.)
+    else:
+        bars[-4]=replace(bars[-4],high=110.)
+    series=replace(series,candles=tuple(bars))
+    result=assess_levels_and_route(snapshot,instrument,series)
+    level=next(x for x in result["level_candidates"] if x["type"]==level_kind)
+    assert result["classification_status"]=="PROVISIONAL_ROUTE_CANDIDATE"
+    assert level["strength"]=="WEAK"
+    assert level["distinct_prior_test_count"]==0
+    assert level["observed_test_history"]==[]
+    assert level["price_first_observable_at_utc"]==(
+        bars[-4].observed_at.replace("+00:00","Z"))
+    assert level["price_first_observable_bar_end_utc"]==(
+        bars[-4].end.replace("+00:00","Z"))
+    assert level["level_detected_ex_ante_proven"] is False
+    assert result["level_history_schema"]=="LEVEL_HISTORY_RESEARCH_V2"
+
+
+def test_level_discovery_candle_not_counted_as_confirmation():
+    snapshot,instrument,series=prepared("BUYERS")
+    result=assess_levels_and_route(snapshot,instrument,series)
+    level=next(x for x in result["level_candidates"]
+               if x["type"]=="PRIOR_SUPPORT")
+    # Discovery itself held above the eventual floor, but is not a retest.
+    assert len(level["observed_test_history"])>0
+    assert all(e["observed_end_utc"]!=level["price_first_observable_bar_end_utc"]
+               for e in level["observed_test_history"])
+
+
+def test_out_of_order_source_observations_cannot_certify_level_test_history():
+    snapshot,instrument,series=prepared("BUYERS")
+    bars=list(series.candles)
+    # Both observations remain <= T0 and individually valid, but the
+    # backfilled order no longer proves the chronological discovery path.
+    bars[-5]=replace(bars[-5],observed_at=bars[-4].observed_at)
+    result=assess_levels_and_route(
+        snapshot,instrument,replace(series,candles=tuple(bars)))
+    assert result["classification_status"]=="ABSTAIN"
+    assert "LEVEL_HISTORY_EVENT_ORDER_UNVERIFIED" in result["reason_codes"]
+    assert result["typed_obstacles_ahead"]==[]
+    levels=[x for x in result["level_candidates"]
+            if x["price_source"]=="COMPLETED_M15_ROLLING_EXTREME"]
+    assert all(x["strength"]=="UNVERIFIED" for x in levels)
+    assert all(x["distinct_prior_test_count"] is None for x in levels)
+    assert all(x["price_first_observable_at_utc"] is None for x in levels)
+    assert result["scenario_or_trade_authorized"] is False

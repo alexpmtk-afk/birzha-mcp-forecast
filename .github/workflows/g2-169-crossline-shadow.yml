@@ -27,6 +27,7 @@ on:
       - chatgpt/g2-typed-level-obstacle-route-20261011
       - chatgpt/g2-alignment15-proposal-safe-scenario-20261011
       - chatgpt/g2-alignment-direction-profile-guard-20261011
+      - chatgpt/g2-level-first-observable-research-20261011
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
