@@ -24,6 +24,7 @@ from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 from birzha.storage.g2_manifest_evidence import verified_original_manifest
 from birzha.storage.g2_calendar_evidence import (encode_calendar_witness, verify_calendar_evidence)
 from birzha.storage.g2_timestamp_evidence import audit_time_anchor_rows
+from birzha.storage.g2_schedule_evidence import audit_official_schedule_rows
 
 VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
 HORIZONS = (5, 10, 20)
@@ -203,6 +204,12 @@ class SingleDuckDBProspectiveStagingJournal:
           ca_blob BLOB NOT NULL,ca_sha VARCHAR NOT NULL,
           chain_blob BLOB,chain_sha VARCHAR,
           verification_json VARCHAR NOT NULL,verification_sha VARCHAR NOT NULL)""")
+        # Optional append-only original public MOEX schedule evidence per
+        # frozen Forecast. Candidate URLs alone never certify authenticity.
+        self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_schedule_evidence (
+          forecast_id VARCHAR PRIMARY KEY,
+          schedule_blob BLOB NOT NULL,schedule_sha VARCHAR NOT NULL,
+          candidate_json VARCHAR NOT NULL,candidate_sha VARCHAR NOT NULL)""")
 
     def close(self):
         with self.lock:
@@ -297,6 +304,7 @@ class SingleDuckDBProspectiveStagingJournal:
             if projected.outcome_id!=oid or outcome.get(oid)!=(digest,body):
                 raise pilot.ImmutableCollision("canonical Outcome differs from original future")
         audit_time_anchor_rows(self.db)
+        audit_official_schedule_rows(self.db)
         return {"captures":len(sources),"outcomes":len(future)}
 
     def audit(self):
