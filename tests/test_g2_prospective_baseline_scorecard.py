@@ -121,6 +121,64 @@ def test_scorecard_pairs_candidate_and_always_up_on_same_outcomes(tmp_path: Path
     assert row["outcomes_pending"] == 0
 
 
+def test_detail_rows_reconcile_with_every_summary_group(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = ledger.read_bytes()
+    report = build_scorecard(ledger)
+    assert len(report["observations"]) == 9
+    assert len({(row["forecast_id"], row["horizon_sessions"]) for row in report["observations"]}) == 9
+    for group in report["groups"]:
+        rows = [row for row in report["observations"] if
+                (row["market"], row["secid"], row["horizon_sessions"]) ==
+                (group["market"], group["secid"], group["horizon_sessions"])]
+        scored = [row for row in rows if row["comparison_included"]]
+        assert group["forecasts_frozen"] == len(rows)
+        assert group["outcomes_completed"] == sum(row["outcome_status"] == "OBSERVED" for row in rows)
+        assert group["outcomes_pending"] == sum(row["outcome_status"] == "PENDING" for row in rows)
+        assert group["directional_forecasts_scored"] == len(scored)
+        assert group["candidate_correct"] == sum(row["candidate_correct"] for row in scored)
+        assert group["always_up_correct_same_rows"] == sum(row["always_up_correct_same_row"] for row in scored)
+        assert all(row["comparison_exclusion_reasons"] == [] for row in scored)
+    neutral = next(row for row in report["observations"] if row["decision"] == "NEUTRAL")
+    assert neutral["actual_return_pct"] == 10.0
+    assert neutral["comparison_exclusion_reasons"] == ["NEUTRAL_DECISION"]
+    assert neutral["candidate_correct"] is None
+    assert neutral["always_up_correct_same_row"] is None
+    assert ledger.read_bytes() == before
+
+
+def test_pending_details_keep_unknown_values_and_exclusion_reasons(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    report = build_scorecard(ledger)
+    for row in report["observations"]:
+        assert row["outcome_status"] == "PENDING"
+        assert row["comparison_included"] is False
+        assert "PENDING_OUTCOME" in row["comparison_exclusion_reasons"]
+        for field in ("actual_return_pct", "target_close", "target_session", "target_session_end",
+                      "future_source_sha256", "candidate_correct", "always_up_correct_same_row"):
+            assert row[field] is None
+    text = render_scorecard_text(report, include_details=True)
+    assert text.count("Запись:") == 9
+    assert "результат ещё не получен; нет направленного решения" in text
+    assert "Прогноз: ошибка" not in text
+
+
+def test_cli_details_show_the_exact_forecast_and_its_result(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = ledger.read_bytes()
+    assert main(["--ledger", str(ledger), "--format", "text", "--details"]) == 0
+    text = capsys.readouterr().out
+    assert "Запись: f-down. Рынок: SBER. Инструмент: SBER." in text
+    assert "Прогноз: ошибка. Правило «всегда рост»: верно." in text
+    assert "Не участвует в сравнении: нет направленного решения." in text
+    assert ledger.read_bytes() == before
+
+
 def test_scorecard_refuses_a_changed_forecast_body(tmp_path: Path) -> None:
     ledger = tmp_path / "pilot.sqlite3"
     _make_ledger(ledger)

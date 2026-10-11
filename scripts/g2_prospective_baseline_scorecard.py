@@ -482,10 +482,27 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         for horizon, row in _forecast_horizons(forecast).items():
             decision = _decision(forecast, row)
             key = (str(forecast["symbol"]), str(forecast["secid"]), horizon)
-            bucket = groups[key]
-            bucket["captured"] += 1
-            bucket[{"UP": "up", "DOWN": "down", "NEUTRAL": "neutral", "ABSTAIN": "abstain"}[decision]] += 1
-            expected[(fid, horizon)] = {"item": item, "decision": decision, "group": key}
+            reasons = ["PENDING_OUTCOME"]
+            if decision == "NEUTRAL":
+                reasons.append("NEUTRAL_DECISION")
+            elif decision == "ABSTAIN":
+                reasons.append("EXPLICIT_ABSTENTION")
+            observation = {
+                "forecast_id": fid, "market": key[0], "secid": key[1],
+                "horizon_sessions": horizon, "decision": decision,
+                "created_at_t0": forecast.get("created_at_t0"),
+                "captured_at": receipt.get("captured_at"),
+                "forecast_sha256": receipt.get("forecast_sha256"),
+                "reference_price": forecast.get("reference_price"),
+                "outcome_status": "PENDING", "comparison_included": False,
+                "comparison_exclusion_reasons": reasons,
+                "actual_return_pct": None, "target_close": None,
+                "target_session": None, "target_session_end": None,
+                "future_source_sha256": None,
+                "candidate_correct": None, "always_up_correct_same_row": None,
+            }
+            expected[(fid, horizon)] = {"item": item, "decision": decision, "group": key,
+                                        "observation": observation}
 
     for entry in outcome_rows:
         fid, horizon, outcome = entry["forecast_id"], entry["horizon"], entry["outcome"]
@@ -493,25 +510,39 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         if linked is None:
             raise ScorecardRefused(f"outcome has no matching frozen forecast: {fid}/{horizon}")
         forecast, receipt = linked["item"]["forecast"], linked["item"]["receipt"]
+        observation = linked["observation"]
+        if observation["outcome_status"] == "OBSERVED":
+            raise ScorecardRefused(f"duplicate outcome identity: {fid}/{horizon}")
         actual_return = _check_outcome(forecast, receipt, horizon, outcome)
-        bucket = groups[linked["group"]]
-        bucket["matured"] += 1
+        observation["outcome_status"] = "OBSERVED"
+        observation["comparison_exclusion_reasons"].remove("PENDING_OUTCOME")
+        for field in ("target_close", "target_session", "target_session_end", "future_source_sha256"):
+            observation[field] = outcome.get(field)
+        observation["actual_return_pct"] = actual_return
         direction = linked["decision"]
         if direction in {"UP", "DOWN"}:
             model_correct = actual_return > 0 if direction == "UP" else actual_return < 0
             always_up_correct = actual_return > 0
-            bucket["candidate_correct"] += int(model_correct)
-            bucket["always_up_correct"] += int(always_up_correct)
+            observation["comparison_included"] = True
+            observation["candidate_correct"] = model_correct
+            observation["always_up_correct_same_row"] = always_up_correct
+
+    observations = sorted((entry["observation"] for entry in expected.values()),
+                          key=lambda row: (row["market"], row["secid"], row["horizon_sessions"], row["forecast_id"]))
+    for observation in observations:
+        key = (observation["market"], observation["secid"], observation["horizon_sessions"])
+        bucket = groups[key]
+        bucket["captured"] += 1
+        bucket[{"UP": "up", "DOWN": "down", "NEUTRAL": "neutral", "ABSTAIN": "abstain"}[observation["decision"]]] += 1
+        bucket["matured"] += int(observation["outcome_status"] == "OBSERVED")
+        bucket["scored"] = bucket.get("scored", 0) + int(observation["comparison_included"])
+        bucket["candidate_correct"] += int(observation["candidate_correct"] is True)
+        bucket["always_up_correct"] += int(observation["always_up_correct_same_row"] is True)
 
     rows: list[dict[str, Any]] = []
     for (market, secid, horizon), value in sorted(groups.items()):
         directional = value["up"] + value["down"]
-        completed_ids = {(row["forecast_id"], row["horizon"]) for row in outcome_rows}
-        scored = sum(
-            1 for (fid, h), entry in expected.items()
-            if h == horizon and entry["group"] == (market, secid, horizon)
-            and entry["decision"] in {"UP", "DOWN"} and (fid, h) in completed_ids
-        )
+        scored = value["scored"]
         pending = value["captured"] - value["matured"]
         candidate_accuracy = value["candidate_correct"] / scored if scored else None
         baseline_accuracy = value["always_up_correct"] / scored if scored else None
@@ -549,6 +580,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         "comparison": "fixed always-UP reference on the same completed outcomes as directional forecasts",
         "metric": "horizon-end close direction; a flat return is incorrect for either directional call",
         "groups": rows,
+        "observations": observations,
         "limits": [
             "This reports descriptive counts and accuracy only; it does not select or tune a model.",
             "The prospective pilot ledger is local evidence; hashes do not authenticate an outside source, clock, or calendar.",
@@ -559,7 +591,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
     }
 
 
-def render_scorecard_text(report: dict[str, Any]) -> str:
+def render_scorecard_text(report: dict[str, Any], *, include_details: bool = False) -> str:
     """Present checked counts in Russian without turning missing accuracy into zero."""
     def percent(value: float) -> str:
         return f"{value * 100:.2f}%".replace(".", ",")
@@ -603,6 +635,25 @@ def render_scorecard_text(report: dict[str, Any]) -> str:
             lines.append("Верные и ошибочные прогнозы пока не оценены. Точность пока неизвестна: направленные прогнозы ожидают результата.")
         else:
             lines.append("Точность не рассчитывается: направленных решений нет. Нейтральные решения и отказы сохранены отдельно.")
+    if include_details:
+        lines.extend(["", "Отдельные записи:"])
+        decisions = {"UP": "рост", "DOWN": "снижение", "NEUTRAL": "нейтральное решение", "ABSTAIN": "явный отказ"}
+        reasons = {"PENDING_OUTCOME": "результат ещё не получен", "NEUTRAL_DECISION": "нет направленного решения",
+                   "EXPLICIT_ABSTENTION": "прогноз явно отказался от направления"}
+        for observation in report["observations"]:
+            lines.extend(["", f"Запись: {label(observation['forecast_id'])}. Рынок: {label(observation['market'])}. Инструмент: {label(observation['secid'])}.",
+                          f"Срок: {observation['horizon_sessions']} торговых сессий. Направление: {decisions[observation['decision']]}.",
+                          f"Время прогноза: {label(observation['created_at_t0'])}. Исходная цена: {observation['reference_price']}."])
+            if observation["outcome_status"] == "PENDING":
+                lines.append("Исход: ожидается.")
+            else:
+                lines.append(f"Исход: получен. Сессия: {observation['target_session']}. Цена закрытия: {observation['target_close']}. Изменение цены: {observation['actual_return_pct']}%.")
+            if observation["comparison_included"]:
+                candidate = "верно" if observation["candidate_correct"] else "ошибка"
+                baseline = "верно" if observation["always_up_correct_same_row"] else "ошибка"
+                lines.append(f"Участвует в сравнении. Прогноз: {candidate}. Правило «всегда рост»: {baseline}.")
+            else:
+                lines.append("Не участвует в сравнении: " + "; ".join(reasons[reason] for reason in observation["comparison_exclusion_reasons"]) + ".")
     lines.extend(["", "Границы оценки:"])
     if report["ledger_version"] == LEDGER_VERSION:
         lines.append("В старом пробном журнале проверены контрольные суммы исходных байтов и согласованность записанных цен и времени; полный список будущих свечей в этом формате не хранится.")
@@ -622,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--ledger", required=True, type=Path, help="явный путь к изолированному опытному журналу .sqlite3 или .duckdb")
     parser.add_argument("--format", choices=("json", "text"), default="json", help="json: прежний машинный формат; text: понятный русский отчёт")
+    parser.add_argument("--details", action="store_true", help="показать отдельные записи в русском отчёте; машинный отчёт содержит их всегда")
     parser.add_argument("--output", type=Path, help="необязательный путь для сводки; без него печать в окно")
     args = parser.parse_args(argv)
     if args.output is not None:
@@ -641,7 +693,7 @@ def main(argv: list[str] | None = None) -> int:
     except ScorecardRefused as exc:
         print(f"Сводка не построена: {exc}", file=sys.stderr)
         return 2
-    rendered = (render_scorecard_text(report) if args.format == "text" else
+    rendered = (render_scorecard_text(report, include_details=args.details) if args.format == "text" else
                 json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n")
     if args.output is None:
         sys.stdout.write(rendered)
