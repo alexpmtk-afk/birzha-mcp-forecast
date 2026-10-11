@@ -149,11 +149,14 @@ def _decision(forecast: dict[str, Any], horizon: dict[str, Any]) -> str:
     status = forecast.get("decision_status")
     if status not in {None, "ABSTAIN", "BASELINE_NEUTRAL", "BASELINE_DIRECTIONAL_ESTIMATE"}:
         raise ScorecardRefused("unknown decision status")
-    if status == "ABSTAIN":
-        return "ABSTAIN"
     direction = horizon.get("direction")
+    reasons = forecast.get("abstention_reasons", [])
+    if status == "ABSTAIN":
+        if direction != "NEUTRAL" or not isinstance(reasons, list) or not reasons:
+            raise ScorecardRefused("abstention must have neutral direction and explicit reasons")
+        return "ABSTAIN"
     if status == "BASELINE_NEUTRAL":
-        if direction != "NEUTRAL":
+        if direction != "NEUTRAL" or reasons:
             raise ScorecardRefused("neutral decision conflicts with horizon direction")
         return "NEUTRAL"
     if direction in {"UP", "DOWN"}:
