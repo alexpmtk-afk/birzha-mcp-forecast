@@ -206,6 +206,16 @@ class LevelEventPilot:
                  bar_json,original_source_bytes,raw_sha,previous,
                  chained(previous,envelope)))
             seq = cur.lastrowid
+            if last and start > utc(last[1]):
+                # A gap terminates old candidate levels. Old research levels
+                # must not be retested as if the new segment were continuous.
+                for role in ("SUPPORT", "RESISTANCE"):
+                    active = self.db.execute(
+                        "SELECT kind,price FROM level_events WHERE stream=? AND role=? ORDER BY id DESC LIMIT 1",
+                        (stream,role)).fetchone()
+                    if active and active[0] != "LEVEL_HISTORY_GAP":
+                        self._event(seq,stream,role,"LEVEL_HISTORY_GAP",
+                                    active[1],received,atr_price_scale)
             last20 = self.db.execute(
                 "SELECT bar_start,bar_end,bar_json FROM level_receipts WHERE stream=? ORDER BY id DESC LIMIT 20",
                 (stream,)).fetchall()[::-1]
@@ -220,8 +230,12 @@ class LevelEventPilot:
                     previous_event = self.db.execute(
                         "SELECT kind,price,receipt_id FROM level_events WHERE stream=? AND role=? ORDER BY id DESC LIMIT 1",
                         (stream,role)).fetchone()
-                    if not previous_event or previous_event[1] != price:
-                        kind = "LEVEL_FIRST_DETECTED" if not previous_event else "LEVEL_PRICE_UPDATED"
+                    if (not previous_event or
+                        previous_event[0] == "LEVEL_HISTORY_GAP" or
+                        previous_event[1] != price):
+                        kind = ("LEVEL_FIRST_DETECTED"
+                                if not previous_event or previous_event[0] == "LEVEL_HISTORY_GAP"
+                                else "LEVEL_PRICE_UPDATED")
                         self._event(seq,stream,role,kind,price,received,atr_price_scale)
                     else:
                         held = ((bar.low <= price + .15*atr_price_scale and

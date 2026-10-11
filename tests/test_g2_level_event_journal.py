@@ -147,3 +147,22 @@ def test_stale_exact_retry_is_read_only_after_restart(tmp_path):
                      atr_price_scale=2.)
         assert j.verify()["receipt_count"]==1
 
+
+def test_old_levels_are_not_retested_across_m15_gap(tmp_path):
+    clock=Clock()
+    with LevelEventPilot(tmp_path/"segments.sqlite3",clock=clock) as j:
+        for i in range(20):
+            put(j,clock,i)
+        assert j.verify()["event_count"]==2
+        skipped=put(j,clock,21)
+        assert not skipped["history_ready"]
+        assert skipped["new_events"]==2
+        assert {e["kind"] for e in j.events()[-2:]}=={"LEVEL_HISTORY_GAP"}
+        for i in range(22,40):
+            nxt=put(j,clock,i)
+            assert not nxt["history_ready"]
+        last=put(j,clock,40)
+        assert last["history_ready"] and last["new_events"]==2
+        assert {e["kind"] for e in j.events()[-2:]}=={"LEVEL_FIRST_DETECTED"}
+        assert all(e["role_flip_verified"] is False for e in j.events())
+

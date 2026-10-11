@@ -40,3 +40,8 @@ A later identical retry of an already accepted bar is allowed even when the curr
 clock has advanced; it is read-only and always preserves the FIRST receipt time.
 A new stale bar is still refused. This distinction is regression-tested across
 SQLite process reopen and conflicting-source retry.
+
+An M15 observation gap now explicitly emits LEVEL_HISTORY_GAP for any active research
+support/resistance candidates. Once 20 new consecutive bars arrive, the first
+level in that new segment is LEVEL_FIRST_DETECTED, never a retroactive retest of
+old levels, even if the numeric extrema coincidentally match before and after.
