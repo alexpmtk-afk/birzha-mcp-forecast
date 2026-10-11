@@ -1,6 +1,7 @@
 """Build a linked level view from original exports, without storage writes."""
 import argparse
 import json
+import sys
 from pathlib import Path
 from birzha.application.linked_level_report import build_linked_level_report, render_linked_level_report
 from birzha.domain.market import Instrument, Candle, CandleSeries
@@ -24,6 +25,10 @@ def run(snapshot_path, forecast_path, *, candles_path=None, observation_at=None,
 
 
 def main():
+    # Commands emit UTF-8 in both consoles and redirected output on Windows.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser=argparse.ArgumentParser(description="Единый отчёт цены, уровней и последующих наблюдений")
     parser.add_argument("--snapshot",required=True);parser.add_argument("--forecast",required=True)
     parser.add_argument("--candles");parser.add_argument("--observation-at");parser.add_argument("--schedule")

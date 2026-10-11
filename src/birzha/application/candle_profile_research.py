@@ -31,8 +31,8 @@ def build_candle_profile_research(series, *, analysis_at, source_observed_at, sc
         previous = None
         for candle in series.candles:
             begin, end = _receipt_time(candle.begin), _receipt_time(candle.end)
-            if end <= begin or previous is not None and begin <= previous:
-                raise ValueError("source bars must be ordered unique and nonoverlapping")
+            if not 0 < (end-begin).total_seconds() <= 3600 or previous is not None and begin <= previous:
+                raise ValueError("source H1 bars must last at most one hour and be ordered unique nonoverlapping")
             previous = end
         points = []
         for candle in selected.candles:

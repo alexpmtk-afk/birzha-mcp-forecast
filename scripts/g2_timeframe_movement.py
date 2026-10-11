@@ -1,6 +1,7 @@
 """Read a saved snapshot, optionally bind its forecast, print movement facts."""
 import argparse
 import json
+import sys
 from birzha.application.timeframe_movement import build_timeframe_movement_report, render_timeframe_movement_report
 from birzha.application.linked_level_report import build_linked_level_report, render_linked_level_report
 if __package__ in (None, ""):
@@ -18,6 +19,10 @@ def run(snapshot_path, *, forecast_path=None):
 
 
 def main():
+    # Commands emit UTF-8 in both consoles and redirected output on Windows.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Сравнение дневного, часового и 15-минутного движения")
     parser.add_argument("--snapshot", required=True); parser.add_argument("--forecast")
     parser.add_argument("--format", choices=("text", "json"), default="text")

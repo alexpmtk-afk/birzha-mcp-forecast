@@ -2,8 +2,10 @@
 import argparse
 import hashlib
 import json
+import sys
 from pathlib import Path
 import tempfile
+import zipfile
 from birzha.application.candle_profile_research import build_candle_profile_research, render_candle_profile_research
 from birzha.application.level_reaction import canonical_bytes, _receipt_time
 from birzha.domain.market import Instrument
@@ -27,6 +29,14 @@ def compute(archive_path, expected_archive_sha256, *, analysis_at):
             if entry['status']!='SOURCE_CAPTURE_COMPLETE':raise ValueError('incomplete source market')
             instrument=Instrument(**entry['instrument'])
             if instrument.symbol!=entry['market'] or instrument.secid!=entry['resolved_secid']:raise ValueError('source instrument mismatch')
+            # Validate original JSON types before the shared reader converts them.
+            # bool is a Python number, but a source flag is not a market quantity.
+            for page in entry['timeframes']['H1']['pages']:
+                raw=json.loads((root/page['path']).read_bytes())['candles']
+                for row in raw['data']:
+                    fields=dict(zip(raw['columns'],row))
+                    if any(isinstance(fields.get(key),bool) for key in ('open','high','low','close','volume','value')):
+                        raise ValueError('boolean raw candle quantity is not a number')
             series,pages,seen=source_series(root,entry,'H1',instrument)
             for page in entry['timeframes']['H1']['pages']:
                 if not start<=_receipt_time(page['observed_start_utc'])<=_receipt_time(page['observed_end_utc'])<=end:raise ValueError('receipt outside capture')
@@ -47,12 +57,16 @@ def render(result):
 
 
 def main():
+    # Commands emit UTF-8 in both consoles and redirected output on Windows.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     p=argparse.ArgumentParser(description='Исследовательский профиль на исходных сохранённых свечах')
     p.add_argument('--archive',required=True);p.add_argument('--archive-sha256',required=True)
     p.add_argument('--analysis-at',required=True);p.add_argument('--format',choices=('text','json'),default='text')
     args=p.parse_args()
     try:r=compute(args.archive,args.archive_sha256,analysis_at=args.analysis_at)
-    except (TypeError,ValueError,KeyError,OverflowError,OSError) as exc:p.error(str(exc))
+    except (TypeError,ValueError,KeyError,OverflowError,OSError,zipfile.BadZipFile) as exc:p.error(str(exc))
     print(render(r) if args.format=='text' else json.dumps(r,ensure_ascii=False,allow_nan=False,indent=2))
 
 

@@ -150,3 +150,65 @@ def test_actual_archive_command(tmp_path,format):
     r=subprocess.run([sys.executable,'scripts/g2_candle_profile_research.py','--archive',str(path),'--archive-sha256',sha,'--analysis-at',AT,'--format',format],capture_output=True,encoding='utf-8',check=True)
     if format=='json':assert json.loads(r.stdout)==compute(path,sha,analysis_at=AT)
     else:assert 'Исследовательский приблизительный профиль' in r.stdout
+
+
+@pytest.mark.parametrize('duration',[0,3601,7200])
+def test_h1_source_rejects_non_hour_interval(duration):
+    s=series();rows=list(s.candles)
+    start=datetime.fromisoformat(rows[-1].begin)
+    rows[-1]=replace(rows[-1],end=(start+timedelta(seconds=duration)).isoformat())
+    with pytest.raises(ValueError,match='H1 bars'):
+        report(replace(s,candles=tuple(rows)))
+
+
+@pytest.mark.parametrize('duration',[1,3599,3600])
+def test_shortened_or_exact_hour_completed_bar_is_allowed(duration):
+    s=series();rows=list(s.candles)
+    start=datetime.fromisoformat(rows[-1].begin)
+    rows[-1]=replace(rows[-1],end=(start+timedelta(seconds=duration)).isoformat())
+    assert report(replace(s,candles=tuple(rows)))['status']=='AVAILABLE_APPROXIMATE'
+
+
+@pytest.mark.parametrize('field',['open','high','low','close','volume','value'])
+def test_raw_archive_boolean_not_normalized_into_quantity(tmp_path,field):
+    import zipfile
+    path,_=archive(tmp_path)
+    with zipfile.ZipFile(path) as z:
+        payloads={name:z.read(name) for name in z.namelist()}
+    manifest=json.loads(payloads['manifest.json'])
+    page=manifest['instruments'][0]['timeframes']['H1']['pages'][0]
+    raw=json.loads(payloads[page['path']]);columns=raw['candles']['columns']
+    raw['candles']['data'][-1][columns.index(field)]=True
+    payloads[page['path']]=canonical_bytes(raw)
+    sha=hashlib.sha256(payloads[page['path']]).hexdigest();page['sha256']=sha
+    for item in manifest['all_payload_files']:
+        if item['name']==page['path']:item['sha256']=sha
+    payloads['manifest.json']=canonical_bytes(manifest)
+    with zipfile.ZipFile(path,'w') as z:
+        for name,body in payloads.items():z.writestr(name,body)
+    with pytest.raises(ValueError,match='boolean raw'):
+        compute(path,hashlib.sha256(path.read_bytes()).hexdigest(),analysis_at=AT)
+
+
+def test_profile_bins_conserve_volume_and_cover_seventy_percent():
+    s=series();p=report(s)['profile']
+    assert sum(b['volume'] for b in p['bins'])==sum(c.volume for c in s.candles[-50:])
+    assert len(p['bins'])==24
+    covered=sum(b['volume'] for b in p['bins'] if b['low']>=p['val'] and b['high']<=p['vah'])
+    assert covered>=p['total_volume']*.70
+    # Independently locate each typical price in the returned intervals.
+    expected=[0.]*24
+    lo=p['bins'][0]['low'];width=p['bins'][0]['high']-lo
+    for c in s.candles[-50:]:
+        price=c.high/3+c.low/3+c.close/3
+        index=min(23,max(0,int((price-lo)/width)))
+        expected[index]+=c.volume
+    assert [b['volume'] for b in p['bins']]==expected
+
+
+def test_invalid_zip_command_has_readable_error_without_traceback(tmp_path):
+    path=tmp_path/'invalid.zip';path.write_bytes(b'not a zip')
+    result=subprocess.run([sys.executable,'scripts/g2_candle_profile_research.py',
+        '--archive',str(path),'--archive-sha256',hashlib.sha256(path.read_bytes()).hexdigest(),
+        '--analysis-at',AT],capture_output=True,encoding='utf-8')
+    assert result.returncode==2 and 'error:' in result.stderr and 'Traceback' not in result.stderr
