@@ -4,6 +4,7 @@ One file and one connection, not two independent SQLite/DuckDB commits. Existing
 canonical table schemas are retained. No production paths, migration, or schedulers.
 """
 from __future__ import annotations
+import base64
 from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
@@ -265,8 +266,18 @@ class SingleDuckDBProspectiveStagingJournal:
         with self.lock:
             return {"schema":VERSION, **self._audit(), "staging_only":True}
 
-    def capture(self, record, evidence):
+    def capture(self, record, evidence, *, source_manifest_bytes: bytes | None = None):
         data=_validate_record(record,evidence)
+        if source_manifest_bytes is not None:
+            if (not isinstance(source_manifest_bytes, bytes) or not source_manifest_bytes
+                    or len(source_manifest_bytes) > 8_000_000):
+                raise pilot.AdmissionRefused("invalid bounded raw source manifest")
+            try:
+                manifest=json.loads(source_manifest_bytes)
+                if not isinstance(manifest, dict) or manifest.get("schema") != "G2_SIX_MARKET_LIVE_SOURCE_RECEIPT_V1":
+                    raise ValueError("unsupported original manifest")
+            except (ValueError, UnicodeError, TypeError) as exc:
+                raise pilot.AdmissionRefused("malformed original source manifest") from exc
         body,digest=DuckDBForecastJournal.canonical_payload(record)
         sourcehash=_sha(evidence.source_payload)
         def execute():
@@ -287,6 +298,8 @@ class SingleDuckDBProspectiveStagingJournal:
                 }
                 if any(stored.get(key)!=value for key,value in current_source.items()):
                     raise pilot.ImmutableCollision("frozen source evidence metadata differs on replay")
+                if source_manifest_bytes is not None and stored.get("original_source_manifest_sha256") != _sha(source_manifest_bytes):
+                    raise pilot.ImmutableCollision("original source manifest differs on replay")
                 return {"status":"DUPLICATE_IDENTICAL","receipt":stored}
             now=_now(self.clock)
             obs=pilot._when(evidence.source_observed_at)
@@ -299,6 +312,9 @@ class SingleDuckDBProspectiveStagingJournal:
                 latest_completed_event_end=pilot._stamp(pilot._when(evidence.latest_completed_event_end)),
                 captured_at=pilot._stamp(now),snapshot_id=data["snapshot_id"],
                 secid=data["secid"],record_version=data["record_version"],staging_only=True)
+            if source_manifest_bytes is not None:
+                receipt["original_source_manifest_sha256"] = _sha(source_manifest_bytes)
+                receipt["original_source_manifest_b64"] = base64.b64encode(source_manifest_bytes).decode("ascii")
             text=_json(receipt)
             self.db.execute("INSERT INTO g2_atomic_captures VALUES (?,?,?,?,?,?)",
                             [fid,digest,evidence.source_payload,sourcehash,text,_sha(text.encode())])
