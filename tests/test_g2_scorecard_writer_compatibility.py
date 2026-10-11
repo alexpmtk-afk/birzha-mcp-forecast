@@ -16,6 +16,7 @@ from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagi
 from scripts.g2_prospective_baseline_scorecard import build_scorecard
 from scripts.g2_prospective_scorecard_review import match_ledger, render_scorecard_csv, validate_scorecard
 from scripts.g2_prospective_scorecard_batch import build_package, verify_package
+from scripts.g2_prospective_scorecard_changes import compare_packages, compare_scorecards
 
 
 @pytest.mark.parametrize("market,secid,direction", [
@@ -75,6 +76,10 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
     package = tmp_path / "scorecard-package"
     build_package([ledger], package)
     verify_package(package)
+    changes = compare_scorecards(pending, report)
+    assert len(changes["newly_observed_existing_rows"]) == 1
+    assert changes["pending_rows_now"] == 2
+    assert compare_packages(package, package)["newly_observed_existing_rows"] == []
     assert hashlib.sha256(ledger.read_bytes()).hexdigest() == before
     assert report["read_only"] is True
     five = next(row for row in report["groups"] if row["horizon_sessions"] == 5)

@@ -27,6 +27,10 @@ from scripts.g2_prospective_scorecard_batch import (
     build_package, combine_scorecards, main as batch_main, verify_package,
 )
 import scripts.g2_prospective_scorecard_batch as batch_module
+from scripts.g2_prospective_scorecard_changes import (
+    compare_packages, compare_scorecards, main as changes_main, render_changes_text,
+)
+import scripts.g2_prospective_scorecard_changes as changes_module
 
 
 def _encoded(value: dict[str, object]) -> str:
@@ -886,3 +890,172 @@ def test_batch_package_content_is_independent_of_input_order(tmp_path: Path) -> 
     assert build_package([first, second], a) == build_package([second, first], b)
     assert {path.name: path.read_bytes() for path in a.iterdir()} == {path.name: path.read_bytes() for path in b.iterdir()}
     assert batch_main(["--verify-package", str(a)]) == 0
+
+
+def test_changes_keep_identical_packages_and_pending_values_unchanged(tmp_path: Path) -> None:
+    ledger = tmp_path / "pending.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    package = tmp_path / "package"
+    build_package([ledger], package)
+    before = {path.name: path.read_bytes() for path in package.iterdir()}
+    result = compare_packages(package, package)
+    assert result["new_forecast_ids"] == result["newly_observed_existing_rows"] == []
+    assert result["existing_pending_rows_unchanged"] == result["pending_rows_now"] == 9
+    assert all(row["candidate_accuracy_change_percentage_points"] is None for row in result["group_changes"])
+    assert "Точность пока не рассчитана" in render_changes_text(result)
+    assert {path.name: path.read_bytes() for path in package.iterdir()} == before
+    unsigned = {key: value for key, value in result.items() if key != "change_sha256"}
+    assert result["change_sha256"] == _sha(_encoded(unsigned).encode())
+
+
+@pytest.mark.parametrize("storage", ["sqlite3", "duckdb"])
+def test_changes_report_newly_observed_existing_rows_and_neutral_exclusion(tmp_path: Path, storage: str) -> None:
+    ledger = tmp_path / ("pilot." + storage)
+    (_make_ledger if storage == "sqlite3" else _make_duckdb_ledger)(ledger)
+    after = build_scorecard(ledger)
+    if storage == "sqlite3":
+        with sqlite3.connect(ledger) as db:
+            db.execute("DELETE FROM outcomes")
+    else:
+        duckdb = pytest.importorskip("duckdb")
+        db = duckdb.connect(str(ledger))
+        db.execute("DELETE FROM outcome_records")
+        db.execute("DELETE FROM g2_atomic_futures")
+        db.close()
+    before = build_scorecard(ledger)
+    result = compare_scorecards(before, after)
+    expected = 9 if storage == "sqlite3" else 1
+    assert len(result["newly_observed_existing_rows"]) == expected
+    assert result["new_forecast_ids"] == []
+    assert all(row["candidate_accuracy_change_percentage_points"] is None for row in result["group_changes"])
+    if storage == "sqlite3":
+        neutral = [row for row in result["newly_observed_existing_rows"] if row["decision"] == "NEUTRAL"]
+        assert len(neutral) == 3
+        assert all(row["candidate_correct"] is None for row in neutral)
+        assert result["group_changes"][0]["after"]["directional_forecasts_scored"] == 2
+
+
+def test_changes_distinguish_new_forecasts_from_new_outcomes_of_old_forecasts(tmp_path: Path) -> None:
+    first, second = tmp_path / "first.sqlite3", tmp_path / "second.sqlite3"
+    _make_ledger(first)
+    _disjoint_copy(first, second)
+    with sqlite3.connect(second) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id='f-down-second'")
+    a, b = build_scorecard(first), build_scorecard(second)
+    combined = combine_scorecards([a, b])
+    result = compare_scorecards(a, combined)
+    assert len(result["new_forecast_ids"]) == 3
+    assert len(result["new_forecast_horizon_rows"]) == 9
+    assert result["newly_observed_existing_rows"] == []
+    assert result["existing_observed_rows_unchanged"] == 9
+    group = result["group_changes"][0]
+    assert group["count_changes"]["directional_forecasts_scored"] == 1
+    assert group["after"]["candidate_accuracy"] == 2 / 3
+    assert group["candidate_accuracy_change_percentage_points"] == ((2 / 3) - .5) * 100.
+    assert "улучшение модели этим не доказано" in render_changes_text(result)
+
+
+@pytest.mark.parametrize("field", ["forecast_sha256", "capture_source_sha256", "capture_receipt_sha256", "engine_version", "created_at_t0"])
+def test_changes_refuse_rehashed_changes_to_previous_forecast_origins(tmp_path: Path, field: str) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = build_scorecard(ledger)
+    after = json.loads(json.dumps(before))
+    for row in after["observations"]:
+        if row["forecast_id"] == "f-up":
+            row[field] = "2026-10-12T09:59:00Z" if field == "created_at_t0" else "OTHER_ENGINE" if field == "engine_version" else "a" * 64
+    _resign_report(after)
+    validate_scorecard(after)
+    with pytest.raises(ScorecardRefused, match="Прежний прогноз"):
+        compare_scorecards(before, after)
+
+
+def test_changes_refuse_a_previous_direction_changed_even_with_consistent_scores(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = build_scorecard(ledger)
+    after = json.loads(json.dumps(before))
+    for row in after["observations"]:
+        if row["forecast_id"] == "f-up":
+            row["decision"] = "DOWN"
+            row["candidate_correct"] = False
+    for group in after["groups"]:
+        group["candidate_correct"] = 0
+        group["candidate_accuracy"] = 0.
+        group["accuracy_difference_percentage_points"] = -100.
+    _resign_report(after)
+    validate_scorecard(after)
+    with pytest.raises(ScorecardRefused, match="Прежний прогноз"):
+        compare_scorecards(before, after)
+
+
+@pytest.mark.parametrize("field", ["outcome_sha256", "future_source_sha256", "target_session", "target_session_end"])
+def test_changes_refuse_modification_of_an_already_observed_outcome(tmp_path: Path, field: str) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = build_scorecard(ledger)
+    after = json.loads(json.dumps(before))
+    row = after["observations"][0]
+    row[field] = "2026-10-19" if field == "target_session" else "2026-10-20T17:00:00Z" if field == "target_session_end" else "a" * 64
+    _resign_report(after)
+    validate_scorecard(after)
+    with pytest.raises(ScorecardRefused, match="Прежний записанный исход"):
+        compare_scorecards(before, after)
+
+
+def test_changes_refuse_rollback_from_observed_to_pending(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    observed = build_scorecard(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    pending = build_scorecard(ledger)
+    with pytest.raises(ScorecardRefused, match="Прежний записанный исход"):
+        compare_scorecards(observed, pending)
+
+
+def test_changes_refuse_removal_of_a_previous_forecast(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = build_scorecard(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id='f-up'")
+        db.execute("DELETE FROM captures WHERE forecast_id='f-up'")
+    after = build_scorecard(ledger)
+    with pytest.raises(ScorecardRefused, match="исчезли"):
+        compare_scorecards(before, after)
+
+
+def test_changes_cli_preserves_all_inputs_and_existing_output(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    package = tmp_path / "package"
+    build_package([ledger], package)
+    output = tmp_path / "changes.json"
+    assert changes_main(["--before", str(package), "--after", str(package), "--format", "json", "--output", str(output)]) == 0
+    before = output.read_bytes()
+    assert json.loads(before)["new_forecast_ids"] == []
+    assert changes_main(["--before", str(package), "--after", str(package), "--output", str(output)]) == 2
+    assert output.read_bytes() == before
+    assert changes_main(["--before", str(package), "--after", str(package), "--output", str(package / "extra.txt")]) == 2
+    verify_package(package)
+
+
+def test_changes_refuse_a_package_changed_during_comparison(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    package = tmp_path / "package"
+    build_package([ledger], package)
+    original = changes_module.verify_package
+    calls = [0]
+    def changed(path: Path) -> dict[str, object]:
+        calls[0] += 1
+        result = original(path)
+        if calls[0] == 3:
+            result["manifest_sha256"] = "a" * 64
+        return result
+    monkeypatch.setattr(changes_module, "verify_package", changed)
+    with pytest.raises(ScorecardRefused, match="изменился во время"):
+        compare_packages(package, package)
