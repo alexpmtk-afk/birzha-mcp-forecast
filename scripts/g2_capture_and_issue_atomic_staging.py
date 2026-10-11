@@ -10,6 +10,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from birzha.upstream.capture_scope import bounded_market_capture
+
 from scripts.g2_issue_sourcebound_atomic_staging import (
     issue_atomic_staging, _safe_isolated_path, _separate_scopes,
 )
@@ -42,6 +44,7 @@ def _safe_failure_diagnostic(failures):
         if isinstance(safe, str) and safe in {
             "HTTP_429_RATE_LIMIT", "HTTP_503_UNAVAILABLE", "HTTP_5XX_UPSTREAM",
             "UPSTREAM_TIMEOUT_OR_TRANSPORT", "UPSTREAM_RETRIES_EXHAUSTED",
+            "CAPTURE_DEADLINE_EXCEEDED", "CAPTURE_TOTAL_ATTEMPTS_EXCEEDED",
         }:
             codes.append(safe)
             continue
@@ -78,6 +81,7 @@ def _safe_failure_diagnostic(failures):
 def capture_and_issue_one(
     provider, market_data, market, capture_dir: Path, staging_root: Path, *,
     clock=lambda: datetime.now(timezone.utc), fault_hook=None,
+    capture_monotonic=None, capture_deadline_seconds=240.0, capture_max_attempts=120,
 ):
     if market not in MARKETS:
         raise ValueError("unsupported market root")
@@ -86,19 +90,29 @@ def capture_and_issue_one(
     capture_dir = _safe_isolated_path(capture_dir, existing_directory=False)
     staging_root = _safe_isolated_path(staging_root, existing_directory=True)
     _separate_scopes(capture_dir, staging_root)
-    manifest = capture_all(
-        provider, market_data, capture_dir, clock=clock, markets=(market,)
-    )
-    if (manifest["verified_complete_market_count"] != 1
-        or manifest["failed_markets"]
-        or manifest["complete_markets"] != [market]):
-        raise ValueError(
-            "governed source capture failed; refusing forecast issuance; "
-            "safe_reason=" + _safe_failure_diagnostic(manifest.get("failed_markets"))
+    import time
+    with bounded_market_capture(
+        max_attempts=capture_max_attempts,
+        deadline_seconds=capture_deadline_seconds,
+        monotonic=capture_monotonic or time.monotonic,
+    ) as capture_scope:
+        manifest = capture_all(
+            provider, market_data, capture_dir, clock=clock, markets=(market,)
         )
-    result = issue_atomic_staging(
-        capture_dir, staging_root, market, clock=clock, fault_hook=fault_hook
-    )
+        if (manifest["verified_complete_market_count"] != 1
+            or manifest["failed_markets"]
+            or manifest["complete_markets"] != [market]):
+            raise ValueError(
+                "governed source capture failed; refusing forecast issuance; "
+                "safe_reason=" + _safe_failure_diagnostic(manifest.get("failed_markets"))
+            )
+        capture_scope.check()
+        result = issue_atomic_staging(
+            capture_dir, staging_root, market, clock=clock, fault_hook=fault_hook
+        )
+        result["capture_http_attempts"] = capture_scope.physical_attempts
+        result["capture_max_http_attempts"] = capture_scope.max_attempts
+        result["capture_deadline_seconds"] = capture_scope.deadline_seconds
     return {
         **result,
         "capture_mode": "BOUNDED_LIVE_MOEX_ISS_NETWORK_SINGLE_MARKET",

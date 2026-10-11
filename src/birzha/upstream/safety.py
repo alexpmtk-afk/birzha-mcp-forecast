@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol, TypeVar
 
+from .capture_scope import active_capture_scope
+
 T = TypeVar("T", bound="ResponseLike")
 
 
@@ -255,14 +257,28 @@ class SafeRequestExecutor:
         last_status: int | None = None
         for attempt in range(self._policy.max_retries + 1):
             self._consume_budget()
+            scope = active_capture_scope()
+            if scope is not None:
+                scope.check()
             self._gate.pace(self._policy.effective_min_interval_seconds)
+            # The shared pacing gate may have slept; check AFTER it as well.
+            # Claim immediately before the actual HTTP attempt.
+            if scope is not None:
+                scope.claim_attempt()
             response = request()
+            if scope is not None:
+                scope.check()
             last_status = int(response.status_code)
             if last_status not in self.RETRYABLE_STATUS_CODES:
                 return response
             if attempt >= self._policy.max_retries:
                 break
-            self._sleeper(self._backoff_seconds(attempt, response))
+            delay = self._backoff_seconds(attempt, response)
+            if scope is not None:
+                scope.before_wait(delay)  # NEVER shorten a provider Retry-After.
+            self._sleeper(delay)
+            if scope is not None:
+                scope.check()
 
         # Transport failures are synthetic 503 responses, not provider HTTP 503.
         transport = getattr(response, "transport_failure", False)
