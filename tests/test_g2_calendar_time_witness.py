@@ -159,6 +159,8 @@ def test_rfc3161_verifier_requires_nonce_and_original_data_imprint(tmp_path):
     calls = []
     def fake(args, input=None, **kwargs):
         calls.append((args,input))
+        if "-query" in args:
+            return _Proc(b"Nonce: 0x1234ABCD\n")
         if "-text" in args:
             return _Proc(b"TST info:\nTime stamp: Oct 11 09:27:30 2026 GMT\n")
         return _Proc()
@@ -171,9 +173,10 @@ def test_rfc3161_verifier_requires_nonce_and_original_data_imprint(tmp_path):
     assert outcome["status"] == "SIGNATURE_NONCE_AND_IMPRINT_VERIFIED"
     assert outcome["forecast_issued_at_t0_independently_measured"] is False
     assert outcome["independent_exchange_calendar_verified"] is False
-    assert len(calls) == 3
-    assert "-queryfile" in calls[0][0] and "-CAfile" in calls[0][0]
-    assert "-digest" in calls[1][0] and calls[1][0][-1] == sha256(statement).hexdigest()
+    assert len(calls) == 4
+    assert "-query" in calls[0][0] and "-text" in calls[0][0]
+    assert "-queryfile" in calls[1][0] and "-CAfile" in calls[1][0]
+    assert "-digest" in calls[2][0] and calls[2][0][-1] == sha256(statement).hexdigest()
 
 
 @pytest.mark.parametrize("failure", ["nonce", "imprint", "late"])
@@ -182,6 +185,8 @@ def test_rfc3161_verify_fails_closed_on_missing_request_proof_or_late_stamp(tmp_
     for name in ("q.tsq","r.tsr","external-ca.pem"):
         (tmp_path/name).write_bytes(b"synthetic bytes")
     def fake(args, input=None, **kwargs):
+        if "-query" in args:
+            return _Proc(b"Nonce: 0x1234ABCD\n")
         if "-queryfile" in args and failure == "nonce":
             return _Proc(code=1)
         if "-digest" in args and failure == "imprint":
@@ -316,3 +321,22 @@ def test_offline_openssl_selfsigned_fixture_checks_real_signature_and_digest(tmp
             response_path=tmp_path/"response.tsr",
             trust_ca_path=tmp_path/"cert.pem",
         )
+
+
+def test_original_tsq_without_nonce_is_refused_even_if_mocked_ca_accepts(tmp_path):
+    statement,*_= _original_statement()
+    for name in ("q.tsq","r.tsr","external-ca.pem"):
+        (tmp_path/name).write_bytes(b"synthetic only")
+    invoked=[]
+    def fake(args, input=None, **kwargs):
+        invoked.append(args)
+        if "-query" in args:
+            return _Proc(b"Hash Algorithm: sha256\nNonce: unspecified\n")
+        return _Proc()
+    with pytest.raises(ExternalProofRefused,match="lacks random nonce"):
+        verify_rfc3161(
+            statement,issued_at_t0=ISSUED,
+            query_path=tmp_path/"q.tsq",response_path=tmp_path/"r.tsr",
+            trust_ca_path=tmp_path/"external-ca.pem",runner=fake,
+        )
+    assert len(invoked)==1  # must refuse before trusting any signed-token claim
