@@ -34,6 +34,7 @@ class IssResponse:
     status_code: int
     headers: dict[str, str]
     body: bytes
+    transport_failure: bool = False
 
     def json(self) -> dict[str, Any]:
         return json.loads(self.body.decode("utf-8"))
@@ -86,7 +87,7 @@ class MoexIssClient:
                 response = self._http_client.get(url)
                 return IssResponse(status_code=response.status_code, headers=dict(response.headers), body=response.content)
             except (httpx.TimeoutException, httpx.TransportError, ConnectionError) as exc:
-                return IssResponse(status_code=503, headers={"X-BIRZHA-TRANSIENT": type(exc).__name__}, body=b"")
+                return IssResponse(status_code=503, headers={"X-BIRZHA-TRANSIENT": type(exc).__name__}, body=b"", transport_failure=True)
         req = Request(url, headers=MOEX_HTTP_HEADERS)
         try:
             with self._opener(req, timeout=self._timeout_seconds) as response:
@@ -94,7 +95,7 @@ class MoexIssClient:
         except HTTPError as exc:
             return IssResponse(status_code=int(exc.code), headers={str(k): str(v) for k, v in exc.headers.items()}, body=exc.read())
         except (URLError, TimeoutError, ConnectionError) as exc:
-            return IssResponse(status_code=503, headers={"X-BIRZHA-TRANSIENT": type(exc).__name__}, body=b"")
+            return IssResponse(status_code=503, headers={"X-BIRZHA-TRANSIENT": type(exc).__name__}, body=b"", transport_failure=True)
 
     def _request(self, path: str, params: dict[str, object] | None = None) -> IssResponse:
         query = urlencode(params or {}, doseq=True)

@@ -38,6 +38,13 @@ def _safe_failure_diagnostic(failures):
         if not isinstance(row, dict):
             codes.append("UNCLASSIFIED_SOURCE_FAILURE")
             continue
+        safe = row.get("safe_reason")
+        if isinstance(safe, str) and safe in {
+            "HTTP_429_RATE_LIMIT", "HTTP_503_UNAVAILABLE", "HTTP_5XX_UPSTREAM",
+            "UPSTREAM_TIMEOUT_OR_TRANSPORT", "UPSTREAM_RETRIES_EXHAUSTED",
+        }:
+            codes.append(safe)
+            continue
         detail = str(row.get("detail", ""))
         error_type = str(row.get("error_type", ""))
         # The upstream client turns HTTP status into MoexIssError and may
@@ -58,7 +65,8 @@ def _safe_failure_diagnostic(failures):
                             "ConnectError", "TransportError"}:
             match = "UPSTREAM_TIMEOUT_OR_TRANSPORT"
         elif error_type in {"UnsafeUpstreamConfiguration",
-                            "UpstreamSafetyError", "UpstreamBudgetExceeded"}:
+                            "UpstreamSafetyError", "UpstreamBudgetExceeded",
+                            "UpstreamRequestBudgetExceeded"}:
             match = "UPSTREAM_GOVERNOR_BLOCKED"
         else:
             match = next((code for phrase, code in SAFE_FAILURE_REASONS.items()
