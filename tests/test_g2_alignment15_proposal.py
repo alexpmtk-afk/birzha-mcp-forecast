@@ -85,7 +85,7 @@ def test_claimed_exact_profile_without_matching_flow_cannot_score_location():
 
 def test_missing_delta_is_unknown_not_negative_pressure():
     snap,inst,m15=prepared("BUYERS")
-    snap=with_real_profile_candidate(replace(snap,flow=None))
+    snap=replace(with_real_profile_candidate(snap),flow=None)
     p=propose_alignment_and_no_trade(snap,inst,m15)
     for side in ("LONG","SHORT"):
         assert p["scorecards"][side]["factors"]["pressure"]["points"] is None
