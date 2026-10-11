@@ -20,6 +20,7 @@ from birzha.application.prospective_staging_bridge import _outcome_from_pilot
 from birzha.domain import forecast as fd
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
+from birzha.storage.g2_manifest_evidence import verified_original_manifest
 
 VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
 HORIZONS = (5, 10, 20)
@@ -221,6 +222,10 @@ class SingleDuckDBProspectiveStagingJournal:
             meta=json.loads(receipt)
             if (meta.get("forecast_id"),meta.get("forecast_sha256"),meta.get("source_sha256"))!=(fid,hash_,sourcehash):
                 raise pilot.ImmutableCollision("source receipt detached from forecast")
+            try:
+                verified_original_manifest(meta, bytes(raw))
+            except ValueError as exc:
+                raise pilot.ImmutableCollision("original source manifest/page bytes are corrupt") from exc
         outcome={id:(h,p) for id,h,p in self.db.execute("SELECT outcome_id,payload_hash,payload_json FROM outcome_records").fetchall()}
         future=self.db.execute("SELECT forecast_id,horizon,outcome_id,source_blob,source_sha,evidence_json,evidence_sha FROM g2_atomic_futures").fetchall()
         if set(outcome)!={r[2] for r in future}:
@@ -265,6 +270,18 @@ class SingleDuckDBProspectiveStagingJournal:
     def audit(self):
         with self.lock:
             return {"schema":VERSION, **self._audit(), "staging_only":True}
+
+    def read_original_source_manifest(self, forecast_id: str) -> bytes | None:
+        """Return exactly captured manifest bytes after independent source audit."""
+        with self.lock:
+            self._audit()
+            row = self.db.execute(
+                "SELECT receipt_json,source_blob FROM g2_atomic_captures WHERE forecast_id=?",
+                [forecast_id],
+            ).fetchone()
+            if row is None:
+                raise pilot.AdmissionRefused("no captured Forecast for original manifest")
+            return verified_original_manifest(json.loads(row[0]), bytes(row[1]))
 
     def capture(self, record, evidence, *, source_manifest_bytes: bytes | None = None):
         data=_validate_record(record,evidence)
