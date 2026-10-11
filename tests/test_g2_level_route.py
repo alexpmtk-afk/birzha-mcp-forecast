@@ -173,7 +173,7 @@ def test_exact_matching_original_flow_profile_is_typed_but_not_independently_tru
                          profile_is_exact=True))
     outcome=assess_levels_and_route(snapshot,instrument,series)
     assert outcome["classification_status"]=="ABSTAIN" # POC at 103 = only .75 ATR
-    assert outcome["nearest_obstacle"]["type"]=="VAL"
+    assert outcome["nearest_obstacle"]["type"]=="LVN"
     assert any(x["type"]=="POC" for x in outcome["typed_obstacles_ahead"])
     assert "INSUFFICIENT_SPACE_BEFORE_OBSTACLE" in outcome["reason_codes"]
     assert outcome["profile_trade_origin_independently_certified"] is False
