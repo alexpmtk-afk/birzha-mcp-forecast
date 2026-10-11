@@ -254,3 +254,65 @@ def test_exact_history_witness_is_tied_to_canonical_stored_D1_source(tmp_path):
             )
     finally:
         store.close()
+
+
+def test_offline_openssl_selfsigned_fixture_checks_real_signature_and_digest(tmp_path):
+    """Self-issued test CA proves implementation only, NEVER an external TSA."""
+    import shutil
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl not installed for local synthetic fixture")
+    issued = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace(
+        "+00:00", "Z"
+    )
+    forecast = json.dumps({
+        "forecast_id": "synthetic-openssl-test-001",
+        "secid": "SBER", "created_at_t0": issued,
+    }).encode()
+    original_manifest = json.dumps({
+        "schema": "G2_SIX_MARKET_LIVE_SOURCE_RECEIPT_V1",
+        "instruments": [{
+            "resolved_secid": "SBER", "status": "SOURCE_CAPTURE_COMPLETE",
+        }],
+    }).encode()
+    statement=original_forecast_commitment(
+        forecast,b"SYNTHETIC-MARKET-BYTES",original_manifest
+    )
+    (tmp_path/"statement.json").write_bytes(statement)
+    cnf = (tmp_path/"tsa.cnf")
+    cnf.write_text("\n".join([
+        "[tsa]", "default_tsa=tsa_config", "[tsa_config]",
+        "serial="+str(tmp_path/"serial"),
+        "signer_cert="+str(tmp_path/"cert.pem"),
+        "certs="+str(tmp_path/"cert.pem"),
+        "signer_key="+str(tmp_path/"key.pem"),
+        "signer_digest=sha256", "default_policy=1.2.3.4.5",
+        "digests=sha256", "accuracy=secs:1", "ordering=yes",
+        "tsa_name=yes", "ess_cert_id_chain=no", "",
+    ]),encoding="utf8")
+    (tmp_path/"serial").write_text("01\n",encoding="ascii")
+    def run(*args):
+        return subprocess.run(["openssl",*map(str,args)],check=True,
+                              capture_output=True,timeout=15)
+    run("req","-x509","-newkey","rsa:2048","-nodes","-days","1",
+        "-keyout",tmp_path/"key.pem","-out",tmp_path/"cert.pem",
+        "-subj","/CN=OFFLINE-SYNTHETIC-NOT-TRUSTED",
+        "-addext","extendedKeyUsage=critical,timeStamping",
+        "-addext","keyUsage=critical,digitalSignature")
+    run("ts","-query","-data",tmp_path/"statement.json","-sha256",
+        "-cert","-out",tmp_path/"query.tsq")
+    run("ts","-reply","-config",cnf,"-queryfile",tmp_path/"query.tsq",
+        "-out",tmp_path/"response.tsr")
+    proof=verify_rfc3161(
+        statement,issued_at_t0=issued,query_path=tmp_path/"query.tsq",
+        response_path=tmp_path/"response.tsr",
+        trust_ca_path=tmp_path/"cert.pem"
+    )
+    assert proof["status"]=="SIGNATURE_NONCE_AND_IMPRINT_VERIFIED"
+    assert proof["forecast_issued_at_t0_independently_measured"] is False
+    tampered=statement+b" "
+    with pytest.raises(ExternalProofRefused,match="imprint"):
+        verify_rfc3161(
+            tampered,issued_at_t0=issued,query_path=tmp_path/"query.tsq",
+            response_path=tmp_path/"response.tsr",
+            trust_ca_path=tmp_path/"cert.pem",
+        )
