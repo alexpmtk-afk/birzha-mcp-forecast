@@ -143,7 +143,7 @@ def verify_rfc3161(
     checked([*base, "-queryfile", str(query_path)])
     # A client-chosen TSQ with nonce is NOT trusted to commit to these bytes
     # until an entirely separate data-imprint check also passes.
-    checked([*base, "-data", "-"], stdin=commitment)
+    checked([*base, "-digest", sha256(commitment).hexdigest()])
     details = checked([openssl, "ts", "-reply", "-in", str(response_path), "-text"])
     found = GEN_TIME.search(details)
     if not found:
