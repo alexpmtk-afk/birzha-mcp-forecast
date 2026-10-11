@@ -133,6 +133,7 @@ def _manifest_and_entry(source_dir: Path, market: str):
 def issue_atomic_staging(
     source_dir: str | Path, staging_root: str | Path, market: str, *,
     clock=lambda: datetime.now(timezone.utc), fault_hook=None,
+    calendar_witness: dict | None = None,
 ):
     """Issue from a *fresh* original receipt inventory, never an offline backtest.
 
@@ -189,9 +190,15 @@ def issue_atomic_staging(
             capture = store.capture(
                 prepared.record, prepared.evidence,
                 source_manifest_bytes=original_manifest_bytes,
+                calendar_witness=calendar_witness,
             )
             if store.read_original_source_manifest(prepared.record.forecast_id) != original_manifest_bytes:
                 raise AdmissionRefused("original manifest canonical readback differs")
+            if calendar_witness is not None:
+                from birzha.storage.g2_calendar_evidence import encode_calendar_witness
+                if (store.read_original_calendar_witness(prepared.record.forecast_id)
+                        != encode_calendar_witness(calendar_witness)):
+                    raise AdmissionRefused("original calendar canonical readback differs")
             audit = store.audit()
             # Existing mature Outcomes for *other* forecasts are legitimate.
             # The original global outcomes==0 check incorrectly made a
@@ -220,6 +227,7 @@ def issue_atomic_staging(
             "staging_file": destination.name,
             "source_receipt_local_integrity_verified": True,
             "independent_provider_and_clock_attestation": False,
+            "same_provider_history_witness_persisted": calendar_witness is not None,
             "independent_exchange_session_calendar_verified": False,
             "strict_ex_ante_proof": False,
             "model_skill_proven": False,
