@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from birzha.application.prospective_capture import AdmissionRefused, CaptureEvidence
+from birzha.upstream.capture_scope import active_capture_scope
 from birzha.application.prospective_issuance import prepare_source_bound_forecast
 from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
 from scripts.g2_freeze_real_forecast_from_source_receipts import (
@@ -158,6 +159,9 @@ def issue_atomic_staging(
     )
     prepared = prepare_source_bound_forecast(snapshot, evidence, clock=clock)
     validate_source_page_freshness(entry, parse_time(prepared.record.created_at_t0))
+    active_scope = active_capture_scope()
+    if active_scope is not None:
+        active_scope.check()
     # Store itself refuses HOME/production destinations and unrelated files.
     destination = root / f"{market}.duckdb"
     store = SingleDuckDBProspectiveStagingJournal(
@@ -176,6 +180,8 @@ def issue_atomic_staging(
                     raise AdmissionRefused(
                         "same original SECID source bytes cannot be reissued with a new T0"
                     )
+            if active_scope is not None:
+                active_scope.check()  # no fresh issuance if source parsing used the deadline
             capture = store.capture(prepared.record, prepared.evidence)
             audit = store.audit()
             # Existing mature Outcomes for *other* forecasts are legitimate.
