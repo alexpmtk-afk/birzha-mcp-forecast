@@ -206,6 +206,7 @@ class LevelEventPilot:
                  bar_json,original_source_bytes,raw_sha,previous,
                  chained(previous,envelope)))
             seq = cur.lastrowid
+            before = self.db.execute("SELECT COUNT(*) FROM level_events").fetchone()[0]
             if last and start > utc(last[1]):
                 # A gap terminates old candidate levels. Old research levels
                 # must not be retested as if the new segment were continuous.
@@ -221,7 +222,6 @@ class LevelEventPilot:
                 (stream,)).fetchall()[::-1]
             continuous = (len(last20)==20 and
                 all(last20[i][0]==last20[i-1][1] for i in range(1,20)))
-            before = self.db.execute("SELECT COUNT(*) FROM level_events").fetchone()[0]
             if continuous:
                 candles = [json.loads(x[2]) for x in last20]
                 levels = {"SUPPORT":min(x["low"] for x in candles),
