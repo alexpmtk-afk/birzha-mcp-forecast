@@ -110,12 +110,16 @@ def classify_market_state_vector(vector: MarketStateVector) -> dict:
         down=sum(_bounded(-v) for v in returns)/3.0
         aligned_up=sum(v>0 for v in returns)
         aligned_down=sum(v<0 for v in returns)
-        # Directional labels are not proven Control. Require D1 and >=2 TFs.
-        if returns[0]>0 and aligned_up>=2:
+        # A material contrary H1/M15 move (>0.5 ATR) invalidates the
+        # candidate trend even when two of three signs are aligned.
+        contrary_up=any(v<=-.5 for v in returns[1:])
+        contrary_down=any(v>=.5 for v in returns[1:])
+        # Directional labels are not proven Control.
+        if returns[0]>0 and aligned_up>=2 and not contrary_up:
             score["TREND_UP"]=round(10*(.55*up+.25*eff+.20*loc),4)
             evidence["TREND_UP"]=["three_timeframe_return_atr",
                                    "efficiency","price_location"]
-        if returns[0]<0 and aligned_down>=2:
+        if returns[0]<0 and aligned_down>=2 and not contrary_down:
             score["TREND_DOWN"]=round(10*(.55*down+.25*eff+.20*(1-loc)),4)
             evidence["TREND_DOWN"]=["three_timeframe_return_atr",
                                      "efficiency","price_location"]
