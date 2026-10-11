@@ -5,6 +5,7 @@ canonical table schemas are retained. No production paths, migration, or schedul
 """
 from __future__ import annotations
 import base64
+import binascii
 from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
@@ -243,7 +244,7 @@ class SingleDuckDBProspectiveStagingJournal:
                         manifest_bytes=manifest_bytes, exact_secid=meta["secid"],
                         issued_at_t0=meta["decision_t0"],
                     )
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, binascii.Error) as exc:
                 raise pilot.ImmutableCollision("original calendar witness evidence is corrupt") from exc
         outcome={id:(h,p) for id,h,p in self.db.execute("SELECT outcome_id,payload_hash,payload_json FROM outcome_records").fetchall()}
         future=self.db.execute("SELECT forecast_id,horizon,outcome_id,source_blob,source_sha,evidence_json,evidence_sha FROM g2_atomic_futures").fetchall()
