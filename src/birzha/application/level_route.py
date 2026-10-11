@@ -13,6 +13,9 @@ import math
 from birzha.application.control_holding import (
     control_holding_from_snapshot, PREFIX_LOOKBACK,
 )
+from birzha.application.market_state_classifier import (
+    classify_market_state_from_snapshot,
+)
 from birzha.application.normalized_features import EXACT_PROFILE_METHOD
 from birzha.domain.market import CandleSeries, Instrument
 from birzha.domain.snapshot import MarketSnapshot
@@ -117,14 +120,13 @@ def _exact_profile_levels(snapshot, instrument):
 
 def assess_levels_and_route(
     snapshot: MarketSnapshot, instrument: Instrument, series: CandleSeries,
-    *, market_state_candidate: dict | None=None,
 ):
-    """Compute only from a validated prior-level/Control snapshot.
+    """Recompute BOTH Control and Market State from the SAME causal source.
 
-    A same-snapshot, approved-looking external MarketState dict is NOT itself
-    evidence: any unapproved, conflicting or BALANCE candidate inhibits Route.
+    Never accept a caller-crafted dictionary claiming an approved Market State.
     """
     control=control_holding_from_snapshot(snapshot,instrument,series)
+    regime=classify_market_state_from_snapshot(snapshot,instrument)
     reasons=list(control["reason_codes"])
     price=snapshot.m15.last_close
     features=snapshot.normalized_features
@@ -142,25 +144,18 @@ def assess_levels_and_route(
         levels.extend(profile)
     else:
         reasons.append("CONTROL_HOLDING_NOT_CONFIRMED")
-    if market_state_candidate is not None:
-        if not isinstance(market_state_candidate,dict):
-            raise ValueError("MarketState candidate must be a dict")
-        if (market_state_candidate.get("snapshot_id")!=control["snapshot_id"]
-            or market_state_candidate.get("secid")!=snapshot.secid
-            or market_state_candidate.get("symbol")!=snapshot.symbol
-            or market_state_candidate.get("as_of")!=snapshot.as_of):
-            reasons.append("MARKET_STATE_SNAPSHOT_MISMATCH")
-        if market_state_candidate.get("classification_status")!="PROVISIONAL_CANDIDATE":
-            reasons.append("MARKET_STATE_NOT_PROVISIONAL")
-        mode=market_state_candidate.get("candidate_regime")
-        if mode in ("BALANCE","EVENT",None):
-            reasons.append("MARKET_STATE_NOT_DIRECTIONAL_ROUTE")
-        if mode in ("TREND_DOWN","DISTRIBUTION") and control["control"]=="BUYERS":
-            reasons.append("CONTROL_CONTRADICTS_MARKET_STATE")
-        if mode in ("TREND_UP","ACCUMULATION") and control["control"]=="SELLERS":
-            reasons.append("CONTROL_CONTRADICTS_MARKET_STATE")
-    elif control["control"] is not None:
-        reasons.append("MARKET_STATE_CONSENSUS_NOT_PROVIDED")
+    if (regime["snapshot_id"]!=control["snapshot_id"]
+        or regime["secid"]!=snapshot.secid or regime["as_of"]!=snapshot.as_of):
+        reasons.append("MARKET_STATE_SNAPSHOT_MISMATCH")
+    if regime["classification_status"]!="PROVISIONAL_CANDIDATE":
+        reasons.append("MARKET_STATE_NOT_PROVISIONAL")
+    mode=regime["candidate_regime"]
+    if mode in ("BALANCE","EVENT",None):
+        reasons.append("MARKET_STATE_NOT_DIRECTIONAL_ROUTE")
+    if mode in ("TREND_DOWN","DISTRIBUTION") and control["control"]=="BUYERS":
+        reasons.append("CONTROL_CONTRADICTS_MARKET_STATE")
+    if mode in ("TREND_UP","ACCUMULATION") and control["control"]=="SELLERS":
+        reasons.append("CONTROL_CONTRADICTS_MARKET_STATE")
     obstacles=[]
     free_atr=None
     nearest=None
@@ -201,6 +196,9 @@ def assess_levels_and_route(
         "level_candidates":levels,
         "profile_admission_reason":profile_reason,
         "control_holding_schema":control["schema"],
+        "market_state_recomputed_schema":regime["schema"],
+        "market_state_recomputed_status":regime["classification_status"],
+        "market_state_recomputed_regime":regime["candidate_regime"],
         "control":control["control"],
         "control_confidence_research_only":control["control_confidence_out_of_10_not_probability"],
         "control_proof_rechecked_from_source":True,
