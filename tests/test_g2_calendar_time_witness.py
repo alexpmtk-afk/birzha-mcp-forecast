@@ -196,3 +196,28 @@ def test_rfc3161_verify_fails_closed_on_missing_request_proof_or_late_stamp(tmp_
             response_path=tmp_path/"r.tsr", trust_ca_path=tmp_path/"external-ca.pem",
             runner=fake,
         )
+
+
+def test_tsa_preimage_is_canonical_journal_payload_not_caller_recreated_forecast(tmp_path):
+    from birzha.application.g2_time_anchor import commitment_from_atomic_staging
+    from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
+    from scripts.g2_issue_sourcebound_atomic_staging import issue_atomic_staging
+    from test_g2_freeze_real_forecast_from_source_receipts import NOW, source_fixture
+    source = tmp_path/"original"
+    stage = tmp_path/"staging"
+    source_fixture(source)
+    stage.mkdir()
+    captured = issue_atomic_staging(source,stage,"SBER",clock=lambda:NOW)
+    reopened = SingleDuckDBProspectiveStagingJournal(
+        stage/"SBER.duckdb",staging_root=stage,clock=lambda:NOW
+    )
+    try:
+        first = commitment_from_atomic_staging(reopened,captured["forecast_id"])
+        assert commitment_from_atomic_staging(reopened,captured["forecast_id"])==first
+        statement = json.loads(first)
+        assert statement["forecast_id"] == captured["forecast_id"]
+        assert statement["original_source_manifest_sha256"] == sha256(
+            (source/"manifest.json").read_bytes()
+        ).hexdigest()
+    finally:
+        reopened.close()
