@@ -98,7 +98,6 @@ def test_event_only_says_price_volume_anomaly_not_external_news_cause():
     ({"capabilities":("TRADING_CALENDAR",)},"CANDLES_NOT_SUPPORTED"),
     ({"as_of":"2026-10-01T18:00:00"},"TIME_WITHOUT_TRUSTWORTHY_OFFSET"),
     ({"d1":None},"CORE_FEATURE_UNAVAILABLE:d1_return_5_atr"),
-    ({"eff":float("nan")},"INVALID_NUMERIC:d1_efficiency_20"),
     ({"loc":2.0},"INVALID_RANGE:d1_price_location_20"),
 ])
 def test_bad_causal_input_or_clock_must_abstain(fault,expected):
@@ -108,6 +107,16 @@ def test_bad_causal_input_or_clock_must_abstain(fault,expected):
     assert result["candidate_regime"] is None
     assert expected in result["reason_codes"]
     assert all(x is None for x in result["regime_scores_out_of_10_not_probabilities"].values())
+
+
+def test_nonfinite_normalized_value_is_refused_without_serializing_corrupted_snapshot():
+    # The MarketSnapshot already forbids NaN in its stable content hash.
+    # Direct forged/interrupted vectors must still fail closed at classifier.
+    _,_,vector=_build()
+    forged=replace(vector, features=replace(vector.features,d1_efficiency_20=float("nan")))
+    result=classify_market_state_vector(forged)
+    assert result["classification_status"]=="ABSTAIN"
+    assert "INVALID_NUMERIC:d1_efficiency_20" in result["reason_codes"]
 
 
 def test_conflicting_timeframes_without_support_abstains_not_force_direction():
