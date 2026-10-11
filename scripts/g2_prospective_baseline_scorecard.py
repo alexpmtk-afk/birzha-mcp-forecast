@@ -183,9 +183,17 @@ def _check_outcome(
 
     t0 = _time(forecast.get("created_at_t0"), f"forecast T0 {fid}")
     captured = _time(receipt.get("captured_at"), f"capture time {fid}")
+    receipt_t0 = _time(receipt.get("decision_t0"), f"receipt T0 {fid}")
+    source_seen = _time(receipt.get("source_observed_at"), f"capture source time {fid}")
+    latest_event = _time(receipt.get("latest_completed_event_end"), f"capture event time {fid}")
     observed = _time(outcome.get("source_observed_at"), f"outcome source time {fid}/{horizon}")
     written = _time(outcome.get("outcome_written_at"), f"outcome write time {fid}/{horizon}")
-    if captured < t0 or observed <= captured or written < observed:
+    target_end = _time(outcome.get("target_session_end"), f"target close time {fid}/{horizon}")
+    if (
+        receipt_t0 != t0 or latest_event > source_seen or source_seen > t0
+        or captured < source_seen or captured < t0 or target_end <= t0
+        or target_end > observed or observed <= captured or written < observed
+    ):
         raise ScorecardRefused(f"outcome time sequence is invalid: {fid}/{horizon}")
     try:
         target_day = date.fromisoformat(outcome.get("target_session"))
@@ -203,6 +211,13 @@ def _check_outcome(
     calculated_return = round((target / reference - 1.0) * 100.0, 8)
     if actual_return != calculated_return:
         raise ScorecardRefused(f"recorded horizon return is inconsistent: {fid}/{horizon}")
+    horizon_row = _forecast_horizons(forecast)[horizon]
+    direction = _decision(forecast, horizon_row)
+    expected_hit = None if direction in {"NEUTRAL", "ABSTAIN"} else (
+        actual_return > 0 if direction == "UP" else actual_return < 0
+    )
+    if outcome.get("direction_hit") is not expected_hit:
+        raise ScorecardRefused(f"recorded direction result is inconsistent: {fid}/{horizon}")
     return actual_return
 
 
