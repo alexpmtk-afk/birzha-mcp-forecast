@@ -5,6 +5,7 @@ Only same-provider second-endpoint corroboration; no trusted exchange calendar.
 from __future__ import annotations
 
 import base64
+import binascii
 from hashlib import sha256
 import json
 from typing import Any
@@ -58,7 +59,7 @@ def decode_calendar_witness(body: bytes) -> dict:
                 raise ValueError("empty original calendar page")
             pages.append({**{k: v for k, v in p.items() if k != "raw_body_b64"}, "raw_body": raw})
         return {**{k: v for k, v in record.items() if k != "pages"}, "pages": pages}
-    except (ValueError, KeyError, TypeError, UnicodeError) as exc:
+    except (ValueError, KeyError, TypeError, UnicodeError, binascii.Error) as exc:
         raise ValueError("malformed stored calendar witness") from exc
 
 
@@ -99,8 +100,6 @@ def verify_calendar_evidence(
     body: bytes, *, source_blob: bytes, manifest_bytes: bytes,
     exact_secid: str, issued_at_t0: str,
 ) -> dict:
-    from birzha.application.g2_calendar_witness import CalendarWitnessRefused
-
     try:
         witness = decode_calendar_witness(body)
         ins, original_d1 = source_d1_bytes(source_blob, manifest_bytes, exact_secid)
