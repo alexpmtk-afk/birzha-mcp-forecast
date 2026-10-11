@@ -49,7 +49,7 @@ def test_two_real_raw_original_html_pages_have_exact_safe_receipts_and_hashes():
     def mocked(req):
         calls.append(str(req.url))
         return httpx.Response(
-            200,content=b"raw html received at exact allowed url "+str(req.url).encode(),
+            200,stream=httpx.ByteStream(b"raw html received at exact allowed url "+str(req.url).encode()),
             headers={"Content-Type":"text/html; charset=utf-8",
                      "Date":"Sat, 10 Oct 2026 12:00:00 GMT"}
         )
@@ -105,18 +105,18 @@ def test_partial_or_unacceptable_result_never_returned_as_complete_inventory(pro
     def handler(req):
         called.append(str(req.url))
         if len(called)==1:
-            return httpx.Response(200,content=b"<html>first</html>",
+            return httpx.Response(200,stream=httpx.ByteStream(b"<html>first</html>"),
                                   headers={"Content-Type":"text/html"})
         if problem=="redirect":
             return httpx.Response(302,headers={"Location":"https://evil.invalid"})
         if problem=="nonhtml":
-            return httpx.Response(200,content=b"{}",
+            return httpx.Response(200,stream=httpx.ByteStream(b"{}"),
                                   headers={"Content-Type":"application/json"})
         if problem=="empty":
-            return httpx.Response(200,content=b"",
+            return httpx.Response(200,stream=httpx.ByteStream(b""),
                                   headers={"Content-Type":"text/html"})
         if problem=="oversized":
-            return httpx.Response(200,content=b"X"*1_500_001,
+            return httpx.Response(200,stream=httpx.ByteStream(b"X"*1_500_001),
                                   headers={"Content-Type":"text/html"})
         return httpx.Response(404)
     client,control=settings(clock,handler)
@@ -155,7 +155,7 @@ def test_existing_market_scope_counts_schedule_calls_together_with_candles():
     clock=FakeClock();called=[]
     def handler(req):
         called.append(str(req.url))
-        return httpx.Response(200,content=b"<html>receipt</html>",
+        return httpx.Response(200,stream=httpx.ByteStream(b"<html>receipt</html>"),
                               headers={"Content-Type":"text/html"})
     client,control=settings(clock,handler)
     try:
@@ -182,7 +182,7 @@ def test_manual_session_extraction_must_bind_to_exact_original_captured_bytes():
         b"<html>MOEX corrected synthetic session schedule fixture v2</html>",
     ]
     client,control=settings(clock,lambda req: httpx.Response(
-        200,content=bodies[0] if str(req.url)==FIRST else bodies[1],
+        200,stream=httpx.ByteStream(bodies[0] if str(req.url)==FIRST else bodies[1]),
         headers={"Content-Type":"text/html"}
     ))
     try:
@@ -218,7 +218,7 @@ def test_manual_session_extraction_must_bind_to_exact_original_captured_bytes():
 def test_unchanged_source_sha_is_not_proof_notice_completeness():
     clock=FakeClock()
     client,control=settings(clock,lambda req:httpx.Response(
-        200,content=b"<html>no validation of later notices</html>",
+        200,stream=httpx.ByteStream(b"<html>no validation of later notices</html>"),
         headers={"Content-Type":"text/html"},
     ))
     try:
@@ -229,5 +229,28 @@ def test_unchanged_source_sha_is_not_proof_notice_completeness():
         assert result["schedule_notice_completeness_independently_verified"] is False
         assert result["source_authorship_independently_attested"] is False
         assert result["trading_session_interpretation_certified"] is False
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("encoding",["gzip","br","deflate","zstd"])
+def test_original_http_entity_cannot_be_silently_decompressed(encoding):
+    """httpx.iter_bytes decodes content: unsigned stored bytes would change."""
+    fake=FakeClock()
+    called=[]
+    def reply(req):
+        called.append(str(req.url))
+        return httpx.Response(
+            200,stream=httpx.ByteStream(b"not actually compressed; rejection occurs before decoding"),
+            headers={"Content-Type":"text/html","Content-Encoding":encoding},
+        )
+    client,control=settings(fake,reply)
+    try:
+        with pytest.raises(ScheduleCaptureRefused,match="SCHEDULE_BODY_TOO_LARGE_OR_EMPTY"):
+            capture_official_schedule_pages(
+                (FIRST,),clock=fake.utc,monotonic=fake.monotonic,
+                client=client,control_plane=control,
+            )
+        assert called==[FIRST]
     finally:
         client.close()
