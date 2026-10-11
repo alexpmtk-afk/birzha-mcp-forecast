@@ -11,6 +11,8 @@ from .safety import (
     SafeRequestExecutor,
     UnsafeUpstreamConfiguration,
     UpstreamPolicy,
+    UpstreamCaptureAttemptBudgetExceeded,
+    UpstreamCaptureDeadlineExceeded,
     UpstreamRateLimited,
     UpstreamRequestBudgetExceeded,
 )
@@ -22,6 +24,8 @@ __all__ = [
     "SafeRequestExecutor",
     "UnsafeUpstreamConfiguration",
     "UpstreamPolicy",
+    "UpstreamCaptureAttemptBudgetExceeded",
+    "UpstreamCaptureDeadlineExceeded",
     "UpstreamRateLimited",
     "UpstreamRequestBudgetExceeded",
 ]

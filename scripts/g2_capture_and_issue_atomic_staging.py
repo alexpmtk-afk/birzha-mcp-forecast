@@ -42,8 +42,10 @@ def _safe_failure_diagnostic(failures):
         if isinstance(safe, str) and safe in {
             "HTTP_429_RATE_LIMIT", "HTTP_503_UNAVAILABLE", "HTTP_5XX_UPSTREAM",
             "UPSTREAM_TIMEOUT_OR_TRANSPORT", "UPSTREAM_RETRIES_EXHAUSTED",
+            "UPSTREAM_CAPTURE_DEADLINE_EXCEEDED",
+            "UPSTREAM_CAPTURE_ATTEMPT_BUDGET_EXHAUSTED",
         }:
-            codes.append(safe)
+            codes.append("UPSTREAM_GOVERNOR_BLOCKED" if safe.startswith("UPSTREAM_CAPTURE_") else safe)
             continue
         detail = str(row.get("detail", ""))
         error_type = str(row.get("error_type", ""))
@@ -66,7 +68,9 @@ def _safe_failure_diagnostic(failures):
             match = "UPSTREAM_TIMEOUT_OR_TRANSPORT"
         elif error_type in {"UnsafeUpstreamConfiguration",
                             "UpstreamSafetyError", "UpstreamBudgetExceeded",
-                            "UpstreamRequestBudgetExceeded"}:
+                            "UpstreamRequestBudgetExceeded",
+                            "UpstreamCaptureDeadlineExceeded",
+                            "UpstreamCaptureAttemptBudgetExceeded"}:
             match = "UPSTREAM_GOVERNOR_BLOCKED"
         else:
             match = next((code for phrase, code in SAFE_FAILURE_REASONS.items()

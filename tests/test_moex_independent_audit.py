@@ -1,5 +1,6 @@
 """Offline regressions for the 2026-10-11 independent audit. No MOEX calls."""
 from datetime import datetime, timezone
+from contextlib import nullcontext
 from types import SimpleNamespace
 import httpx
 import pytest
@@ -71,10 +72,18 @@ def test_capture_preserves_safe_governor_code_and_never_echoes_unknown_detail(tm
     instrument=Instrument(symbol="SBER",secid="SBER",engine="stock",market="shares",board="TQBR",asset_class="equity")
     def refuse(*args):
         raise UpstreamRateLimited("private diagnostic",safe_reason="HTTP_429_RATE_LIMIT")
-    manifest=capture_all(SimpleNamespace(_request=refuse),SimpleNamespace(resolve=lambda _:instrument),tmp_path/"raw",clock=lambda:NOW,markets=("SBER",))
+    manifest=capture_all(SimpleNamespace(_request=refuse,capture_scope=lambda **_:nullcontext(None)),SimpleNamespace(resolve=lambda _:instrument),tmp_path/"raw",clock=lambda:NOW,markets=("SBER",))
     assert _safe_failure_diagnostic(manifest["failed_markets"])=="HTTP_429_RATE_LIMIT"
     assert _safe_failure_diagnostic([{"safe_reason":"https://secret.invalid/token"}])=="UNCLASSIFIED_SOURCE_FAILURE"
     assert _safe_failure_diagnostic([{"error_type":"UpstreamRequestBudgetExceeded"}])=="UPSTREAM_GOVERNOR_BLOCKED"
+
+
+@pytest.mark.parametrize("safe_reason", [
+    "UPSTREAM_CAPTURE_DEADLINE_EXCEEDED",
+    "UPSTREAM_CAPTURE_ATTEMPT_BUDGET_EXHAUSTED",
+])
+def test_capture_scope_refusals_are_safely_classified(safe_reason):
+    assert _safe_failure_diagnostic([{"safe_reason":safe_reason}])=="UPSTREAM_GOVERNOR_BLOCKED"
 
 
 def test_freshness_rechecked_at_actual_issue_time(tmp_path):

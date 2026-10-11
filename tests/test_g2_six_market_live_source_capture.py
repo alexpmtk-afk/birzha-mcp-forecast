@@ -1,4 +1,5 @@
 """Offline regression of six-market source capture; no network, no HOME."""
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,6 +48,7 @@ def page(rows=None, cursor=None):
 
 class Provider:
     def __init__(self, broken_tf=None):self.calls=[];self.broken_tf=broken_tf
+    def capture_scope(self, **_):return nullcontext(None)
     def _request(self,path,params):
         self.calls.append((path,params))
         if self.broken_tf=="M1" and params["interval"]==1:return page([])
@@ -59,6 +61,8 @@ def test_exact_six_market_complete_and_raw_manifest(tmp_path):
     m=capture_all(p,MarketData(),tmp_path/"six",clock=clock)
     assert m["schema"]==RECEIPT_VERSION and m["verified_complete_market_count"]==6
     assert m["failed_markets"]==[] and m["complete_pages"]==18
+    assert m["request_safety_policy"]["max_physical_attempts"]==120
+    assert m["request_safety_policy"]["monotonic_deadline_seconds"]==180.0
     assert len(p.calls)==18
     assert [x["resolved_secid"] for x in m["instruments"]]==["SBER","SiZ6","BRZ6","GDZ6","IMOEX","RTSI"]
     assert all(set(x["timeframes"])==set(TIMEFRAMES) for x in m["instruments"])

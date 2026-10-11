@@ -74,6 +74,8 @@ class _NoopGate:
     scope = "process"
     def pace(self, min_interval_seconds: float) -> None:
         return None
+    def pace_until(self, min_interval_seconds: float, *, deadline_at: float | None) -> None:
+        return None
 
 
 class _FakeHttpResponse:
@@ -116,6 +118,21 @@ def test_batched_request_retries_transient_connection_error():
     responses = _retry_test_client(opener)._request_many((("/test", {}),))
     assert responses[0].status_code == 200
     assert calls["count"] == 2
+
+
+def test_capture_scope_clamps_each_http_timeout_to_remaining_deadline():
+    observed_timeouts = []
+
+    def opener(*args, **kwargs):
+        observed_timeouts.append(kwargs["timeout"])
+        return _FakeHttpResponse()
+
+    client = _retry_test_client(opener)
+    with client.capture_scope(max_attempts=3, timeout_seconds=5.0):
+        response = client._request("/test")
+    assert response.status_code == 200
+    assert len(observed_timeouts) == 1
+    assert 4.9 < observed_timeouts[0] <= 5.0
 
 
 

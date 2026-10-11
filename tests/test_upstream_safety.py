@@ -14,6 +14,8 @@ from birzha.upstream.moex import (
     policy_for_moex,
 )
 from birzha.upstream.safety import (
+    UpstreamCaptureAttemptBudgetExceeded,
+    UpstreamCaptureDeadlineExceeded,
     ProcessPacingGate,
     SafeRequestExecutor,
     UnsafeUpstreamConfiguration,
@@ -171,3 +173,97 @@ def test_control_plane_level_distributed_requirement_fails_closed() -> None:
     control = ProcessUpstreamControlPlane(require_distributed_gate=True, clock=clock, sleeper=clock.sleep)
     with pytest.raises(UnsafeUpstreamConfiguration):
         control.governor("moex-public", MOEX_ISS_PUBLIC_POLICY)
+
+
+def test_capture_attempt_budget_is_cumulative_across_governor_calls() -> None:
+    clock = FakeClock()
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
+    governor = control.governor("moex-public", MOEX_ISS_PUBLIC_POLICY)
+    calls = []
+    with governor.capture_scope(max_attempts=2, timeout_seconds=30) as budget:
+        governor.execute(["resolve"], lambda _: lambda: calls.append("resolve") or FakeResponse(200))
+        governor.execute(["page-1"], lambda _: lambda: calls.append("page-1") or FakeResponse(200))
+        with pytest.raises(UpstreamCaptureAttemptBudgetExceeded):
+            governor.execute(["page-2"], lambda _: lambda: calls.append("page-2") or FakeResponse(200))
+    assert calls == ["resolve", "page-1"]
+    assert budget.attempts_used == 2
+    assert governor.capture_summary(budget)["physical_attempts_used"] == 2
+
+
+def test_capture_attempt_budget_counts_retries_across_calls() -> None:
+    clock = FakeClock()
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
+    governor = control.governor("moex-public", MOEX_ISS_PUBLIC_POLICY)
+    responses = iter([FakeResponse(503, {"Retry-After": "0"}), FakeResponse(200)])
+    calls = []
+    with governor.capture_scope(max_attempts=2, timeout_seconds=30):
+        governor.execute(["retrying-resolution"], lambda _: lambda: calls.append(1) or next(responses))
+        with pytest.raises(UpstreamCaptureAttemptBudgetExceeded):
+            governor.execute(["page"], lambda _: lambda: calls.append(2) or FakeResponse(200))
+    assert calls == [1, 1]
+
+
+def test_capture_deadline_refuses_retry_after_without_shortening_or_sleeping() -> None:
+    clock = FakeClock()
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
+    governor = control.governor("moex-public", MOEX_ISS_PUBLIC_POLICY)
+    calls = []
+    with governor.capture_scope(max_attempts=10, timeout_seconds=5) as budget:
+        with pytest.raises(UpstreamCaptureDeadlineExceeded):
+            governor.execute(
+                ["rate-limited"],
+                lambda _: lambda: calls.append(clock.now) or FakeResponse(503, {"Retry-After": "6"}),
+            )
+    assert len(calls) == 1
+    assert clock.now == 0
+    assert budget.attempts_used == 1
+
+
+def test_capture_deadline_rejects_pacing_wait_before_http_attempt() -> None:
+    clock = FakeClock()
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
+    governor = control.governor("moex-public", MOEX_ISS_PUBLIC_POLICY)
+    calls = []
+    with governor.capture_scope(max_attempts=10, timeout_seconds=0.1) as budget:
+        governor.execute(["first"], lambda _: lambda: calls.append(1) or FakeResponse(200))
+        with pytest.raises(UpstreamCaptureDeadlineExceeded):
+            governor.execute(["second"], lambda _: lambda: calls.append(2) or FakeResponse(200))
+    assert calls == [1]
+    assert budget.attempts_used == 1
+
+
+def test_capture_deadline_rejects_response_that_arrives_too_late() -> None:
+    clock = FakeClock()
+    control = ProcessUpstreamControlPlane(clock=clock, sleeper=clock.sleep)
+    governor = control.governor("moex-public", MOEX_ISS_PUBLIC_POLICY)
+    calls = []
+
+    def late_response():
+        calls.append(1)
+        clock.sleep(6)
+        return FakeResponse(200)
+
+    with governor.capture_scope(max_attempts=3, timeout_seconds=5) as budget:
+        with pytest.raises(UpstreamCaptureDeadlineExceeded):
+            governor.execute(["slow-response"], lambda _: late_response)
+    assert calls == [1]
+    assert budget.attempts_used == 1
+
+
+def test_capture_scope_fails_closed_for_pacing_gate_without_deadline_support() -> None:
+    clock = FakeClock()
+    class LegacyGate:
+        scope = "distributed"
+        def pace(self, min_interval_seconds: float) -> None:
+            return None
+
+    gate = LegacyGate()
+    control = ProcessUpstreamControlPlane(
+        gate_factory=lambda _: gate, clock=clock, sleeper=clock.sleep,
+    )
+    governor = control.governor("moex-public", MOEX_ISS_PUBLIC_POLICY)
+    calls = []
+    with governor.capture_scope(max_attempts=3, timeout_seconds=5):
+        with pytest.raises(UnsafeUpstreamConfiguration):
+            governor.execute(["first"], lambda _: lambda: calls.append(1) or FakeResponse(200))
+    assert calls == []

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo
 import argparse
+from birzha.upstream.safety import UnsafeUpstreamConfiguration
 
 MARKETS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
 # At least 50 completed M15 bars require >1 SBER trading session.
@@ -29,6 +30,9 @@ MAX_PAGES = 8
 # M1 needs at least 750 genuine minute bars for 50 complete M15 buckets.
 # MOEX often paginates 100 per request; cap remains finite and per-timeframe.
 M1_MAX_PAGES = 32
+# One market's resolver, every timeframe/page and all retries share these caps.
+CAPTURE_MAX_PHYSICAL_ATTEMPTS = 120
+CAPTURE_DEADLINE_SECONDS = 180.0
 
 
 def stable(data):
@@ -182,31 +186,53 @@ def capture_all(provider, market_data, out_dir, *, clock=clock_now, markets=MARK
     instruments=[]
     failed=[]
     for market in markets:
+        budget=None
         try:
-            # Explicit exact resolution. Rolling futures roots must NOT be
-            # passed to a candles endpoint as if they were exact SECIDs.
-            instrument=market_data.resolve(market)
-            if instrument.secid.upper()==market.upper() and market.upper() in {"SI","BR","GOLD"}:
-                raise ValueError("unresolved futures root treated as a SECID")
-            if not instrument.engine or not instrument.market or not instrument.board:
-                raise ValueError("missing exact instrument routing")
-            instrument_receipts={}
-            for timeframe in TIMEFRAMES:
-                instrument_receipts[timeframe]=collect_one(
-                    provider,instrument,timeframe,started,clock,out_dir)
-            instruments.append({"market":market,"resolved_secid":instrument.secid,
-                "instrument":instrument.to_dict(),"timeframes":instrument_receipts,
-                "status":"SOURCE_CAPTURE_COMPLETE"})
+            scope_factory=getattr(provider,"capture_scope",None)
+            if not callable(scope_factory):
+                raise UnsafeUpstreamConfiguration(
+                    "source capture provider does not expose a governed capture scope"
+                )
+            scope=scope_factory(max_attempts=CAPTURE_MAX_PHYSICAL_ATTEMPTS,
+                                timeout_seconds=CAPTURE_DEADLINE_SECONDS)
+            with scope as budget:
+                # Explicit exact resolution. Rolling futures roots must NOT be
+                # passed to a candles endpoint as if they were exact SECIDs.
+                instrument=market_data.resolve(market)
+                if instrument.secid.upper()==market.upper() and market.upper() in {"SI","BR","GOLD"}:
+                    raise ValueError("unresolved futures root treated as a SECID")
+                if not instrument.engine or not instrument.market or not instrument.board:
+                    raise ValueError("missing exact instrument routing")
+                instrument_receipts={}
+                for timeframe in TIMEFRAMES:
+                    instrument_receipts[timeframe]=collect_one(
+                        provider,instrument,timeframe,started,clock,out_dir)
+                row={"market":market,"resolved_secid":instrument.secid,
+                    "instrument":instrument.to_dict(),"timeframes":instrument_receipts,
+                    "status":"SOURCE_CAPTURE_COMPLETE"}
+            if budget is not None:
+                summary=getattr(provider,"capture_summary",None)
+                if callable(summary):
+                    row["request_safety"]=summary(budget)
+            instruments.append(row)
         except Exception as exc:
             # Keep original bytes of partial captures as evidence but refuse
             # to certify this instrument's completeness.
-            failed.append({"market":market,"error_type":type(exc).__name__,
+            failure={"market":market,"error_type":type(exc).__name__,
                            "safe_reason":getattr(exc,"safe_reason",None),
-                           "detail":str(exc)[:300],"status":"SOURCE_CAPTURE_INCOMPLETE"})
+                           "detail":str(exc)[:300],"status":"SOURCE_CAPTURE_INCOMPLETE"}
+            if budget is not None:
+                summary=getattr(provider,"capture_summary",None)
+                if callable(summary):
+                    failure["request_safety"]=summary(budget)
+            failed.append(failure)
     files=sorted(p for p in out_dir.glob("*.json") if p.name!="manifest.json")
     total_pages=sum(len(v["timeframes"][tf]["pages"]) for v in instruments for tf in TIMEFRAMES)
     manifest={"schema":RECEIPT_VERSION,"origin":"REAL_MOEX_PUBLIC_ISS_CAPTURE",
         "is_forecast":False,"is_outcome":False,"strict_external_timestamp_attested":False,
+        "request_safety_policy":{"scope":"one market, including contract resolution, retries and pages",
+            "max_physical_attempts":CAPTURE_MAX_PHYSICAL_ATTEMPTS,
+            "monotonic_deadline_seconds":CAPTURE_DEADLINE_SECONDS},
         "capture_started_utc":timestamp(started),"capture_completed_utc":timestamp(clock()),
         "requested_markets":list(markets),"complete_markets":[i["market"] for i in instruments],
         "failed_markets":failed,"instruments":instruments,

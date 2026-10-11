@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -15,6 +16,10 @@ import httpx
 
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.domain.market import Candle, CandleSeries, Instrument
+from birzha.upstream.safety import (
+    CaptureAttemptBudget,
+    UpstreamCaptureDeadlineExceeded,
+)
 from birzha.upstream.moex import MOEX_ISS_PUBLIC_POLICY
 from birzha.providers.moex_instrument_contract import (
     moex_calendar_id,
@@ -74,6 +79,30 @@ class MoexIssClient:
             require_distributed_gate=require_distributed_gate,
         )
 
+    @contextmanager
+    def capture_scope(
+        self, *, max_attempts: int, timeout_seconds: float
+    ) -> Iterator[CaptureAttemptBudget]:
+        """Bound one complete capture, including resolution, retries and pages."""
+
+        with self._governor.capture_scope(
+            max_attempts=max_attempts, timeout_seconds=timeout_seconds
+        ) as budget:
+            yield budget
+
+    def capture_summary(self, budget: CaptureAttemptBudget) -> dict[str, int | float]:
+        return self._governor.capture_summary(budget)
+
+    def _attempt_timeout_seconds(self) -> float:
+        remaining = self._governor.capture_remaining_seconds
+        if remaining is None:
+            return self._timeout_seconds
+        if remaining <= 0:
+            raise UpstreamCaptureDeadlineExceeded(
+                "governed capture deadline exhausted before HTTP attempt"
+            )
+        return min(self._timeout_seconds, remaining)
+
     @staticmethod
     def _table(payload: dict[str, Any], name: str) -> list[dict[str, Any]]:
         table = payload.get(name) or {}
@@ -82,15 +111,19 @@ class MoexIssClient:
         return [dict(zip(columns, row, strict=False)) for row in data]
 
     def _one_attempt(self, url: str) -> IssResponse:
+        timeout = self._attempt_timeout_seconds()
         if self._http_client is not None:
             try:
-                response = self._http_client.get(url)
+                if self._governor.capture_remaining_seconds is None:
+                    response = self._http_client.get(url)
+                else:
+                    response = self._http_client.get(url, timeout=timeout)
                 return IssResponse(status_code=response.status_code, headers=dict(response.headers), body=response.content)
             except (httpx.TimeoutException, httpx.TransportError, ConnectionError) as exc:
                 return IssResponse(status_code=503, headers={"X-BIRZHA-TRANSIENT": type(exc).__name__}, body=b"", transport_failure=True)
         req = Request(url, headers=MOEX_HTTP_HEADERS)
         try:
-            with self._opener(req, timeout=self._timeout_seconds) as response:
+            with self._opener(req, timeout=timeout) as response:
                 return IssResponse(status_code=int(getattr(response, "status", 200)), headers={str(k): str(v) for k, v in response.headers.items()}, body=response.read())
         except HTTPError as exc:
             return IssResponse(status_code=int(exc.code), headers={str(k): str(v) for k, v in exc.headers.items()}, body=exc.read())

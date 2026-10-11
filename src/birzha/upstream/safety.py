@@ -13,8 +13,10 @@ from email.utils import parsedate_to_datetime
 import random
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Callable, Protocol, TypeVar
+from typing import Callable, Iterator, Protocol, TypeVar
 
 T = TypeVar("T", bound="ResponseLike")
 
@@ -34,6 +36,65 @@ class PacingGate(Protocol):
 
 class UpstreamRequestBudgetExceeded(RuntimeError):
     """Raised when a logical segment exhausts its bounded attempt budget."""
+
+
+class UpstreamCaptureDeadlineExceeded(RuntimeError):
+    """A governed capture cannot finish inside its shared monotonic deadline."""
+
+    safe_reason = "UPSTREAM_CAPTURE_DEADLINE_EXCEEDED"
+
+
+class UpstreamCaptureAttemptBudgetExceeded(RuntimeError):
+    """A governed capture exhausted its cumulative physical-attempt budget."""
+
+    safe_reason = "UPSTREAM_CAPTURE_ATTEMPT_BUDGET_EXHAUSTED"
+
+
+@dataclass(slots=True)
+class CaptureAttemptBudget:
+    """One capture's cumulative physical HTTP attempts and monotonic deadline."""
+
+    started_at: float
+    deadline_at: float
+    max_attempts: int
+    attempts_used: int = 0
+
+    def remaining_seconds(self, clock: Callable[[], float]) -> float:
+        return max(0.0, self.deadline_at - clock())
+
+    def elapsed_seconds(self, clock: Callable[[], float]) -> float:
+        return max(0.0, clock() - self.started_at)
+
+    def ensure_time(self, clock: Callable[[], float]) -> None:
+        if clock() >= self.deadline_at:
+            raise UpstreamCaptureDeadlineExceeded(
+                "governed capture exceeded its shared deadline"
+            )
+
+    def ensure_wait_fits(self, seconds: float, clock: Callable[[], float]) -> None:
+        self.ensure_time(clock)
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("capture wait must be finite and non-negative")
+        if seconds >= self.remaining_seconds(clock):
+            raise UpstreamCaptureDeadlineExceeded(
+                "required upstream wait does not fit the remaining capture deadline"
+            )
+
+    def consume_attempt(self, clock: Callable[[], float]) -> None:
+        self.ensure_time(clock)
+        if self.attempts_used >= self.max_attempts:
+            raise UpstreamCaptureAttemptBudgetExceeded(
+                f"capture physical-attempt budget exhausted at {self.attempts_used} attempts"
+            )
+        self.attempts_used += 1
+
+    def summary(self, clock: Callable[[], float]) -> dict[str, int | float]:
+        return {
+            "physical_attempts_used": self.attempts_used,
+            "physical_attempt_limit": self.max_attempts,
+            "elapsed_seconds": round(self.elapsed_seconds(clock), 6),
+            "deadline_seconds": round(self.deadline_at - self.started_at, 6),
+        }
 
 
 class UpstreamRateLimited(RuntimeError):
@@ -147,14 +208,25 @@ class ProcessPacingGate:
         self._lock = threading.Lock()
 
     def pace(self, min_interval_seconds: float) -> None:
+        self.pace_until(min_interval_seconds, deadline_at=None)
+
+    def pace_until(self, min_interval_seconds: float, *, deadline_at: float | None) -> None:
         if min_interval_seconds <= 0:
             raise ValueError("min_interval_seconds must be > 0")
         with self._lock:
             now = self._clock()
             delay = self._next_request_at - now
             if delay > 0:
+                if deadline_at is not None and now + delay >= deadline_at:
+                    raise UpstreamCaptureDeadlineExceeded(
+                        "provider pacing wait does not fit the remaining capture deadline"
+                    )
                 self._sleeper(delay)
                 now = self._clock()
+                if deadline_at is not None and now >= deadline_at:
+                    raise UpstreamCaptureDeadlineExceeded(
+                        "provider pacing wait exceeded the capture deadline"
+                    )
             self._next_request_at = max(now, self._next_request_at) + min_interval_seconds
 
 
@@ -175,14 +247,51 @@ class SafeRequestExecutor:
         sleeper: Callable[[float], None] = time.sleep,
         jitter: Callable[[], float] = random.random,
         wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        monotonic_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._policy = policy
         self._gate = gate or ProcessPacingGate(sleeper=sleeper)
         self._sleeper = sleeper
         self._jitter = jitter
         self._wall_clock = wall_clock
+        self._monotonic_clock = monotonic_clock
         self._requests_used = 0
         self._total_requests_used = 0
+        self._capture_budget: ContextVar[CaptureAttemptBudget | None] = ContextVar(
+            f"upstream_capture_budget_{id(self)}", default=None
+        )
+
+    @property
+    def capture_remaining_seconds(self) -> float | None:
+        budget = self._capture_budget.get()
+        return None if budget is None else budget.remaining_seconds(self._monotonic_clock)
+
+    @contextmanager
+    def capture_scope(self, *, max_attempts: int, timeout_seconds: float) -> Iterator[CaptureAttemptBudget]:
+        if max_attempts <= 0:
+            raise ValueError("capture max_attempts must be > 0")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("capture timeout_seconds must be finite and > 0")
+        if self._capture_budget.get() is not None:
+            raise ValueError("nested upstream capture scopes are not supported")
+        started = self._monotonic_clock()
+        budget = CaptureAttemptBudget(started, started + timeout_seconds, max_attempts)
+        token: Token[CaptureAttemptBudget | None] = self._capture_budget.set(budget)
+        try:
+            yield budget
+        finally:
+            self._capture_budget.reset(token)
+
+    def capture_summary(self, budget: CaptureAttemptBudget) -> dict[str, int | float]:
+        return budget.summary(self._monotonic_clock)
+
+    def sleep_with_capture_deadline(self, seconds: float) -> None:
+        budget = self._capture_budget.get()
+        if budget is not None:
+            budget.ensure_wait_fits(seconds, self._monotonic_clock)
+        self._sleeper(seconds)
+        if budget is not None:
+            budget.ensure_time(self._monotonic_clock)
 
     @property
     def requests_used(self) -> int:
@@ -253,16 +362,34 @@ class SafeRequestExecutor:
         """Execute one HTTP operation with reserved headroom and bounded retries."""
 
         last_status: int | None = None
+        capture_budget = self._capture_budget.get()
         for attempt in range(self._policy.max_retries + 1):
             self._consume_budget()
-            self._gate.pace(self._policy.effective_min_interval_seconds)
+            if capture_budget is not None:
+                capture_budget.ensure_time(self._monotonic_clock)
+            pace_until = getattr(self._gate, "pace_until", None)
+            if capture_budget is not None and not callable(pace_until):
+                raise UnsafeUpstreamConfiguration(
+                    "pacing gate must support capture deadlines"
+                )
+            if capture_budget is not None:
+                pace_until(
+                    self._policy.effective_min_interval_seconds,
+                    deadline_at=capture_budget.deadline_at,
+                )
+            else:
+                self._gate.pace(self._policy.effective_min_interval_seconds)
+            if capture_budget is not None:
+                capture_budget.consume_attempt(self._monotonic_clock)
             response = request()
+            if capture_budget is not None:
+                capture_budget.ensure_time(self._monotonic_clock)
             last_status = int(response.status_code)
             if last_status not in self.RETRYABLE_STATUS_CODES:
                 return response
             if attempt >= self._policy.max_retries:
                 break
-            self._sleeper(self._backoff_seconds(attempt, response))
+            self.sleep_with_capture_deadline(self._backoff_seconds(attempt, response))
 
         # Transport failures are synthetic 503 responses, not provider HTTP 503.
         transport = getattr(response, "transport_failure", False)

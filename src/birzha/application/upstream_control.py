@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Generic, Iterable, Sequence, TypeVar
+from typing import Callable, Generic, Iterable, Iterator, Sequence, TypeVar
 
 from birzha.upstream.safety import (
     PacingGate,
     ProcessPacingGate,
     ResponseLike,
     SafeRequestExecutor,
+    CaptureAttemptBudget,
     UnsafeUpstreamConfiguration,
     UpstreamPolicy,
 )
@@ -88,7 +90,9 @@ class ProcessUpstreamControlPlane:
         require_distributed_gate: bool = False,
     ) -> "UpstreamRequestGovernor[object, ResponseLike]":
         gate = self._gate_for(provider_key)
-        executor = SafeRequestExecutor(policy, gate=gate, sleeper=self._sleeper)
+        executor = SafeRequestExecutor(
+            policy, gate=gate, sleeper=self._sleeper, monotonic_clock=self._clock
+        )
         return UpstreamRequestGovernor(
             policy,
             executor,
@@ -116,6 +120,24 @@ class UpstreamRequestGovernor(Generic[TaskT, ResultT]):
             raise UnsafeUpstreamConfiguration(
                 "remote multi-instance upstream access requires a distributed pacing gate"
             )
+
+    @contextmanager
+    def capture_scope(
+        self, *, max_attempts: int, timeout_seconds: float
+    ) -> Iterator[CaptureAttemptBudget]:
+        """Share one physical-attempt cap and monotonic deadline across calls."""
+
+        with self._executor.capture_scope(
+            max_attempts=max_attempts, timeout_seconds=timeout_seconds
+        ) as budget:
+            yield budget
+
+    def capture_summary(self, budget: CaptureAttemptBudget) -> dict[str, int | float]:
+        return self._executor.capture_summary(budget)
+
+    @property
+    def capture_remaining_seconds(self) -> float | None:
+        return self._executor.capture_remaining_seconds
 
     def plan(self, total_logical_requests: int) -> RequestPlan:
         if total_logical_requests < 0:
@@ -161,5 +183,5 @@ class UpstreamRequestGovernor(Generic[TaskT, ResultT]):
                 elapsed = max(0.0, self._clock() - window_started)
                 remaining = self._policy.batch_window_seconds - elapsed
                 if remaining > 0:
-                    self._sleeper(remaining)
+                    self._executor.sleep_with_capture_deadline(remaining)
         return results
