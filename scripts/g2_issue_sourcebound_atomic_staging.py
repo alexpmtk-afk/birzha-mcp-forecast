@@ -149,6 +149,10 @@ def issue_atomic_staging(
         or market in (".", "..")):
         raise AdmissionRefused("unsafe market identifier for staging")
     entry, manifest_sha = _manifest_and_entry(source_dir, market)
+    # Retain EXACT original bytes (including all per-page timing and routes).
+    original_manifest_bytes = (source_dir / "manifest.json").read_bytes()
+    if sha256(original_manifest_bytes).hexdigest() != manifest_sha:
+        raise AdmissionRefused("original source manifest changed during verification")
     snapshot, bundle, observed, completed, counts, incomplete_m15 = assemble_snapshot(
         entry, source_dir, clock=clock
     )
@@ -182,7 +186,12 @@ def issue_atomic_staging(
                     )
             if active_scope is not None:
                 active_scope.check()  # no fresh issuance if source parsing used the deadline
-            capture = store.capture(prepared.record, prepared.evidence)
+            capture = store.capture(
+                prepared.record, prepared.evidence,
+                source_manifest_bytes=original_manifest_bytes,
+            )
+            if store.read_original_source_manifest(prepared.record.forecast_id) != original_manifest_bytes:
+                raise AdmissionRefused("original manifest canonical readback differs")
             audit = store.audit()
             # Existing mature Outcomes for *other* forecasts are legitimate.
             # The original global outcomes==0 check incorrectly made a
