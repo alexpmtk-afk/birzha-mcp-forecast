@@ -23,6 +23,7 @@ from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 from birzha.storage.g2_manifest_evidence import verified_original_manifest
 from birzha.storage.g2_calendar_evidence import (encode_calendar_witness, verify_calendar_evidence)
+from birzha.storage.g2_timestamp_evidence import audit_time_anchor_rows
 
 VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
 HORIZONS = (5, 10, 20)
@@ -192,6 +193,16 @@ class SingleDuckDBProspectiveStagingJournal:
           source_blob BLOB NOT NULL,source_sha VARCHAR NOT NULL,
           evidence_json VARCHAR NOT NULL,evidence_sha VARCHAR NOT NULL,
           PRIMARY KEY(forecast_id,horizon))""")
+        # Opt-in two-phase timestamp evidence is appended in a separate atomic
+        # transaction after Forecast issuance. No historical record rewrite.
+        self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_time_anchors (
+          forecast_id VARCHAR PRIMARY KEY,
+          commitment BLOB NOT NULL,commitment_sha VARCHAR NOT NULL,
+          query_blob BLOB NOT NULL,query_sha VARCHAR NOT NULL,
+          response_blob BLOB NOT NULL,response_sha VARCHAR NOT NULL,
+          ca_blob BLOB NOT NULL,ca_sha VARCHAR NOT NULL,
+          chain_blob BLOB,chain_sha VARCHAR,
+          verification_json VARCHAR NOT NULL,verification_sha VARCHAR NOT NULL)""")
 
     def close(self):
         with self.lock:
@@ -285,6 +296,7 @@ class SingleDuckDBProspectiveStagingJournal:
             body,digest=DuckDBOutcomeJournal.canonical_payload(projected)
             if projected.outcome_id!=oid or outcome.get(oid)!=(digest,body):
                 raise pilot.ImmutableCollision("canonical Outcome differs from original future")
+        audit_time_anchor_rows(self.db)
         return {"captures":len(sources),"outcomes":len(future)}
 
     def audit(self):
