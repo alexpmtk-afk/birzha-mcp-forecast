@@ -197,3 +197,27 @@ def test_explicit_history_capture_refuses_without_issuer_on_provider_failure(tmp
                               require_history_corroboration=True,clock=lambda:NOW)
     assert calls==["history"]
     assert list(root.iterdir())==[]
+
+
+def test_corrupted_history_base64_is_controlled_immutable_audit_failure(tmp_path):
+    src,root=fixtures(tmp_path)
+    result=issue_atomic_staging(src,root,"SBER",clock=lambda:NOW,
+                                calendar_witness=calendar_witness())
+    journal=SingleDuckDBProspectiveStagingJournal(
+        root/"SBER.duckdb",staging_root=root,clock=lambda:NOW)
+    try:
+        previous=journal.db.execute(
+            "SELECT receipt_json FROM g2_atomic_captures WHERE forecast_id=?",
+            [result["forecast_id"]],
+        ).fetchone()[0]
+        evidence=json.loads(previous)
+        evidence["original_history_witness_b64"]="not:base64"
+        raw=json.dumps(evidence,sort_keys=True,ensure_ascii=False,separators=(",",":"))
+        journal.db.execute(
+            "UPDATE g2_atomic_captures SET receipt_json=?,receipt_sha=? WHERE forecast_id=?",
+            [raw,sha256(raw.encode()).hexdigest(),result["forecast_id"]],
+        )
+        with pytest.raises(ImmutableCollision,match="calendar witness"):
+            journal.audit()
+    finally:
+        journal.close()
