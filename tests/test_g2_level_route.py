@@ -53,7 +53,9 @@ def test_route_uses_prior_level_history_and_independent_same_snapshot_regime(
         assert level["level_detected_ex_ante_proven"] is False
         assert level["history_reconstruction_status"]==(
             "POST_FIRST_OBSERVABLE_TESTS_RECONSTRUCTED_NOT_EX_ANTE_CERTIFIED")
-        assert all(e["observed_end_utc"]<"2026-10-10T11:45:00Z"
+        # The final *pre-reaction* completed bar is eligible as a retest,
+        # so its end may equal the exact boundary of the prior-only window.
+        assert all(e["observed_end_utc"]<=series.candles[-4].end.replace("+00:00","Z")
                    for e in level["observed_test_history"])
     assert result["source_independently_authenticated"] is False
     assert result["route_thresholds_externally_calibrated"] is False
