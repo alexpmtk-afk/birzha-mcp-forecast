@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import csv
+import io
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,6 +19,9 @@ from scripts.g2_prospective_baseline_scorecard import (
     build_scorecard,
     main,
     render_scorecard_text,
+)
+from scripts.g2_prospective_scorecard_review import (
+    load_scorecard, main as review_main, match_ledger, render_scorecard_csv, validate_scorecard,
 )
 
 
@@ -450,3 +458,264 @@ def test_scorecard_refuses_duckdb_future_evidence_tampering(tmp_path: Path) -> N
 
     with pytest.raises(ScorecardRefused, match="future evidence hash mismatch"):
         build_scorecard(ledger)
+
+
+def _resign_report(report: dict[str, object]) -> None:
+    unsigned = {key: value for key, value in report.items() if key != "report_sha256"}
+    report["report_sha256"] = _sha(_encoded(unsigned).encode())
+
+
+@pytest.mark.parametrize("storage", ["sqlite3", "duckdb"])
+def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, storage: str) -> None:
+    ledger = tmp_path / ("pilot." + storage)
+    (_make_ledger if storage == "sqlite3" else _make_duckdb_ledger)(ledger)
+    before = ledger.read_bytes()
+    report = build_scorecard(ledger)
+    saved = tmp_path / "report.json"
+    saved.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+    assert load_scorecard(saved) == report
+    match_ledger(report, ledger)
+    output = tmp_path / "decisions.csv"
+    assert review_main(["--report", str(saved), "--match-ledger", str(ledger), "--format", "csv", "--output", str(output)]) == 0
+    rows = list(csv.DictReader(io.StringIO(output.read_text(encoding="utf-8-sig")), delimiter=";"))
+    assert len(rows) == len(report["observations"])
+    assert all(row["Контрольная сумма отчёта"] == report["report_sha256"] for row in rows)
+    assert output.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize("defect", [
+    "counts", "boolean_count", "accuracy", "boolean_accuracy", "duplicate_row", "missing_horizon",
+    "missing_group", "duplicate_group", "included", "correctness", "return", "reference",
+    "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
+    "unknown_status", "version", "evidence_claim", "limits", "extra_field",
+])
+def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    report = build_scorecard(ledger)
+    row = report["observations"][0]
+    group = report["groups"][0]
+    if defect == "counts":
+        group["forecasts_frozen"] += 1
+    elif defect == "boolean_count":
+        group["candidate_correct"] = True
+    elif defect == "accuracy":
+        group["candidate_accuracy"] = .9
+    elif defect == "boolean_accuracy":
+        group["always_up_accuracy_same_rows"] = True
+    elif defect == "duplicate_row":
+        report["observations"].append(dict(row))
+    elif defect == "missing_horizon":
+        report["observations"].pop(0)
+    elif defect == "missing_group":
+        report["groups"].pop(0)
+    elif defect == "duplicate_group":
+        report["groups"].append(dict(group))
+    elif defect == "included":
+        row["comparison_included"] = False
+    elif defect == "correctness":
+        row["candidate_correct"] = not row["candidate_correct"]
+    elif defect == "return":
+        row["actual_return_pct"] = 20.
+    elif defect == "reference":
+        row["reference_price"] = 0.
+    elif defect == "exclusion":
+        row["comparison_exclusion_reasons"] = ["PENDING_OUTCOME"]
+    elif defect == "capture_time":
+        row["captured_at"] = "2026-10-11T10:00:00Z"
+    elif defect == "target_time":
+        row["target_session_end"] = "2026-10-12T09:00:00Z"
+    elif defect == "origin_binding":
+        row["capture_source_sha256"] = "a" * 64
+    elif defect == "hash":
+        row["outcome_sha256"] = "wrong"
+    elif defect == "unknown_direction":
+        row["decision"] = []
+    elif defect == "unknown_status":
+        row["outcome_status"] = "UNKNOWN"
+    elif defect == "version":
+        report["ledger_version"] = []
+    elif defect == "evidence_claim":
+        report["future_evidence_validation"] = "Independent source authenticated"
+    elif defect == "limits":
+        report["limits"] = []
+    else:
+        row["unsupported"] = True
+    _resign_report(report)
+    before = ledger.read_bytes()
+    with pytest.raises(ScorecardRefused):
+        validate_scorecard(report)
+    assert ledger.read_bytes() == before
+
+
+def test_review_detects_a_stale_report_against_the_unchanged_forecast_journal(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    saved = build_scorecard(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id='f-up' AND horizon=5")
+    assert validate_scorecard(saved) == saved
+    before = ledger.read_bytes()
+    with pytest.raises(ScorecardRefused, match="не совпадает с указанным журналом"):
+        match_ledger(saved, ledger)
+    assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize("raw", ['{"groups":[],"groups":[]}', '{"bad":NaN}', '{"bad":Infinity}', '[]', '{broken'])
+def test_review_load_refuses_ambiguous_or_invalid_json(tmp_path: Path, raw: str) -> None:
+    saved = tmp_path / "report.json"
+    saved.write_text(raw, encoding="utf-8")
+    with pytest.raises(ScorecardRefused):
+        load_scorecard(saved)
+    assert saved.read_text(encoding="utf-8") == raw
+
+
+def test_review_detects_checksum_changes_before_export_and_keeps_existing_output(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    report = build_scorecard(ledger)
+    report["groups"][0]["candidate_accuracy"] = .9
+    saved = tmp_path / "report.json"
+    saved.write_text(json.dumps(report), encoding="utf-8")
+    output = tmp_path / "existing.csv"
+    output.write_text("keep existing result", encoding="utf-8")
+    assert review_main(["--report", str(saved), "--format", "csv", "--output", str(output)]) == 2
+    assert output.read_text(encoding="utf-8") == "keep existing result"
+
+
+def test_csv_preserves_pending_neutral_and_abstention_without_false_scores(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id='f-up'")
+        raw, receipt_raw = db.execute("SELECT forecast_json,receipt_json FROM captures WHERE forecast_id='f-neutral'").fetchone()
+        forecast, receipt = json.loads(raw), json.loads(receipt_raw)
+        forecast["decision_status"] = "ABSTAIN"
+        forecast["abstention_reasons"] = ["synthetic insufficient input"]
+        encoded = _encoded(forecast)
+        receipt["forecast_sha256"] = _sha(encoded.encode())
+        encoded_receipt = _encoded(receipt)
+        db.execute("UPDATE captures SET forecast_json=?,forecast_sha=?,receipt_json=?,receipt_sha=? WHERE forecast_id='f-neutral'",
+                   (encoded, receipt["forecast_sha256"], encoded_receipt, _sha(encoded_receipt.encode())))
+    report = build_scorecard(ledger)
+    rows = list(csv.DictReader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))
+    for row in rows:
+        if row["Номер прогноза"] in ("f-up", "f-neutral"):
+            assert row["Результат прогноза"] == row["Результат правила всегда рост"] == ""
+        if row["Номер прогноза"] == "f-up":
+            assert row["Цена закрытия"] == row["Изменение цены в процентах"] == ""
+        if row["Номер прогноза"] == "f-neutral":
+            assert row["Направление"] == "явный отказ"
+            assert row["Изменение цены в процентах"] == "10.0"
+            assert row["Участвует в сравнении"] == "нет"
+
+
+@pytest.mark.parametrize("name", ['=1+1', ' +SUM(1;2)', '@command', '-formula', 'quoted;"name\nnext'])
+def test_csv_quotes_text_without_executing_formula_like_identifiers(tmp_path: Path, name: str) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    report = build_scorecard(ledger)
+    for row in report["observations"]:
+        if row["forecast_id"] == "f-up":
+            row["forecast_id"] = name
+    _resign_report(report)
+    rows = list(csv.DictReader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))
+    expected = "'" + name if name.lstrip().startswith(("=", "+", "-", "@")) else name
+    assert sum(row["Номер прогноза"] == expected for row in rows) == 3
+    assert any(row["forecast_id"] == name for row in report["observations"])
+
+
+@pytest.mark.parametrize("target", ["report", "ledger", "wal", "hardlink", "symlink"])
+def test_review_output_cannot_replace_evidence_or_an_alias(tmp_path: Path, target: str) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    saved = tmp_path / "report.json"
+    saved.write_text(json.dumps(build_scorecard(ledger)), encoding="utf-8")
+    if target == "report":
+        output = saved
+    elif target == "ledger":
+        output = ledger
+    elif target == "wal":
+        output = Path(str(ledger) + "-wal")
+        output.write_bytes(b"preserve sidecar")
+    else:
+        output = tmp_path / "alias"
+        if target == "hardlink":
+            os.link(saved, output)
+        else:
+            output.symlink_to(saved)
+    before = output.read_bytes()
+    assert review_main(["--report", str(saved), "--match-ledger", str(ledger), "--format", "csv", "--output", str(output)]) == 2
+    assert output.read_bytes() == before
+
+
+def test_review_cli_check_only_reports_its_actual_scope(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    saved = tmp_path / "report.json"
+    saved.write_text(json.dumps(build_scorecard(ledger)), encoding="utf-8")
+    assert review_main(["--report", str(saved), "--check-only"]) == 0
+    assert "для связи с исходными данными укажите журнал" in capsys.readouterr().out
+    assert review_main(["--report", str(saved), "--match-ledger", str(ledger), "--check-only"]) == 0
+    assert "Связь с журналом проверена" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("field", ["actual_return_pct", "target_close", "candidate_correct", "always_up_correct_same_row", "outcome_sha256"])
+def test_review_refuses_values_filled_into_pending_results(tmp_path: Path, field: str) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    report = build_scorecard(ledger)
+    report["observations"][0][field] = "a" * 64 if field == "outcome_sha256" else False if "correct" in field else 0.
+    _resign_report(report)
+    with pytest.raises(ScorecardRefused, match="Ожидающий исход"):
+        validate_scorecard(report)
+
+
+@pytest.mark.parametrize("return_pct,expected_up,expected_down", [(10., True, False), (-10., False, True), (0., False, False)])
+def test_review_recalculates_both_rules_with_flat_return_counted_as_wrong(
+    tmp_path: Path, return_pct: float, expected_up: bool, expected_down: bool,
+) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        for fid, horizon, raw in db.execute("SELECT forecast_id,horizon,payload_json FROM outcomes").fetchall():
+            outcome = json.loads(raw)
+            outcome["target_close"] = 100. + return_pct
+            outcome["actual_return_pct"] = return_pct
+            outcome["direction_hit"] = expected_up if fid == "f-up" else expected_down if fid == "f-down" else None
+            encoded = _encoded(outcome)
+            db.execute("UPDATE outcomes SET payload_json=?,payload_sha=? WHERE forecast_id=? AND horizon=?",
+                       (encoded, _sha(encoded.encode()), fid, horizon))
+    report = validate_scorecard(build_scorecard(ledger))
+    rows = {row["forecast_id"]: row for row in report["observations"] if row["horizon_sessions"] == 5}
+    assert rows["f-up"]["candidate_correct"] is expected_up
+    assert rows["f-down"]["candidate_correct"] is expected_down
+    assert rows["f-up"]["always_up_correct_same_row"] is expected_up
+    assert rows["f-down"]["always_up_correct_same_row"] is expected_up
+
+
+def test_review_accepts_empty_journal_without_inventing_groups(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+        db.execute("DELETE FROM captures")
+    report = validate_scorecard(build_scorecard(ledger))
+    assert report["groups"] == report["observations"] == []
+    assert len(list(csv.reader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))) == 1
+
+
+def test_review_direct_script_runs_from_another_directory(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    script = Path(__file__).resolve().parents[1] / "scripts/g2_prospective_scorecard_review.py"
+    before = ledger.read_bytes()
+    completed = subprocess.run([sys.executable, str(script), "--ledger", str(ledger), "--check-only"],
+                               cwd=tmp_path, text=True, capture_output=True, encoding="utf-8", check=False,
+                               env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    assert completed.returncode == 0, completed.stderr
+    assert "Отчёт согласован" in completed.stdout
+    assert ledger.read_bytes() == before

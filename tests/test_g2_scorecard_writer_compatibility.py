@@ -14,6 +14,7 @@ from birzha.application.prospective_capture import CaptureEvidence, CompletedSes
 from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
 from scripts.g2_prospective_baseline_scorecard import build_scorecard
+from scripts.g2_prospective_scorecard_review import match_ledger, render_scorecard_csv, validate_scorecard
 
 
 @pytest.mark.parametrize("market,secid,direction", [
@@ -44,6 +45,7 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
     finally:
         store.close()
     pending = build_scorecard(ledger)
+    validate_scorecard(pending)
     assert all(row["outcomes_pending"] == 1 and row["candidate_accuracy"] is None for row in pending["groups"])
 
     # These dates are declared synthetic sessions, not an authenticated exchange calendar.
@@ -64,6 +66,11 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
         store.close()
     before = hashlib.sha256(ledger.read_bytes()).hexdigest()
     report = build_scorecard(ledger)
+    validate_scorecard(report)
+    match_ledger(report, ledger)
+    csv_report = render_scorecard_csv(report)
+    assert "Контрольная сумма отчёта" in csv_report
+    assert report["report_sha256"] in csv_report
     assert hashlib.sha256(ledger.read_bytes()).hexdigest() == before
     assert report["read_only"] is True
     five = next(row for row in report["groups"] if row["horizon_sessions"] == 5)
