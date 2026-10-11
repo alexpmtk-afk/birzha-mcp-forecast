@@ -7,7 +7,7 @@ calendar, local T0 or predictive skill. This never unlocks the release gate.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -75,6 +75,31 @@ def original_forecast_commitment(
                        ensure_ascii=False, allow_nan=False)+"\n").encode("utf8")
 
 
+def commitment_from_atomic_staging(store, forecast_id: str) -> bytes:
+    """Anchor only material independently audited in one canonical DuckDB."""
+    from birzha.storage.prospective_single_store import (
+        SingleDuckDBProspectiveStagingJournal,
+    )
+    if not isinstance(store, SingleDuckDBProspectiveStagingJournal):
+        raise ExternalProofRefused("explicit atomic staging writer required")
+    with store.lock:
+        store._audit()
+        row = store.db.execute(
+            """SELECT f.payload_json, c.source_blob
+            FROM forecast_records f JOIN g2_atomic_captures c
+            ON f.forecast_id=c.forecast_id WHERE f.forecast_id=?""",
+            [forecast_id],
+        ).fetchone()
+        if row is None:
+            raise ExternalProofRefused("no already persisted prospective Forecast")
+        original_manifest = store.read_original_source_manifest(forecast_id)
+        if original_manifest is None:
+            raise ExternalProofRefused("legacy Forecast has no original page manifest")
+        return original_forecast_commitment(
+            row[0].encode("utf8"), bytes(row[1]), original_manifest,
+        )
+
+
 def verify_rfc3161(
     commitment: bytes, *, issued_at_t0: str, query_path: Path,
     response_path: Path, trust_ca_path: Path, 
@@ -131,7 +156,7 @@ def verify_rfc3161(
         raise ExternalProofRefused("invalid signed TSA generation time") from exc
     # External existence claim cannot retroactively justify a forecast
     # unboundedly later than purported T0, nor establish exact issue T0.
-    if not (issue.replace(microsecond=0) <= gen_time <= issue + __import__("datetime").timedelta(seconds=300)):
+    if not (issue.replace(microsecond=0) <= gen_time <= issue + timedelta(seconds=300)):
         raise ExternalProofRefused("TSA time outside prospective issuance anchor window")
     return {
         "schema": "G2_EXTERNAL_TIME_ANCHOR_CHECK_V1",
