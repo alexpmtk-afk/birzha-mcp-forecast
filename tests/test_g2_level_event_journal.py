@@ -117,7 +117,10 @@ def test_append_only_and_chain_detect_external_corruption(tmp_path):
     db.execute("DROP TRIGGER level_receipts_no_update")
     db.execute("UPDATE level_receipts SET raw_sha='hacked' WHERE id=1")
     db.commit(); db.close()
-    with pytest.raises(Collision): LevelEventPilot(p,clock=clock)
+    # A weakened existing journal is refused before its later hash audit.
+    # Either explicit refusal or a collision is fail-closed; the new opener
+    # deliberately prioritizes missing-trigger detection.
+    with pytest.raises(Refused): LevelEventPilot(p,clock=clock)
 
 def test_cannot_overwrite_unrelated_database(tmp_path):
     p=tmp_path/"other.sqlite3"
@@ -166,3 +169,67 @@ def test_old_levels_are_not_retested_across_m15_gap(tmp_path):
         assert {e["kind"] for e in j.events()[-2:]}=={"LEVEL_FIRST_DETECTED"}
         assert all(e["role_flip_verified"] is False for e in j.events())
 
+
+
+@pytest.mark.parametrize("column,value", [
+    ("bar_start","2035-01-01T00:00:00Z"),
+    ("bar_end","2035-01-01T00:15:00Z"),
+    ("observed","2035-01-01T00:16:00Z"),
+    ("stream",'["WRONG","ID","BOARD","ENGINE","MARKET"]'),
+])
+def test_corrupted_receipt_index_fields_rejected_on_reopen(tmp_path,column,value):
+    path=tmp_path/"integrity.sqlite3"; clock=Clock()
+    with LevelEventPilot(path,clock=clock) as j:
+        put(j,clock,0)
+    db=sqlite3.connect(path)
+    db.execute("DROP TRIGGER level_receipts_no_update")
+    db.execute("UPDATE level_receipts SET "+column+"=? WHERE id=1",(value,))
+    db.commit(); db.close()
+    # The read-only opener must refuse missing immutable trigger. A replayed
+    # trigger does not conceal the independent metadata mismatch.
+    with pytest.raises(Refused): LevelEventPilot(path,clock=clock)
+    db=sqlite3.connect(path)
+    db.execute("""CREATE TRIGGER level_receipts_no_update
+      BEFORE UPDATE ON level_receipts
+      BEGIN SELECT RAISE(ABORT,'append only receipts'); END""")
+    db.commit(); db.close()
+    with pytest.raises(Collision): LevelEventPilot(path,clock=clock)
+
+
+@pytest.mark.parametrize("field,new_value",[
+    ("receipt_id",2),("stream","OTHER"),("role","RESISTANCE"),
+    ("kind","LEVEL_RETEST_HELD"),("price",999.),
+])
+def test_corrupted_event_link_and_indexes_rejected(tmp_path,field,new_value):
+    path=tmp_path/"integrity.sqlite3"; clock=Clock()
+    with LevelEventPilot(path,clock=clock) as j:
+        for i in range(20): put(j,clock,i)
+        assert j.verify()["event_count"]==2
+    db=sqlite3.connect(path)
+    db.execute("DROP TRIGGER level_events_no_update")
+    db.execute("UPDATE level_events SET "+field+"=? WHERE id=1",(new_value,))
+    db.commit()
+    db.execute("""CREATE TRIGGER level_events_no_update
+      BEFORE UPDATE ON level_events
+      BEGIN SELECT RAISE(ABORT,'append only events'); END""")
+    db.commit();db.close()
+    with pytest.raises(Collision): LevelEventPilot(path,clock=clock)
+
+
+def test_removed_immutable_trigger_refused_even_when_all_rows_hash_clean(tmp_path):
+    path=tmp_path/"integrity.sqlite3"; clock=Clock()
+    with LevelEventPilot(path,clock=clock) as j: put(j,clock,0)
+    db=sqlite3.connect(path)
+    db.execute("DROP TRIGGER level_receipts_no_delete");db.commit();db.close()
+    with pytest.raises(Refused): LevelEventPilot(path,clock=clock)
+
+
+def test_missing_receipt_table_refused_without_rebuilding(tmp_path):
+    path=tmp_path/"integrity.sqlite3";clock=Clock()
+    with LevelEventPilot(path,clock=clock) as j: put(j,clock,0)
+    db=sqlite3.connect(path)
+    db.execute("DROP TRIGGER level_receipts_no_delete")
+    db.execute("DROP TRIGGER level_receipts_no_update")
+    db.execute("DROP TABLE level_receipts")
+    db.commit();db.close()
+    with pytest.raises(Refused): LevelEventPilot(path,clock=clock)

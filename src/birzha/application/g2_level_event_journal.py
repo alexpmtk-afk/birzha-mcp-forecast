@@ -64,10 +64,19 @@ class LevelEventPilot:
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA foreign_keys=ON")
         old = {x[0] for x in self.db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
-        if old and "level_meta" not in old:
+            "SELECT name FROM sqlite_master WHERE type='table'"
+            " AND name NOT LIKE 'sqlite_%'")}
+        original_triggers = {x[0] for x in self.db.execute(
+            "SELECT name FROM sqlite_master WHERE type='trigger'")}
+        required_tables = {"level_meta","level_receipts","level_events"}
+        required_triggers = {"level_receipts_no_update", "level_receipts_no_delete",
+                             "level_events_no_update", "level_events_no_delete"}
+        # Never silently rebuild a dropped table or missing append-only
+        # trigger in an existing database. Empty DB is the only init path.
+        if old and (old != required_tables
+                    or not required_triggers.issubset(original_triggers)):
             self.db.close()
-            raise Refused("unrelated database")
+            raise Refused("incomplete, foreign, or weakened existing journal")
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS level_meta(version TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS level_receipts(
@@ -267,26 +276,92 @@ class LevelEventPilot:
         return [json.loads(x[0]) for x in rows[::-1]]
 
     def verify(self):
-        parent="GENESIS"
-        n=0
-        for stream,bar_json,raw,rawsha,received,previous,rowhash in self.db.execute(
-            "SELECT stream,bar_json,raw,raw_sha,received,previous_hash,row_hash FROM level_receipts ORDER BY id"):
-            if digest(raw) != rawsha or previous != parent:
-                raise Collision("original source changed or receipt chain broken")
-            payload=canonical({"stream":stream,"bar":json.loads(bar_json),
-                               "raw_sha":rawsha,"received":received,"version":VERSION})
-            if rowhash != chained(parent,payload):
-                raise Collision("receipt digest changed")
-            parent=rowhash
-            n+=1
-        parent="GENESIS"
-        m=0
-        for payload,prev,rowhash in self.db.execute(
-            "SELECT payload,previous_hash,row_hash FROM level_events ORDER BY id"):
-            if prev != parent or rowhash != chained(parent,payload):
-                raise Collision("level event digest changed")
-            parent=rowhash
-            m+=1
-        return {"receipt_count":n,"event_count":m,"schema":VERSION,
-                "internally_verified":True,"external_attestation":False,
-                "production_authorized":False}
+        """Reconcile every indexed column and event FK with hashed payloads.
+
+        SHA chains detect accidental/local corruption, not coordinated
+        rehashing by an attacker controlling the entire unanchored database.
+        """
+        previous = "GENESIS"
+        receipts = {}
+        streams = {}
+        rows = self.db.execute(
+            "SELECT id,stream,bar_start,bar_end,observed,received,"
+            "bar_json,raw,raw_sha,previous_hash,row_hash "
+            "FROM level_receipts ORDER BY id").fetchall()
+        try:
+            for seq,stream,start,end,observed,received,bar_json,raw,rawsha,parent,rowhash in rows:
+                bar = json.loads(bar_json)
+                # The denormalized index/timestamp columns must agree with
+                # the immutable record they purportedly index.
+                if (not isinstance(bar,dict) or canonical(bar)!=bar_json
+                    or not isinstance(json.loads(stream),list)
+                    or len(json.loads(stream))!=5
+                    or start!=stamp(utc(bar["begin"]))
+                    or end!=stamp(utc(bar["end"]))
+                    or observed!=stamp(utc(bar["observed_at"]))
+                    or stamp(utc(received))!=received
+                    or not utc(bar["end"]) <= utc(bar["observed_at"]) <= utc(received)
+                    or seq in receipts or (stream,end) in streams):
+                    raise Collision("receipt indexed fields not bound to hashed candle")
+                previous_for_stream = streams.get(stream)
+                if previous_for_stream is not None:
+                    if (utc(start)<utc(previous_for_stream[0])
+                        or utc(end)<=utc(previous_for_stream[0])
+                        or utc(observed)<=utc(previous_for_stream[1])):
+                        raise Collision("receipt stream chronology corrupted")
+                if not isinstance(raw,bytes) or digest(raw)!=rawsha or parent!=previous:
+                    raise Collision("original source or receipt chain altered")
+                payload=canonical({"stream":stream,"bar":bar,"raw_sha":rawsha,
+                                   "received":received,"version":VERSION})
+                if rowhash!=chained(previous,payload):
+                    raise Collision("receipt digest changed")
+                streams[stream]=(end,observed)
+                receipts[seq]=(stream,received)
+                previous=rowhash
+            previous="GENESIS"
+            last_event_receipt=0
+            latest_roles={}
+            event_rows=self.db.execute(
+                "SELECT id,receipt_id,stream,role,kind,price,payload,"
+                "previous_hash,row_hash FROM level_events ORDER BY id").fetchall()
+            for eid,receipt_id,stream,role,kind,price,payload,parent,rowhash in event_rows:
+                event=json.loads(payload)
+                identity=receipts.get(receipt_id)
+                if (identity is None or canonical(event)!=payload
+                    or type(price) not in (int,float) or not math.isfinite(price)
+                    or price <= 0
+                    or event.get("version")!=VERSION
+                    or event.get("receipt_id")!=receipt_id
+                    or event.get("stream")!=stream or identity[0]!=stream
+                    or event.get("role")!=role
+                    or role not in ("SUPPORT","RESISTANCE")
+                    or event.get("kind")!=kind
+                    or kind not in ("LEVEL_FIRST_DETECTED","LEVEL_PRICE_UPDATED",
+                                    "LEVEL_RETEST_HELD","LEVEL_HISTORY_GAP")
+                    or event.get("price")!=price
+                    or event.get("first_received_at")!=identity[1]
+                    or event.get("recorded_as_it_arrived") is not True
+                    or event.get("external_source_authenticated") is not False
+                    or event.get("role_flip_verified") is not False
+                    or event.get("scenario_authorized") is not False
+                    or event.get("production_authorized") is not False
+                    or receipt_id<last_event_receipt):
+                    raise Collision("event/index/receipt association corrupted")
+                last_event_receipt=receipt_id
+                prior=latest_roles.get((stream,role))
+                if ((kind=="LEVEL_FIRST_DETECTED" and prior is not None
+                     and prior!="LEVEL_HISTORY_GAP")
+                    or (kind!="LEVEL_FIRST_DETECTED" and prior is None)
+                    or (kind in ("LEVEL_RETEST_HELD","LEVEL_PRICE_UPDATED")
+                        and prior=="LEVEL_HISTORY_GAP")):
+                    raise Collision("impossible event state transition")
+                latest_roles[(stream,role)]=kind
+                if parent!=previous or rowhash!=chained(previous,payload):
+                    raise Collision("event chain digest altered")
+                previous=rowhash
+        except (ValueError,TypeError,KeyError,IndexError,UnicodeError,OverflowError,sqlite3.Error) as exc:
+            raise Collision("malformed receipt or event journal") from exc
+        return {"receipt_count":len(rows),"event_count":len(event_rows),
+                "schema":VERSION,"internally_verified":True,
+                "indexed_fields_and_event_links_checked":True,
+                "external_attestation":False,"production_authorized":False}

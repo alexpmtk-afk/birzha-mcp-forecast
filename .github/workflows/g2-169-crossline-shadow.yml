@@ -29,6 +29,7 @@ on:
       - chatgpt/g2-alignment-direction-profile-guard-20261011
       - chatgpt/g2-level-first-observable-research-20261011
       - chatgpt/g2-level-event-receipt-pilot-20261011
+      - chatgpt/g2-event-receipt-integrity-guard-20261011
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
