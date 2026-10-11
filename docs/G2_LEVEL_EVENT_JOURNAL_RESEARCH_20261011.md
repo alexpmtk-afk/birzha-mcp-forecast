@@ -45,3 +45,8 @@ An M15 observation gap now explicitly emits LEVEL_HISTORY_GAP for any active res
 support/resistance candidates. Once 20 new consecutive bars arrive, the first
 level in that new segment is LEVEL_FIRST_DETECTED, never a retroactive retest of
 old levels, even if the numeric extrema coincidentally match before and after.
+
+
+## Q-086 internal integrity audit
+
+Research-level original receipt SHA was previously verified, but redundant SQLite indexed columns (stream/bar_start/bar_end/observed) and event linkage (receipt_id/stream/role/kind/price) were not independently compared to their hashed payload. Q-086 verifies these invariants on journal open and explicit verify(), rejects malformed/mismatched rows and impossible simple event-state transitions; existing missing append-only triggers and dropped tables are refused rather than silently re-created. Negative tests intentionally mutate only unprotected index fields and restore the trigger: the hash may remain valid, yet verify must fail. Entire DB rewrite with consistent rehashing, external source authentication, independent TSA and source-payload-to-Candle binding remain UNPROVEN. The journal remains opt-in offline staging research; never production or HOME.
