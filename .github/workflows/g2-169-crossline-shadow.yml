@@ -13,6 +13,7 @@ on:
       - chatgpt/g2-safe-provider-failure-classification-20261011
       - chatgpt/g2-186-independent-full-crossline-20261011
       - chatgpt/g2-capture-global-budget-deadline-20261011
+      - chatgpt/g2-atomic-original-manifest-20261011
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
