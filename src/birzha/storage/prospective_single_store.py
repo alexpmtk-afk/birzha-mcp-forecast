@@ -225,6 +225,9 @@ class SingleDuckDBProspectiveStagingJournal:
                 raise pilot.ImmutableCollision("source receipt detached from forecast")
             try:
                 manifest_bytes = verified_original_manifest(meta, bytes(raw))
+            except (ValueError, KeyError) as exc:
+                raise pilot.ImmutableCollision("original source manifest/page bytes are corrupt") from exc
+            try:
                 packed = meta.get("original_history_witness_b64")
                 digest = meta.get("original_history_witness_sha256")
                 if (packed is None) != (digest is None):
@@ -241,7 +244,7 @@ class SingleDuckDBProspectiveStagingJournal:
                         issued_at_t0=meta["decision_t0"],
                     )
             except (ValueError, KeyError) as exc:
-                raise pilot.ImmutableCollision("original source/calendar evidence is corrupt") from exc
+                raise pilot.ImmutableCollision("original calendar witness evidence is corrupt") from exc
         outcome={id:(h,p) for id,h,p in self.db.execute("SELECT outcome_id,payload_hash,payload_json FROM outcome_records").fetchall()}
         future=self.db.execute("SELECT forecast_id,horizon,outcome_id,source_blob,source_sha,evidence_json,evidence_sha FROM g2_atomic_futures").fetchall()
         if set(outcome)!={r[2] for r in future}:
