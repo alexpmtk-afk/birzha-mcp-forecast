@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.g2_prospective_baseline_scorecard import (
+    DUCKDB_LEDGER_VERSION,
     LEDGER_VERSION,
     ScorecardRefused,
     build_scorecard,
@@ -138,3 +139,104 @@ def test_scorecard_leaves_missing_outcomes_pending(tmp_path: Path) -> None:
     assert row["outcomes_completed"] == 2
     assert row["outcomes_pending"] == 1
     assert row["directional_forecasts_scored"] == 1
+
+
+def _make_duckdb_ledger(path: Path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    db = duckdb.connect(str(path))
+    db.execute("CREATE TABLE g2_atomic_meta(version VARCHAR PRIMARY KEY)")
+    db.execute("INSERT INTO g2_atomic_meta VALUES (?)", [DUCKDB_LEDGER_VERSION])
+    db.execute("CREATE TABLE forecast_records(forecast_id VARCHAR, payload_hash VARCHAR, payload_json VARCHAR, symbol VARCHAR, secid VARCHAR, created_at_t0 VARCHAR)")
+    db.execute("CREATE TABLE g2_atomic_captures(forecast_id VARCHAR, forecast_sha VARCHAR, source_blob BLOB, source_sha VARCHAR, receipt_json VARCHAR, receipt_sha VARCHAR)")
+    db.execute("CREATE TABLE outcome_records(outcome_id VARCHAR, forecast_id VARCHAR, horizon_sessions INTEGER, payload_hash VARCHAR, payload_json VARCHAR)")
+    db.execute("CREATE TABLE g2_atomic_futures(forecast_id VARCHAR, horizon INTEGER, outcome_id VARCHAR, source_blob BLOB, source_sha VARCHAR, evidence_json VARCHAR, evidence_sha VARCHAR)")
+
+    forecast = _forecast("duck-f", "UP")
+    raw_forecast = _encoded(forecast)
+    source = b"original source bytes"
+    receipt = {
+        "forecast_id": "duck-f", "forecast_sha256": _sha(raw_forecast.encode()),
+        "source_sha256": _sha(source), "secid": "SBER", "staging_only": True,
+        "captured_at": "2026-10-12T10:01:00Z", "decision_t0": "2026-10-12T10:00:00Z",
+        "source_observed_at": "2026-10-12T09:59:00Z",
+        "latest_completed_event_end": "2026-10-12T09:58:00Z",
+    }
+    raw_receipt = _encoded(receipt)
+    db.execute("INSERT INTO forecast_records VALUES (?,?,?,?,?,?)", [
+        "duck-f", _sha(raw_forecast.encode()), raw_forecast, "SBER", "SBER", forecast["created_at_t0"]
+    ])
+    db.execute("INSERT INTO g2_atomic_captures VALUES (?,?,?,?,?,?)", [
+        "duck-f", _sha(raw_forecast.encode()), source, _sha(source), raw_receipt, _sha(raw_receipt.encode())
+    ])
+
+    future_source = b"original future source bytes"
+    outcome_id = "out_" + hashlib.sha256(b"duck-f:5").hexdigest()[:24]
+    future_dates = ["2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-26"]
+    future_input = {
+        "source_sha256": _sha(future_source), "source_origin": "LIVE_COMPLETED_D1",
+        "calendar_origin": "VERIFIED_EXCHANGE_SESSION_CALENDAR",
+        "source_observed_at": "2026-10-26T17:00:00Z", "market": "SBER", "secid": "SBER",
+        "session_dates": future_dates, "expected_calendar_dates": future_dates,
+        "candle_completed_at": [f"{day}T16:00:00Z" for day in future_dates],
+        "candle_close": [101.0, 103.0, 105.0, 107.0, 110.0],
+    }
+    future = {
+        "forecast_id": "duck-f", "horizon_sessions": 5,
+        "market": "SBER", "secid": "SBER", "status": "OBSERVED",
+        "target_session": "2026-10-26", "target_session_end": "2026-10-26T16:00:00Z",
+        "target_close": 110.0, "reference_price": 100.0, "actual_return_pct": 10.0,
+        "direction_hit": True, "future_source_sha256": _sha(future_source),
+        "calendar_sha256": _sha(_encoded(future_dates).encode()),
+        "source_observed_at": "2026-10-26T17:00:00Z", "capture_at": "2026-10-12T10:01:00Z",
+        "outcome_written_at": "2026-10-26T17:01:00Z",
+        "future_input_evidence": future_input,
+        "future_input_sha256": _sha(_encoded(future_input).encode()),
+    }
+    raw_future = _encoded(future)
+    canonical_outcome = {
+        "outcome_id": outcome_id, "forecast_id": "duck-f", "symbol": "SBER", "secid": "SBER",
+        "horizon_sessions": 5, "reference_price": 100.0,
+        "target_session_end": "2026-10-26T16:00:00Z", "target_close": 110.0,
+        "actual_return_pct": 10.0, "direction_hit": True,
+        "max_favorable_excursion_pct": None, "max_adverse_excursion_pct": None, "status": "OBSERVED",
+    }
+    raw_outcome = _encoded(canonical_outcome)
+    db.execute("INSERT INTO g2_atomic_futures VALUES (?,?,?,?,?,?,?)", [
+        "duck-f", 5, outcome_id, future_source, _sha(future_source), raw_future, _sha(raw_future.encode())
+    ])
+    db.execute("INSERT INTO outcome_records VALUES (?,?,?,?,?)", [
+        outcome_id, "duck-f", 5, _sha(raw_outcome.encode()), raw_outcome
+    ])
+    db.close()
+
+
+def test_scorecard_reads_canonical_duckdb_without_writing(tmp_path: Path) -> None:
+    ledger = tmp_path / "staging.duckdb"
+    _make_duckdb_ledger(ledger)
+    before = _sha(ledger.read_bytes())
+
+    report = build_scorecard(ledger)
+
+    assert _sha(ledger.read_bytes()) == before
+    assert report["read_only"] is True
+    assert report["storage_format"] == "DuckDB staging journal"
+    five = next(item for item in report["groups"] if item["horizon_sessions"] == 5)
+    ten = next(item for item in report["groups"] if item["horizon_sessions"] == 10)
+    assert five["outcomes_completed"] == 1
+    assert five["outcomes_pending"] == 0
+    assert five["candidate_correct"] == five["always_up_correct_same_rows"] == 1
+    assert ten["outcomes_completed"] == 0
+    assert ten["outcomes_pending"] == 1
+
+
+def test_scorecard_refuses_duckdb_future_evidence_tampering(tmp_path: Path) -> None:
+    duckdb = pytest.importorskip("duckdb")
+    ledger = tmp_path / "staging.duckdb"
+    _make_duckdb_ledger(ledger)
+    db = duckdb.connect(str(ledger))
+    db.execute("UPDATE g2_atomic_futures SET evidence_json='{}' WHERE horizon=5")
+    db.close()
+
+    with pytest.raises(ScorecardRefused, match="future evidence hash mismatch"):
+        build_scorecard(ledger)
+
