@@ -89,19 +89,29 @@ def capture_and_issue_one(
     capture_dir = _safe_isolated_path(capture_dir, existing_directory=False)
     staging_root = _safe_isolated_path(staging_root, existing_directory=True)
     _separate_scopes(capture_dir, staging_root)
-    manifest = capture_all(
-        provider, market_data, capture_dir, clock=clock, markets=(market,)
-    )
-    if (manifest["verified_complete_market_count"] != 1
-        or manifest["failed_markets"]
-        or manifest["complete_markets"] != [market]):
-        raise ValueError(
-            "governed source capture failed; refusing forecast issuance; "
-            "safe_reason=" + _safe_failure_diagnostic(manifest.get("failed_markets"))
+    import time
+    with bounded_market_capture(
+        max_attempts=capture_max_attempts,
+        deadline_seconds=capture_deadline_seconds,
+        monotonic=capture_monotonic or time.monotonic,
+    ) as capture_scope:
+        manifest = capture_all(
+            provider, market_data, capture_dir, clock=clock, markets=(market,)
         )
-    result = issue_atomic_staging(
-        capture_dir, staging_root, market, clock=clock, fault_hook=fault_hook
-    )
+        if (manifest["verified_complete_market_count"] != 1
+            or manifest["failed_markets"]
+            or manifest["complete_markets"] != [market]):
+            raise ValueError(
+                "governed source capture failed; refusing forecast issuance; "
+                "safe_reason=" + _safe_failure_diagnostic(manifest.get("failed_markets"))
+            )
+        result = issue_atomic_staging(
+            capture_dir, staging_root, market, clock=clock, fault_hook=fault_hook
+        )
+        capture_scope.check()
+        result["capture_http_attempts"] = capture_scope.physical_attempts
+        result["capture_max_http_attempts"] = capture_scope.max_attempts
+        result["capture_deadline_seconds"] = capture_scope.deadline_seconds
     return {
         **result,
         "capture_mode": "BOUNDED_LIVE_MOEX_ISS_NETWORK_SINGLE_MARKET",
