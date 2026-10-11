@@ -127,6 +127,19 @@ def test_conflicting_timeframes_without_support_abstains_not_force_direction():
     assert "INSUFFICIENT_SCORE_OR_MARGIN" in result["reason_codes"]
 
 
+@pytest.mark.parametrize("d1,h1,m15,denied",[
+    (.8,-.8,.8,"TREND_UP"),
+    (-.8,.8,-.8,"TREND_DOWN"),
+])
+def test_material_opposing_h1_move_blocks_false_two_of_three_trend(
+        d1,h1,m15,denied):
+    _,_,v=_build(d1=d1,h1=h1,m15=m15,eff=.9,
+                 loc=.8 if denied=="TREND_UP" else .2)
+    result=classify_market_state_vector(v)
+    assert result["candidate_regime"]!=denied
+    assert result["regime_scores_out_of_10_not_probabilities"][denied] is None
+
+
 def test_unavailable_optional_flow_does_not_mean_zero_delta_or_fake_absorption():
     _,_,v=_build(d1=.05,h1=1.5,m15=1.5,eff=.6,loc=.5,vol=4,
                  delta=None)
