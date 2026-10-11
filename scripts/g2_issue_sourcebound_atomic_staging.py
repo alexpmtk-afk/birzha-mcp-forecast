@@ -167,6 +167,20 @@ def issue_atomic_staging(
     active_scope = active_capture_scope()
     if active_scope is not None:
         active_scope.check()
+    if calendar_witness is not None:
+        # Refuse a contradictory /history response BEFORE opening a new DB.
+        from birzha.storage.g2_calendar_evidence import (
+            encode_calendar_witness, verify_calendar_evidence,
+        )
+        try:
+            verify_calendar_evidence(
+                encode_calendar_witness(calendar_witness),
+                source_blob=bundle, manifest_bytes=original_manifest_bytes,
+                exact_secid=prepared.record.secid,
+                issued_at_t0=prepared.record.created_at_t0,
+            )
+        except ValueError as exc:
+            raise AdmissionRefused("original calendar/D1 corroboration refused") from exc
     # Store itself refuses HOME/production destinations and unrelated files.
     destination = root / f"{market}.duckdb"
     store = SingleDuckDBProspectiveStagingJournal(
