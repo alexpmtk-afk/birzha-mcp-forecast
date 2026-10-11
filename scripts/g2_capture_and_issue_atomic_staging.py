@@ -44,6 +44,7 @@ def _safe_failure_diagnostic(failures):
         if isinstance(safe, str) and safe in {
             "HTTP_429_RATE_LIMIT", "HTTP_503_UNAVAILABLE", "HTTP_5XX_UPSTREAM",
             "UPSTREAM_TIMEOUT_OR_TRANSPORT", "UPSTREAM_RETRIES_EXHAUSTED",
+            "CAPTURE_DEADLINE_EXCEEDED", "CAPTURE_TOTAL_ATTEMPTS_EXCEEDED",
         }:
             codes.append(safe)
             continue
@@ -105,10 +106,10 @@ def capture_and_issue_one(
                 "governed source capture failed; refusing forecast issuance; "
                 "safe_reason=" + _safe_failure_diagnostic(manifest.get("failed_markets"))
             )
+        capture_scope.check()
         result = issue_atomic_staging(
             capture_dir, staging_root, market, clock=clock, fault_hook=fault_hook
         )
-        capture_scope.check()
         result["capture_http_attempts"] = capture_scope.physical_attempts
         result["capture_max_http_attempts"] = capture_scope.max_attempts
         result["capture_deadline_seconds"] = capture_scope.deadline_seconds
