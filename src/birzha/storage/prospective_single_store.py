@@ -5,6 +5,7 @@ canonical table schemas are retained. No production paths, migration, or schedul
 """
 from __future__ import annotations
 import base64
+import binascii
 from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
@@ -21,6 +22,7 @@ from birzha.domain import forecast as fd
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 from birzha.storage.outcome_journal import DuckDBOutcomeJournal
 from birzha.storage.g2_manifest_evidence import verified_original_manifest
+from birzha.storage.g2_calendar_evidence import (encode_calendar_witness, verify_calendar_evidence)
 
 VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
 HORIZONS = (5, 10, 20)
@@ -223,9 +225,27 @@ class SingleDuckDBProspectiveStagingJournal:
             if (meta.get("forecast_id"),meta.get("forecast_sha256"),meta.get("source_sha256"))!=(fid,hash_,sourcehash):
                 raise pilot.ImmutableCollision("source receipt detached from forecast")
             try:
-                verified_original_manifest(meta, bytes(raw))
-            except ValueError as exc:
+                manifest_bytes = verified_original_manifest(meta, bytes(raw))
+            except (ValueError, KeyError) as exc:
                 raise pilot.ImmutableCollision("original source manifest/page bytes are corrupt") from exc
+            try:
+                packed = meta.get("original_history_witness_b64")
+                digest = meta.get("original_history_witness_sha256")
+                if (packed is None) != (digest is None):
+                    raise ValueError("incomplete calendar receipt")
+                if packed is not None:
+                    if manifest_bytes is None:
+                        raise ValueError("calendar witness lacks source manifest")
+                    binary = base64.b64decode(packed, validate=True)
+                    if _sha(binary) != digest:
+                        raise ValueError("calendar evidence SHA differs")
+                    verify_calendar_evidence(
+                        binary, source_blob=bytes(raw),
+                        manifest_bytes=manifest_bytes, exact_secid=meta["secid"],
+                        issued_at_t0=meta["decision_t0"],
+                    )
+            except (ValueError, KeyError, binascii.Error) as exc:
+                raise pilot.ImmutableCollision("original calendar witness evidence is corrupt") from exc
         outcome={id:(h,p) for id,h,p in self.db.execute("SELECT outcome_id,payload_hash,payload_json FROM outcome_records").fetchall()}
         future=self.db.execute("SELECT forecast_id,horizon,outcome_id,source_blob,source_sha,evidence_json,evidence_sha FROM g2_atomic_futures").fetchall()
         if set(outcome)!={r[2] for r in future}:
@@ -283,7 +303,22 @@ class SingleDuckDBProspectiveStagingJournal:
                 raise pilot.AdmissionRefused("no captured Forecast for original manifest")
             return verified_original_manifest(json.loads(row[0]), bytes(row[1]))
 
-    def capture(self, record, evidence, *, source_manifest_bytes: bytes | None = None):
+    def read_original_calendar_witness(self, forecast_id: str) -> bytes | None:
+        """Read exact immutable encoded /history evidence after full DB audit."""
+        with self.lock:
+            self._audit()
+            row = self.db.execute(
+                "SELECT receipt_json FROM g2_atomic_captures WHERE forecast_id=?",
+                [forecast_id],
+            ).fetchone()
+            if row is None:
+                raise pilot.AdmissionRefused("no captured Forecast")
+            meta = json.loads(row[0])
+            token = meta.get("original_history_witness_b64")
+            return base64.b64decode(token, validate=True) if token is not None else None
+
+    def capture(self, record, evidence, *, source_manifest_bytes: bytes | None = None,
+                calendar_witness: dict | None = None):
         data=_validate_record(record,evidence)
         if source_manifest_bytes is not None:
             if (not isinstance(source_manifest_bytes, bytes) or not source_manifest_bytes
@@ -295,6 +330,22 @@ class SingleDuckDBProspectiveStagingJournal:
                     raise ValueError("unsupported original manifest")
             except (ValueError, UnicodeError, TypeError) as exc:
                 raise pilot.AdmissionRefused("malformed original source manifest") from exc
+        # A calendar corroboration is opt-in but, once supplied, it MUST be
+        # based on immutable original D1 bytes and complete history-page receipts.
+        # Never infer an exchange holiday/close time from weekdays alone.
+        packed_calendar = None
+        if calendar_witness is not None:
+            if source_manifest_bytes is None:
+                raise pilot.AdmissionRefused("calendar needs original source manifest")
+            try:
+                packed_calendar = encode_calendar_witness(calendar_witness)
+                verify_calendar_evidence(
+                    packed_calendar, source_blob=evidence.source_payload,
+                    manifest_bytes=source_manifest_bytes, exact_secid=data["secid"],
+                    issued_at_t0=data["created_at_t0"],
+                )
+            except ValueError as exc:
+                raise pilot.AdmissionRefused("original calendar/D1 corroboration refused") from exc
         body,digest=DuckDBForecastJournal.canonical_payload(record)
         sourcehash=_sha(evidence.source_payload)
         def execute():
@@ -317,6 +368,8 @@ class SingleDuckDBProspectiveStagingJournal:
                     raise pilot.ImmutableCollision("frozen source evidence metadata differs on replay")
                 if source_manifest_bytes is not None and stored.get("original_source_manifest_sha256") != _sha(source_manifest_bytes):
                     raise pilot.ImmutableCollision("original source manifest differs on replay")
+                if packed_calendar is not None and stored.get("original_history_witness_sha256") != _sha(packed_calendar):
+                    raise pilot.ImmutableCollision("original calendar witness differs on replay")
                 return {"status":"DUPLICATE_IDENTICAL","receipt":stored}
             now=_now(self.clock)
             obs=pilot._when(evidence.source_observed_at)
@@ -332,6 +385,10 @@ class SingleDuckDBProspectiveStagingJournal:
             if source_manifest_bytes is not None:
                 receipt["original_source_manifest_sha256"] = _sha(source_manifest_bytes)
                 receipt["original_source_manifest_b64"] = base64.b64encode(source_manifest_bytes).decode("ascii")
+            if packed_calendar is not None:
+                receipt["original_history_witness_sha256"] = _sha(packed_calendar)
+                receipt["original_history_witness_b64"] = base64.b64encode(packed_calendar).decode("ascii")
+                receipt["history_provenance"] = "SAME_MOEX_PROVIDER_SECOND_ENDPOINT_NOT_INDEPENDENT_CALENDAR"
             text=_json(receipt)
             self.db.execute("INSERT INTO g2_atomic_captures VALUES (?,?,?,?,?,?)",
                             [fid,digest,evidence.source_payload,sourcehash,text,_sha(text.encode())])
