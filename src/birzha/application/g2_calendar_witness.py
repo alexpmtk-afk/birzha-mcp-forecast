@@ -155,3 +155,67 @@ def verify_exact_history_concordance(
         }
     except (ValueError, TypeError, KeyError, IndexError, UnicodeError, AttributeError) as exc:
         raise CalendarWitnessRefused("exact SECID history/candle witness invalid") from exc
+
+
+def concordance_from_atomic_staging(store, forecast_id: str, witness: dict) -> dict:
+    """Derive D1 candle bytes from audited canonical source, NOT caller input."""
+    from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
+    from birzha.storage.g2_manifest_evidence import MAGIC
+    if not isinstance(store, SingleDuckDBProspectiveStagingJournal):
+        raise CalendarWitnessRefused("original single-DuckDB staging required")
+    try:
+        with store.lock:
+            store._audit()
+            row = store.db.execute(
+                "SELECT f.payload_json,c.source_blob FROM forecast_records f "
+                "JOIN g2_atomic_captures c ON f.forecast_id=c.forecast_id "
+                "WHERE f.forecast_id=?", [forecast_id],
+            ).fetchone()
+            if not row:
+                raise ValueError("Forecast not persisted")
+            forecast = json.loads(row[0])
+            original = store.read_original_source_manifest(forecast_id)
+            if original is None:
+                raise ValueError("legacy row lacks original provider receipt")
+            document = json.loads(original)
+            entry = next(
+                e for e in document["instruments"]
+                if e["resolved_secid"] == forecast["secid"]
+            )
+            names = tuple(p["path"] for p in entry["timeframes"]["D1"]["pages"])
+            if not names:
+                raise ValueError("no original D1 pages")
+            source = bytes(row[1])
+            if not source.startswith(MAGIC):
+                raise ValueError("wrong original source envelope")
+            pos, pages = len(MAGIC), {}
+            while pos < len(source):
+                if pos+4 > len(source):
+                    raise ValueError("truncated source page name length")
+                n = int.from_bytes(source[pos:pos+4], "big")
+                pos += 4
+                if n < 1 or n > 255 or pos+n+8 > len(source):
+                    raise ValueError("unsafe source page frame")
+                name = source[pos:pos+n].decode("utf8")
+                pos += n
+                length = int.from_bytes(source[pos:pos+8], "big")
+                pos += 8
+                if length < 1 or length > 16_000_000 or pos+length > len(source):
+                    raise ValueError("unsafe source page length")
+                if name in pages:
+                    raise ValueError("duplicate original source page name")
+                pages[name] = source[pos:pos+length]
+                pos += length
+            if any(name not in pages for name in names):
+                raise ValueError("missing original retained D1 page")
+            outcome = verify_exact_history_concordance(
+                instrument=entry["instrument"],
+                d1_raw_pages=tuple(pages[name] for name in names),
+                witness=witness,
+                issue_t0=forecast["created_at_t0"],
+            )
+            outcome["immutable_forecast_id"] = forecast_id
+            outcome["canonical_original_manifest_sha256"] = sha256(original).hexdigest()
+            return outcome
+    except (KeyError, ValueError, IndexError, StopIteration, TypeError, UnicodeError) as exc:
+        raise CalendarWitnessRefused("canonical exact SECID witness invalid") from exc
