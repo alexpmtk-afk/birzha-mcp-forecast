@@ -231,9 +231,13 @@ def _read_duckdb_staging(path: Path) -> tuple[list[dict[str, Any]], list[dict[st
 
     outcome_by_id = {str(row[0]): row for row in outcomes}
     future_by_key = {(str(row[0]), int(row[1])): row for row in futures}
-    if len(outcome_by_id) != len(outcomes) or len(future_by_key) != len(futures):
+    future_outcome_ids = {str(row[2]) for row in futures}
+    if (
+        len(outcome_by_id) != len(outcomes) or len(future_by_key) != len(futures)
+        or len(future_outcome_ids) != len(futures)
+    ):
         raise ScorecardRefused("duplicate canonical outcome or future evidence identity")
-    if {str(row[2]) for row in futures} != set(outcome_by_id):
+    if future_outcome_ids != set(outcome_by_id):
         raise ScorecardRefused("canonical outcome and original future evidence inventories differ")
 
     outcome_rows: list[dict[str, Any]] = []
