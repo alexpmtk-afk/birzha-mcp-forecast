@@ -71,7 +71,10 @@ class OrchestrationWorker:
         if active_archives:
             oldest = min(
                 active_archives,
-                key=lambda run: (run.created_at, run.workflow_id),
+                # Coarse clocks can stamp two ranges at the same instant.
+                # Drain the older archive boundary before its newer replacement.
+                key=lambda run: (run.created_at, str(run.metadata.get("archive_end", "")),
+                                 str(run.metadata.get("archive_start", "")), run.workflow_id),
             )
             return oldest, False
 

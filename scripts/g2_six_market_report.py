@@ -1,6 +1,7 @@
 """Read original exports listed in a bounded six-market input manifest."""
 import argparse
 import json
+import sys
 from pathlib import Path
 from birzha.application.six_market_report import build_six_market_report, render_six_market_report, MARKETS
 if __package__ in (None, ""):
@@ -41,6 +42,10 @@ def run(manifest_path):
 
 
 def main():
+    # Commands emit UTF-8 in both consoles and redirected output on Windows.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description="Сводка исходных решений и наличия данных по шести рынкам")
     parser.add_argument("--manifest",required=True)
     parser.add_argument("--format",choices=("text","json"),default="text")

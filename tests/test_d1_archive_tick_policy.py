@@ -23,7 +23,9 @@ def _complete_workflow(orchestrator: WorkflowOrchestrator, workflow_id: str) -> 
         )
 
 
-def test_daily_tick_drains_oldest_archive_before_starting_newer_range() -> None:
+def test_daily_tick_drains_oldest_archive_before_starting_newer_range(monkeypatch) -> None:
+    # Fixed equal timestamps reproduce coarse clock resolution deterministically.
+    monkeypatch.setattr("birzha.application.orchestrator._now", lambda: "2026-10-11T00:00:00+00:00")
     orchestrator = WorkflowOrchestrator(MemoryOrchestrationStore())
     worker = OrchestrationWorker(orchestrator=orchestrator, history=object())  # type: ignore[arg-type]
 
@@ -86,3 +88,14 @@ def test_timer_entrypoint_uses_ordered_archive_selection() -> None:
 
     assert "ensure_next_d1_archive_refresh" in called_attributes
     assert "start_d1_archive_refresh" not in called_attributes
+
+
+def test_distinct_creation_times_still_take_priority_over_archive_end(monkeypatch):
+    timestamps=iter(['2026-10-11T00:00:00+00:00','2026-10-11T00:00:01+00:00'])
+    monkeypatch.setattr('birzha.application.orchestrator._now',lambda:next(timestamps))
+    orchestrator=WorkflowOrchestrator(MemoryOrchestrationStore())
+    worker=OrchestrationWorker(orchestrator=orchestrator,history=object())
+    first,_=orchestrator.start_d1_archive_refresh(archive_start='2026-09-29',archive_end='2026-10-01',source_sha='a'*40)
+    orchestrator.start_d1_archive_refresh(archive_start='2026-09-29',archive_end='2026-09-30',source_sha='a'*40)
+    selected,created=worker.ensure_next_d1_archive_refresh(archive_start='2026-09-29',archive_end='2026-10-02',source_sha='a'*40)
+    assert selected.workflow_id==first.workflow_id and created is False
