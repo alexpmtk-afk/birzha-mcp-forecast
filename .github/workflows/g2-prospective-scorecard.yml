@@ -10,6 +10,7 @@ on:
     paths:
       - "scripts/g2_prospective_baseline_scorecard.py"
       - "scripts/g2_prospective_scorecard_review.py"
+      - "scripts/g2_prospective_scorecard_batch.py"
       - "tests/test_g2_prospective_baseline_scorecard.py"
       - "tests/test_g2_scorecard_writer_compatibility.py"
       - "docs/G2_PROSPECTIVE_BASELINE_SCORECARD_20261011.md"
@@ -35,7 +36,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install duckdb==1.5.5 pytest==8.4.1
       - name: Check scorecard syntax
-        run: python -m py_compile scripts/g2_prospective_baseline_scorecard.py scripts/g2_prospective_scorecard_review.py tests/test_g2_prospective_baseline_scorecard.py
+        run: python -m py_compile scripts/g2_prospective_baseline_scorecard.py scripts/g2_prospective_scorecard_review.py scripts/g2_prospective_scorecard_batch.py tests/test_g2_prospective_baseline_scorecard.py
       - name: Check SQLite and DuckDB scorecards
         run: python -m pytest -q tests/test_g2_prospective_baseline_scorecard.py
 
@@ -62,6 +63,7 @@ jobs:
         run: |
           cp scorecard-code/scripts/g2_prospective_baseline_scorecard.py peer-code/scripts/
           cp scorecard-code/scripts/g2_prospective_scorecard_review.py peer-code/scripts/
+          cp scorecard-code/scripts/g2_prospective_scorecard_batch.py peer-code/scripts/
           cp scorecard-code/tests/test_g2_prospective_baseline_scorecard.py peer-code/tests/
           cp scorecard-code/tests/test_g2_scorecard_writer_compatibility.py peer-code/tests/
           python -m pip install -e './peer-code[dev]'

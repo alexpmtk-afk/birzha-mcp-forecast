@@ -15,6 +15,7 @@ from birzha.domain.forecast import ForecastRecord, HorizonForecast
 from birzha.storage.prospective_single_store import SingleDuckDBProspectiveStagingJournal
 from scripts.g2_prospective_baseline_scorecard import build_scorecard
 from scripts.g2_prospective_scorecard_review import match_ledger, render_scorecard_csv, validate_scorecard
+from scripts.g2_prospective_scorecard_batch import build_package, verify_package
 
 
 @pytest.mark.parametrize("market,secid,direction", [
@@ -71,6 +72,9 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
     csv_report = render_scorecard_csv(report)
     assert "Контрольная сумма отчёта" in csv_report
     assert report["report_sha256"] in csv_report
+    package = tmp_path / "scorecard-package"
+    build_package([ledger], package)
+    verify_package(package)
     assert hashlib.sha256(ledger.read_bytes()).hexdigest() == before
     assert report["read_only"] is True
     five = next(row for row in report["groups"] if row["horizon_sessions"] == 5)

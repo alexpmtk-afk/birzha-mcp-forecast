@@ -490,6 +490,8 @@ def build_scorecard(path: Path) -> dict[str, Any]:
             observation = {
                 "forecast_id": fid, "market": key[0], "secid": key[1],
                 "horizon_sessions": horizon, "decision": decision,
+                "forecast_record_version": forecast.get("record_version"),
+                "engine_version": forecast.get("engine_version"),
                 "created_at_t0": forecast.get("created_at_t0"),
                 "captured_at": receipt.get("captured_at"),
                 "forecast_sha256": receipt.get("forecast_sha256"),

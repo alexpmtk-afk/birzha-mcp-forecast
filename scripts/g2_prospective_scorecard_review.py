@@ -17,7 +17,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.g2_prospective_baseline_scorecard import (
-    DUCKDB_LEDGER_VERSION, HORIZONS, LEDGER_VERSION, SCORECARD_VERSION,
+    DUCKDB_LEDGER_VERSION, HORIZONS, LEDGER_VERSION, RECORD_VERSIONS, SCORECARD_VERSION,
     ScorecardRefused, _canonical_json, _finite_number, _sha, _time,
     build_scorecard, render_scorecard_text,
 )
@@ -31,6 +31,7 @@ ROW_FIELDS = {
     "outcome_status", "comparison_included", "comparison_exclusion_reasons", "actual_return_pct",
     "target_close", "target_session", "target_session_end", "future_source_sha256", "outcome_sha256",
     "candidate_correct", "always_up_correct_same_row",
+    "forecast_record_version", "engine_version",
 }
 COUNT_FIELDS = {
     "forecasts_frozen", "outcomes_completed", "outcomes_pending", "directional_forecasts",
@@ -119,6 +120,10 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             _refuse("Одна пара прогноз/срок присутствует в отчёте дважды.")
         seen.add(pair)
         direction = row["decision"]
+        if row["forecast_record_version"] not in tuple(RECORD_VERSIONS):
+            _refuse("Неизвестная версия исходной записи прогноза.")
+        if row["engine_version"] is not None:
+            _text(row["engine_version"], "версия прогнозной модели")
         if not isinstance(direction, str) or direction not in DECISIONS:
             _refuse("Неизвестное направление прогноза.")
         for field in ("forecast_sha256", "capture_receipt_sha256", "capture_source_sha256"):
@@ -171,6 +176,7 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
         by_forecast[fid].append(row)
 
     origin_fields = ("market", "secid", "created_at_t0", "captured_at", "reference_price",
+                     "forecast_record_version", "engine_version",
                      "forecast_sha256", "capture_receipt_sha256", "capture_source_sha256")
     for rows in by_forecast.values():
         if {row["horizon_sessions"] for row in rows} != set(HORIZONS):

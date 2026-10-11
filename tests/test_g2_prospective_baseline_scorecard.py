@@ -23,6 +23,10 @@ from scripts.g2_prospective_baseline_scorecard import (
 from scripts.g2_prospective_scorecard_review import (
     load_scorecard, main as review_main, match_ledger, render_scorecard_csv, validate_scorecard,
 )
+from scripts.g2_prospective_scorecard_batch import (
+    build_package, combine_scorecards, main as batch_main, verify_package,
+)
+import scripts.g2_prospective_scorecard_batch as batch_module
 
 
 def _encoded(value: dict[str, object]) -> str:
@@ -36,6 +40,7 @@ def _sha(value: bytes) -> str:
 def _forecast(fid: str, direction: str) -> dict[str, object]:
     return {
         "record_version": "FORECAST_RECORD_V1_PROTOCOL_08",
+        "engine_version": "SYNTHETIC_SCORECARD_TEST",
         "forecast_id": fid,
         "symbol": "SBER",
         "secid": "SBER",
@@ -719,3 +724,165 @@ def test_review_direct_script_runs_from_another_directory(tmp_path: Path) -> Non
     assert completed.returncode == 0, completed.stderr
     assert "Отчёт согласован" in completed.stdout
     assert ledger.read_bytes() == before
+
+
+def _disjoint_copy(source: Path, target: Path) -> None:
+    target.write_bytes(source.read_bytes())
+    with sqlite3.connect(target) as db:
+        for fid, raw, receipt_raw in db.execute("SELECT forecast_id,forecast_json,receipt_json FROM captures").fetchall():
+            forecast, receipt = json.loads(raw), json.loads(receipt_raw)
+            new_id = fid + "-second"
+            forecast["forecast_id"] = receipt["forecast_id"] = new_id
+            encoded = _encoded(forecast)
+            receipt["forecast_sha256"] = _sha(encoded.encode())
+            encoded_receipt = _encoded(receipt)
+            db.execute("UPDATE captures SET forecast_id=?,forecast_json=?,forecast_sha=?,receipt_json=?,receipt_sha=? WHERE forecast_id=?",
+                       (new_id, encoded, receipt["forecast_sha256"], encoded_receipt, _sha(encoded_receipt.encode()), fid))
+            for horizon, payload in db.execute("SELECT horizon,payload_json FROM outcomes WHERE forecast_id=?", (fid,)).fetchall():
+                outcome = json.loads(payload)
+                outcome["forecast_id"] = new_id
+                encoded_outcome = _encoded(outcome)
+                db.execute("UPDATE outcomes SET forecast_id=?,payload_json=?,payload_sha=? WHERE forecast_id=? AND horizon=?",
+                           (new_id, encoded_outcome, _sha(encoded_outcome.encode()), fid, horizon))
+
+
+def test_batch_pools_same_instrument_without_averaging_accuracy(tmp_path: Path) -> None:
+    first, second = tmp_path / "first.sqlite3", tmp_path / "second.sqlite3"
+    _make_ledger(first)
+    _disjoint_copy(first, second)
+    with sqlite3.connect(second) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id='f-down-second'")
+    a, b = build_scorecard(first), build_scorecard(second)
+    combined = combine_scorecards([a, b])
+    assert combined == combine_scorecards([b, a])
+    group = combined["groups"][0]
+    assert group["forecasts_frozen"] == 6
+    assert group["outcomes_completed"] == 5
+    assert group["outcomes_pending"] == 1
+    assert group["directional_forecasts_scored"] == 3
+    assert group["candidate_correct"] == 2
+    assert group["candidate_accuracy"] == 2 / 3
+    assert group["candidate_accuracy"] != (a["groups"][0]["candidate_accuracy"] + b["groups"][0]["candidate_accuracy"]) / 2
+    assert group["always_up_accuracy_same_rows"] == 1.
+
+
+@pytest.mark.parametrize("storage", ["sqlite3", "duckdb"])
+def test_batch_builds_and_rechecks_complete_package(tmp_path: Path, storage: str) -> None:
+    first = tmp_path / ("first." + storage)
+    (_make_ledger if storage == "sqlite3" else _make_duckdb_ledger)(first)
+    output = tmp_path / "package"
+    before = first.read_bytes()
+    manifest = build_package([first], output)
+    assert verify_package(output) == manifest
+    assert load_scorecard(output / "combined.json") == build_scorecard(first)
+    assert first.read_bytes() == before
+    assert len(list(output.iterdir())) == 7
+    assert not list(tmp_path.glob(".g2-scorecard-package-*"))
+
+
+@pytest.mark.parametrize("alias", ["same", "copy", "hardlink", "symlink"])
+def test_batch_refuses_duplicate_sources_and_forecasts(tmp_path: Path, alias: str) -> None:
+    first, second = tmp_path / "first.sqlite3", tmp_path / "second.sqlite3"
+    _make_ledger(first)
+    if alias == "same":
+        second = first
+    elif alias == "copy":
+        second.write_bytes(first.read_bytes())
+    elif alias == "hardlink":
+        os.link(first, second)
+    else:
+        second.symlink_to(first)
+    with pytest.raises(ScorecardRefused):
+        build_package([first, second], tmp_path / "package")
+    assert not (tmp_path / "package").exists()
+    assert not list(tmp_path.glob(".g2-scorecard-package-*"))
+
+
+@pytest.mark.parametrize("defect", ["engine", "unknown_engine", "record", "storage"])
+def test_batch_refuses_mixed_or_unknown_versions(tmp_path: Path, defect: str) -> None:
+    first, second = tmp_path / "first.sqlite3", tmp_path / "second.sqlite3"
+    _make_ledger(first)
+    _disjoint_copy(first, second)
+    a, b = build_scorecard(first), build_scorecard(second)
+    if defect in ("engine", "unknown_engine", "record"):
+        for row in b["observations"]:
+            if defect == "record":
+                row["forecast_record_version"] = "FORECAST_RECORD_V2_BASELINE_EVIDENCE"
+            else:
+                row["engine_version"] = None if defect == "unknown_engine" else "OTHER_ENGINE"
+    else:
+        duck = tmp_path / "staging.duckdb"
+        _make_duckdb_ledger(duck)
+        b = build_scorecard(duck)
+    _resign_report(b)
+    validate_scorecard(b)
+    with pytest.raises(ScorecardRefused):
+        combine_scorecards([a, b])
+
+
+def test_batch_never_overwrites_an_existing_output_directory(tmp_path: Path) -> None:
+    first = tmp_path / "first.sqlite3"
+    _make_ledger(first)
+    output = tmp_path / "existing"
+    output.mkdir()
+    marker = output / "keep.txt"
+    marker.write_text("preserve", encoding="utf-8")
+    assert batch_main(["--ledger", str(first), "--output-dir", str(output)]) == 2
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert {path.name for path in output.iterdir()} == {"keep.txt"}
+
+
+@pytest.mark.parametrize("member", ["combined.csv", "combined.json", "journal_001.txt", "manifest.json", "extra.txt"])
+def test_batch_verifier_refuses_modified_or_extra_files(tmp_path: Path, member: str) -> None:
+    ledger = tmp_path / "first.sqlite3"
+    _make_ledger(ledger)
+    output = tmp_path / "package"
+    build_package([ledger], output)
+    with (output / member).open("ab") as stream:
+        stream.write(b"changed")
+    with pytest.raises(ScorecardRefused):
+        verify_package(output)
+
+
+def test_batch_verifier_refuses_resigned_export_tampering(tmp_path: Path) -> None:
+    ledger = tmp_path / "first.sqlite3"
+    _make_ledger(ledger)
+    output = tmp_path / "package"
+    build_package([ledger], output)
+    changed = b"wrong table"
+    (output / "combined.csv").write_bytes(changed)
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"]["combined.csv"] = _sha(changed)
+    unsigned = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    manifest["manifest_sha256"] = _sha(_encoded(unsigned).encode())
+    (output / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ScorecardRefused, match="Содержимое файла"):
+        verify_package(output)
+
+
+def test_batch_refuses_a_journal_changed_during_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ledger = tmp_path / "first.sqlite3"
+    _make_ledger(ledger)
+    original = batch_module.build_scorecard
+    calls = [0]
+    def changing(path: Path) -> dict[str, object]:
+        calls[0] += 1
+        if calls[0] == 2:
+            with sqlite3.connect(path) as db:
+                db.execute("DELETE FROM outcomes WHERE horizon=5")
+        return original(path)
+    monkeypatch.setattr(batch_module, "build_scorecard", changing)
+    with pytest.raises(ScorecardRefused, match="изменился во время"):
+        build_package([ledger], tmp_path / "package")
+    assert not (tmp_path / "package").exists()
+    assert not list(tmp_path.glob(".g2-scorecard-package-*"))
+
+
+def test_batch_package_content_is_independent_of_input_order(tmp_path: Path) -> None:
+    first, second = tmp_path / "first.sqlite3", tmp_path / "second.sqlite3"
+    _make_ledger(first)
+    _disjoint_copy(first, second)
+    a, b = tmp_path / "a", tmp_path / "b"
+    assert build_package([first, second], a) == build_package([second, first], b)
+    assert {path.name: path.read_bytes() for path in a.iterdir()} == {path.name: path.read_bytes() for path in b.iterdir()}
+    assert batch_main(["--verify-package", str(a)]) == 0
