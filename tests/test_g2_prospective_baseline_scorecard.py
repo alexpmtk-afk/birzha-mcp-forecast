@@ -13,6 +13,7 @@ from scripts.g2_prospective_baseline_scorecard import (
     ScorecardRefused,
     build_scorecard,
     main,
+    render_scorecard_text,
 )
 
 
@@ -128,6 +129,61 @@ def test_scorecard_refuses_a_changed_forecast_body(tmp_path: Path) -> None:
 
     with pytest.raises(ScorecardRefused, match="capture evidence hash mismatch"):
         build_scorecard(ledger)
+
+
+def test_text_report_keeps_directional_denominator_and_reference_rows(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    text = render_scorecard_text(build_scorecard(ledger))
+    assert "Исходов завершено: 3. Ожидают результата: 0." in text
+    assert "Проверено направленных прогнозов: 2." in text
+    assert "Верно: 1 из 2. Ошибок: 1. Точность: 50,00%." in text
+    assert "Правило «всегда рост»: верно 2 из 2; точность 100,00%." in text
+    assert "Разница с правилом «всегда рост»: -50,00 процентных пунктов." in text
+    assert "Нейтральных: 1. Явных отказов: 0." in text
+
+
+def test_text_report_does_not_show_pending_accuracy_as_zero(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    text = render_scorecard_text(build_scorecard(ledger))
+    assert "Ожидают результата: 3." in text
+    assert "Точность пока неизвестна" in text
+    assert "Верно: 0" not in text
+    assert "Точность: 0,00%" not in text
+
+
+def test_text_report_distinguishes_completed_neutral_from_waiting(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id != 'f-neutral'")
+        db.execute("DELETE FROM captures WHERE forecast_id != 'f-neutral'")
+    text = render_scorecard_text(build_scorecard(ledger))
+    assert "Исходов завершено: 1. Ожидают результата: 0." in text
+    assert "Точность не рассчитывается: направленных решений нет." in text
+    assert "направленные прогнозы ожидают результата" not in text
+
+
+def test_cli_saves_russian_report_without_changing_ledger(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    before = ledger.read_bytes()
+    output = tmp_path / "report.txt"
+    assert main(["--ledger", str(ledger), "--format", "text", "--output", str(output)]) == 0
+    assert "Верно: 1 из 2. Ошибок: 1." in output.read_text(encoding="utf-8")
+    assert ledger.read_bytes() == before
+
+
+def test_cli_preserves_default_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    assert main(["--ledger", str(ledger)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["read_only"] is True
+    assert report["groups"][0]["candidate_accuracy"] == .5
 
 
 def test_scorecard_leaves_missing_outcomes_pending(tmp_path: Path) -> None:

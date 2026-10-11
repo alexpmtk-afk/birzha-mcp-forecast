@@ -559,12 +559,70 @@ def build_scorecard(path: Path) -> dict[str, Any]:
     }
 
 
+def render_scorecard_text(report: dict[str, Any]) -> str:
+    """Present checked counts in Russian without turning missing accuracy into zero."""
+    def percent(value: float) -> str:
+        return f"{value * 100:.2f}%".replace(".", ",")
+
+    def label(value: Any) -> str:
+        return " ".join(str(value).splitlines())
+
+    lines = [
+        "Оценка сохранённых прогнозов",
+        "",
+        "Сравнивается направление цены в конце срока с правилом «всегда рост».",
+        "Оба правила проверяются на одних и тех же завершённых направленных прогнозах.",
+        "Один прогноз представлен отдельно для каждого срока; строки разных сроков не являются независимыми прогнозами.",
+    ]
+    if not report["groups"]:
+        lines.extend(["", "Сохранённых прогнозов нет."])
+    previous = None
+    for row in report["groups"]:
+        identity = (row["market"], row["secid"])
+        if identity != previous:
+            lines.extend(["", f"Рынок: {label(row['market'])}. Точный инструмент: {label(row['secid'])}."])
+            previous = identity
+        lines.extend([
+            "",
+            f"Срок: {row['horizon_sessions']} торговых сессий.",
+            f"Записано решений: {row['forecasts_frozen']}. Исходов завершено: {row['outcomes_completed']}. Ожидают результата: {row['outcomes_pending']}.",
+            f"Направленных решений: {row['directional_forecasts']}. Нейтральных: {row['neutral_forecasts']}. Явных отказов: {row['explicit_abstentions']}.",
+        ])
+        scored = row["directional_forecasts_scored"]
+        lines.append(f"Проверено направленных прогнозов: {scored}.")
+        if scored:
+            lines.append(
+                f"Верно: {row['candidate_correct']} из {scored}. Ошибок: {scored - row['candidate_correct']}. Точность: {percent(row['candidate_accuracy'])}."
+            )
+            lines.append(
+                f"Правило «всегда рост»: верно {row['always_up_correct_same_rows']} из {scored}; точность {percent(row['always_up_accuracy_same_rows'])}."
+            )
+            difference = f"{row['accuracy_difference_percentage_points']:+.2f}".replace(".", ",")
+            lines.append(f"Разница с правилом «всегда рост»: {difference} процентных пунктов.")
+        elif row["directional_forecasts"]:
+            lines.append("Верные и ошибочные прогнозы пока не оценены. Точность пока неизвестна: направленные прогнозы ожидают результата.")
+        else:
+            lines.append("Точность не рассчитывается: направленных решений нет. Нейтральные решения и отказы сохранены отдельно.")
+    lines.extend(["", "Границы оценки:"])
+    if report["ledger_version"] == LEDGER_VERSION:
+        lines.append("В старом пробном журнале проверены контрольные суммы исходных байтов и согласованность записанных цен и времени; полный список будущих свечей в этом формате не хранится.")
+    else:
+        lines.append("Проверено полное сохранённое окно будущих свечей, его связь с исходными байтами и итоговой записью результата.")
+    lines.extend([
+        "Исходные ответы поставщика здесь не разбираются заново. Контрольные суммы сами по себе не подтверждают подлинность источника, часов или календаря.",
+        "Для доходности и порядка достижения ценовых целей нужны отдельные расчёты. Перекрывающиеся сроки не дают независимой статистической оценки.",
+        "Ожидающие результаты не заменяются нулём. Файл базы открыт только для чтения.",
+    ])
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Сравнить сохранённые направления прогноза с неизменным ориентиром «всегда рост»; только чтение."
     )
     parser.add_argument("--ledger", required=True, type=Path, help="явный путь к изолированному опытному журналу .sqlite3 или .duckdb")
-    parser.add_argument("--output", type=Path, help="необязательный путь для сводки JSON; без него печать в окно")
+    parser.add_argument("--format", choices=("json", "text"), default="json", help="json: прежний машинный формат; text: понятный русский отчёт")
+    parser.add_argument("--output", type=Path, help="необязательный путь для сводки; без него печать в окно")
     args = parser.parse_args(argv)
     if args.output is not None:
         try:
@@ -583,7 +641,8 @@ def main(argv: list[str] | None = None) -> int:
     except ScorecardRefused as exc:
         print(f"Сводка не построена: {exc}", file=sys.stderr)
         return 2
-    rendered = json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n"
+    rendered = (render_scorecard_text(report) if args.format == "text" else
+                json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False) + "\n")
     if args.output is None:
         sys.stdout.write(rendered)
         return 0
