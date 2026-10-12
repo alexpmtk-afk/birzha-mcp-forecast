@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from hashlib import sha256
 import json
 from math import isfinite
@@ -41,9 +41,18 @@ def _complete_close(db, secid: str, day: str) -> float | None:
     if len(rows) != 1:
         return None
     begin, end, opening, high, low, close, completed = rows[0]
+    # A boolean completion flag and a matching day are not sufficient:
+    # reversed/equal event times or >24h candles cannot prove a completed D1.
+    try:
+        started = datetime.fromisoformat(str(begin))
+        finished = datetime.fromisoformat(str(end))
+        elapsed = finished - started
+    except (TypeError, ValueError):
+        return None
     nums = (opening, high, low, close)
     if (str(begin)[:10] != day or str(end)[:10] not in
-        (day, next_day) or not bool(completed)
+        (day, next_day) or not timedelta(0) < elapsed <= timedelta(days=1)
+        or not bool(completed)
         or any(type(x) not in (int, float) or not isfinite(x)
                or x <= 0 for x in nums)
         or not low <= min(opening, close) <= max(opening, close) <= high):
@@ -56,7 +65,10 @@ def evaluate_historical_development(db, reconstructed_rows: list[dict],
     """Read ONLY 2021-22 archive. No future facts become historical features."""
     if not (DEVELOPMENT_START <= till_day <= DEVELOPMENT_END):
         raise ValueError("historical development target must stay within 2021-22")
-    calendars = {market:_active_calendar(db,market) for market in MARKETS}
+    calendars = {
+        market: _active_calendar(db, market, through_day=till_day)
+        for market in MARKETS
+    }
     indices = {market:{day:i for i,(day,secid) in enumerate(calendar)}
                for market,calendar in calendars.items()}
     accepted = []
@@ -181,9 +193,16 @@ def run(archive: Path, warmup_v2: Path, output_dir: Path):
     # Preflight all output destinations before making any writes. Never
     # replace a differing user artifact even after partial prior attempts.
     output_dir.mkdir(parents=True,exist_ok=True)
-    if any((output_dir/name).is_file() and
-           (output_dir/name).read_bytes()!=body for name,body in data):
-        raise FileExistsError("refusing to replace an unlike historical result")
+    # Preflight regular files and conflicting directories/symlinks before
+    # committing any of the three result artifacts.
+    for name, body in data:
+        target = output_dir / name
+        if target.is_symlink() or (
+            target.exists() and (
+                not target.is_file() or target.read_bytes() != body
+            )
+        ):
+            raise FileExistsError("refusing to replace an unlike historical result")
     for name,body in data:
         target=output_dir/name
         if not target.exists():
