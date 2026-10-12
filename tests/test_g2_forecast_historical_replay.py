@@ -141,3 +141,12 @@ def test_fake_calendar_dates_are_rejected_even_when_outcomes_are_pending():
     invalid=tuple("2021-15-"+str(i).zfill(2) for i in range(1,21))
     with pytest.raises(ValueError):
         module.evaluate_replay_outcomes(replay,future=future,expected_session_dates=invalid)
+
+
+def test_original_engine_result_cannot_change_between_prediction_and_assessment():
+    instrument,series=fixture()
+    replay=module.replay_existing_forecast(instrument,cutoff_at=CUTOFF,series=series,source_sha256=SHA)
+    future,dates=future_fixture(instrument)
+    replay["research_engine_result"]["engine_payload"]["horizons"][0]["expected_move_pct"] = 999.0
+    with pytest.raises(ValueError,match="changed"):
+        module.evaluate_replay_outcomes(replay,future=future,expected_session_dates=dates)

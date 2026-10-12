@@ -56,6 +56,11 @@ class _OfflinePrices:
         return CandleSeries(instrument, timeframe, tuple(selected), source="HISTORICAL_ARCHIVE_RECONSTRUCTED")
 
 
+def _report_sha(report: dict) -> str:
+    unsigned = {k:v for k,v in report.items() if k != "replay_sha256"}
+    return hashlib.sha256(json.dumps(unsigned, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
 def replay_existing_forecast(
     instrument: Instrument, *, cutoff_at: str,
     series: dict[str, CandleSeries], source_sha256: str,
@@ -125,6 +130,7 @@ def replay_existing_forecast(
         "research_engine_result": None,
     }
     if blockers:
+        report["replay_sha256"] = _report_sha(report)
         return report
     snapshot = MarketSnapshotService(provider, flow=None).build(
         instrument.symbol, as_of_date=day.isoformat())
@@ -139,6 +145,7 @@ def replay_existing_forecast(
         "input_scope": "existing default price path; paid flow not requested",
         "snapshot_warnings": list(snapshot.warnings),
     }
+    report["replay_sha256"] = _report_sha(report)
     return report
 
 
@@ -149,8 +156,10 @@ def evaluate_replay_outcomes(report: dict, *, future: CandleSeries,
         raise ValueError("an admitted original-engine replay is required")
     if report.get("release_allowed") is not False or report.get("journal_written") is not False:
         raise ValueError("research scope required")
+    if report.get("replay_sha256") != _report_sha(report):
+        raise ValueError("replay changed after original engine calculation")
     payload = report["research_engine_result"]["engine_payload"]
-    if future.timeframe != "D1" or future.instrument.secid != report["secid"]:
+    if future.timeframe != "D1" or future.instrument.secid != report["secid"] or future.instrument.symbol != report["market"]:
         raise ValueError("exact-contract D1 future required")
     if len(expected_session_dates) != 20 or tuple(sorted(set(expected_session_dates))) != expected_session_dates:
         raise ValueError("declare exactly twenty distinct ordered sessions")
@@ -177,7 +186,7 @@ def evaluate_replay_outcomes(report: dict, *, future: CandleSeries,
         raise ValueError("missing, duplicate, reordered or wrong future session")
     reference = payload["reference_price"]
     horizons = {item["sessions"]:item for item in payload["horizons"]}
-    if set(horizons) != {5,10,20} or type(reference) not in (int,float) or reference <= 0:
+    if set(horizons) != {5,10,20} or type(reference) not in (int,float) or not math.isfinite(reference) or reference <= 0:
         raise ValueError("invalid original-engine horizon or reference")
     results = []
     for h in (5,10,20):
@@ -187,6 +196,8 @@ def evaluate_replay_outcomes(report: dict, *, future: CandleSeries,
                "flat_price_error_percentage_points":None}
         if len(future.candles) >= h:
             realized = round((future.candles[h-1].close/reference-1)*100,8)
+            if not math.isfinite(realized):
+                raise ValueError("future return must remain finite")
             direction = horizons[h]["direction"]
             if direction not in ("UP","DOWN","NEUTRAL"):
                 raise ValueError("invalid original direction")
@@ -202,6 +213,7 @@ def evaluate_replay_outcomes(report: dict, *, future: CandleSeries,
     return {"schema":"G2_FORECAST_HISTORICAL_PRICE_OUTCOMES_V1",
             "scope":report["scope"], "engine_version":report["engine_version"],
             "price_input_sha256":report["price_input_sha256"],
+            "replay_sha256":report["replay_sha256"],
             "outcomes":results, "historical_first_receipt":"NOT_PROVEN",
             "independent_exchange_calendar_verified":False,
             "journal_written":False,"release_allowed":False}
