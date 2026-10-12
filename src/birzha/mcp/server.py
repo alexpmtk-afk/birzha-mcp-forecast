@@ -345,9 +345,9 @@ def analysis_run_core() -> dict[str, object]:
     return _analysis.run()
 
 
-@mcp.tool(name="outcome.evaluate", description="Evaluate a stored forecast against future completed MOEX trading sessions and append newly matured 5/10/20-session outcomes without modifying the forecast.")
+@mcp.tool(name="outcome.evaluate", description="PROTECTED: do not fetch future source or append 5/10/20-session Outcomes until original prospective receipt, exact MOEX calendar and source-bound maturity are independently verified. Returns BLOCKED without reading Forecast DB or writing Outcome DB; old unverified evaluation is DEVELOPMENT-only.")
 def outcome_evaluate(forecast_id: str, evaluation_date: str | None = None) -> dict[str, object]:
-    return _outcomes.evaluate(forecast_id, evaluation_date=evaluation_date).to_dict()
+    return _outcomes.operational_evaluate(forecast_id, evaluation_date=evaluation_date)
 
 
 @mcp.tool(name="outcome.list", description="List append-only matured outcomes already recorded for one forecast.")
