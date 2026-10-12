@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from birzha.application.g2_m1_first_intake import OriginalM1LocalIntake, _key
 from birzha.application.g2_m1_m15_source_replay import (
     OriginalM1Page, SourceReplayRefused, _identity, _strict_json, _table,
-    COLUMNS, PAGE_SIZE, MAX_BYTES,
+    COLUMNS, PAGE_SIZE, MAX_BYTES, _minute,
 )
 from birzha.application.upstream_control import UpstreamRequestGovernor
 from birzha.domain.market import Instrument
@@ -114,6 +114,18 @@ def capture_governed_m1_mock_only(
             if (not set(COLUMNS).issubset(columns) or len(rows)>PAGE_SIZE
                 or any(not isinstance(r,list) or len(r)!=len(columns) for r in rows)):
                 raise GovernedCaptureRefused("malformed original M1 page")
+            # Validate native contents at callback, before reporting a
+            # successful immutable source receipt. This is still NOT MOEX
+            # provenance certification.
+            observed = datetime.fromisoformat(received.replace("Z","+00:00"))
+            last_begin = None
+            for row in rows:
+                minute = _minute(dict(zip(columns,row)))
+                if minute["end"] > observed:
+                    raise GovernedCaptureRefused("uncompleted native M1 source row")
+                if last_begin is not None and minute["begin"] <= last_begin:
+                    raise GovernedCaptureRefused("duplicate or reordered native M1")
+                last_begin = minute["begin"]
         except SourceReplayRefused as exc:
             raise GovernedCaptureRefused("invalid original M1 JSON source") from exc
         page=OriginalM1Page(
