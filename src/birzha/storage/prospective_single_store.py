@@ -190,44 +190,58 @@ class SingleDuckDBProspectiveStagingJournal:
         if tables and "g2_atomic_meta" not in tables:
             self.db.close()
             raise pilot.AdmissionRefused("refuse unrelated existing DuckDB file")
-        self.db.execute("CREATE TABLE IF NOT EXISTS g2_atomic_meta (version VARCHAR PRIMARY KEY)")
-        self.db.execute("INSERT OR IGNORE INTO g2_atomic_meta VALUES (?)",[VERSION])
-        if self.db.execute("SELECT version FROM g2_atomic_meta").fetchall() != [(VERSION,)]:
+        required_tables = {
+            "g2_atomic_meta","forecast_records","outcome_records",
+            "g2_atomic_captures","g2_atomic_futures",
+            "g2_atomic_time_anchors","g2_atomic_schedule_evidence",
+        }
+        if tables and tables != required_tables:
             self.db.close()
-            raise pilot.AdmissionRefused("incompatible staging version")
-        self.db.execute("""CREATE TABLE IF NOT EXISTS forecast_records (
-          forecast_id VARCHAR PRIMARY KEY,payload_hash VARCHAR NOT NULL,payload_json VARCHAR NOT NULL,
-          symbol VARCHAR NOT NULL,secid VARCHAR NOT NULL,created_at_t0 VARCHAR NOT NULL,
-          engine_version VARCHAR NOT NULL,inserted_at TIMESTAMP DEFAULT current_timestamp)""")
-        self.db.execute("""CREATE TABLE IF NOT EXISTS outcome_records (
-          outcome_id VARCHAR PRIMARY KEY,forecast_id VARCHAR NOT NULL,horizon_sessions INTEGER NOT NULL,
-          payload_hash VARCHAR NOT NULL,payload_json VARCHAR NOT NULL,
-          inserted_at TIMESTAMP DEFAULT current_timestamp)""")
-        self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_captures (
-          forecast_id VARCHAR PRIMARY KEY,forecast_sha VARCHAR NOT NULL,
-          source_blob BLOB NOT NULL,source_sha VARCHAR NOT NULL,
-          receipt_json VARCHAR NOT NULL,receipt_sha VARCHAR NOT NULL)""")
-        self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_futures (
-          forecast_id VARCHAR NOT NULL,horizon INTEGER NOT NULL,outcome_id VARCHAR NOT NULL,
-          source_blob BLOB NOT NULL,source_sha VARCHAR NOT NULL,
-          evidence_json VARCHAR NOT NULL,evidence_sha VARCHAR NOT NULL,
-          PRIMARY KEY(forecast_id,horizon))""")
-        # Opt-in two-phase timestamp evidence is appended in a separate atomic
-        # transaction after Forecast issuance. No historical record rewrite.
-        self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_time_anchors (
-          forecast_id VARCHAR PRIMARY KEY,
-          commitment BLOB NOT NULL,commitment_sha VARCHAR NOT NULL,
-          query_blob BLOB NOT NULL,query_sha VARCHAR NOT NULL,
-          response_blob BLOB NOT NULL,response_sha VARCHAR NOT NULL,
-          ca_blob BLOB NOT NULL,ca_sha VARCHAR NOT NULL,
-          chain_blob BLOB,chain_sha VARCHAR,
-          verification_json VARCHAR NOT NULL,verification_sha VARCHAR NOT NULL)""")
-        # Optional append-only original public MOEX schedule evidence per
-        # frozen Forecast. Candidate URLs alone never certify authenticity.
-        self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_schedule_evidence (
-          forecast_id VARCHAR PRIMARY KEY,
-          schedule_blob BLOB NOT NULL,schedule_sha VARCHAR NOT NULL,
-          candidate_json VARCHAR NOT NULL,candidate_sha VARCHAR NOT NULL)""")
+            raise pilot.ImmutableCollision("partial or unexpected staging schema on reopen")
+        self.db.execute("BEGIN TRANSACTION")
+        try:
+            self.db.execute("CREATE TABLE IF NOT EXISTS g2_atomic_meta (version VARCHAR PRIMARY KEY)")
+            self.db.execute("INSERT OR IGNORE INTO g2_atomic_meta VALUES (?)",[VERSION])
+            if self.db.execute("SELECT version FROM g2_atomic_meta").fetchall() != [(VERSION,)]:
+                raise pilot.AdmissionRefused("incompatible staging version")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS forecast_records (
+              forecast_id VARCHAR PRIMARY KEY,payload_hash VARCHAR NOT NULL,payload_json VARCHAR NOT NULL,
+              symbol VARCHAR NOT NULL,secid VARCHAR NOT NULL,created_at_t0 VARCHAR NOT NULL,
+              engine_version VARCHAR NOT NULL,inserted_at TIMESTAMP DEFAULT current_timestamp)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS outcome_records (
+              outcome_id VARCHAR PRIMARY KEY,forecast_id VARCHAR NOT NULL,horizon_sessions INTEGER NOT NULL,
+              payload_hash VARCHAR NOT NULL,payload_json VARCHAR NOT NULL,
+              inserted_at TIMESTAMP DEFAULT current_timestamp)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_captures (
+              forecast_id VARCHAR PRIMARY KEY,forecast_sha VARCHAR NOT NULL,
+              source_blob BLOB NOT NULL,source_sha VARCHAR NOT NULL,
+              receipt_json VARCHAR NOT NULL,receipt_sha VARCHAR NOT NULL)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_futures (
+              forecast_id VARCHAR NOT NULL,horizon INTEGER NOT NULL,outcome_id VARCHAR NOT NULL,
+              source_blob BLOB NOT NULL,source_sha VARCHAR NOT NULL,
+              evidence_json VARCHAR NOT NULL,evidence_sha VARCHAR NOT NULL,
+              PRIMARY KEY(forecast_id,horizon))""")
+            # Opt-in two-phase timestamp evidence is appended in a separate atomic
+            # transaction after Forecast issuance. No historical record rewrite.
+            self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_time_anchors (
+              forecast_id VARCHAR PRIMARY KEY,
+              commitment BLOB NOT NULL,commitment_sha VARCHAR NOT NULL,
+              query_blob BLOB NOT NULL,query_sha VARCHAR NOT NULL,
+              response_blob BLOB NOT NULL,response_sha VARCHAR NOT NULL,
+              ca_blob BLOB NOT NULL,ca_sha VARCHAR NOT NULL,
+              chain_blob BLOB,chain_sha VARCHAR,
+              verification_json VARCHAR NOT NULL,verification_sha VARCHAR NOT NULL)""")
+            # Optional append-only original public MOEX schedule evidence per
+            # frozen Forecast. Candidate URLs alone never certify authenticity.
+            self.db.execute("""CREATE TABLE IF NOT EXISTS g2_atomic_schedule_evidence (
+              forecast_id VARCHAR PRIMARY KEY,
+              schedule_blob BLOB NOT NULL,schedule_sha VARCHAR NOT NULL,
+              candidate_json VARCHAR NOT NULL,candidate_sha VARCHAR NOT NULL)""")
+            self.db.execute("COMMIT")
+        except BaseException:
+            self.db.execute("ROLLBACK")
+            self.db.close()
+            raise
 
     def close(self):
         with self.lock:
@@ -315,6 +329,8 @@ class SingleDuckDBProspectiveStagingJournal:
             except (ValueError, KeyError, binascii.Error) as exc:
                 raise pilot.ImmutableCollision("original calendar witness evidence is corrupt") from exc
         outcome={id:(h,p) for id,h,p in self.db.execute("SELECT outcome_id,payload_hash,payload_json FROM outcome_records").fetchall()}
+        outcome_columns={oid:(fid,horizon) for oid,fid,horizon in self.db.execute(
+            "SELECT outcome_id,forecast_id,horizon_sessions FROM outcome_records").fetchall()}
         future=self.db.execute("SELECT forecast_id,horizon,outcome_id,source_blob,source_sha,evidence_json,evidence_sha FROM g2_atomic_futures").fetchall()
         if set(outcome)!={r[2] for r in future}:
             raise pilot.ImmutableCollision("orphan canonical Outcome/future receipt")
@@ -371,6 +387,8 @@ class SingleDuckDBProspectiveStagingJournal:
             except (pilot.AdmissionRefused, ValueError, TypeError) as exc:
                 raise pilot.ImmutableCollision("persisted future session chronology invalid") from exc
             projected=_outcome_from_pilot(meta)
+            if outcome_columns.get(oid)!=(fid,horizon) or horizon not in HORIZONS:
+                raise pilot.ImmutableCollision("canonical Outcome identity columns differ from receipt")
             body,digest=DuckDBOutcomeJournal.canonical_payload(projected)
             if projected.outcome_id!=oid or outcome.get(oid)!=(digest,body):
                 raise pilot.ImmutableCollision("canonical Outcome differs from original future")
