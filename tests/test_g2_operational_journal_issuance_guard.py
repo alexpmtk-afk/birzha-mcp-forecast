@@ -64,3 +64,73 @@ def test_existing_read_only_journal_functions_remain_supported():
     assert service.list_recent(limit=3) == {
         "count": 0, "storage_scope": "TEST_ONLY", "forecasts": []
     }
+
+
+
+def test_source_issuance_preflight_is_pure_blocked_and_not_a_future_promise():
+    gate=ForecastJournalService(
+        forecasts=NoBuild(),journal=NoAppend()).issuance_preflight()
+    assert gate == {
+        "schema": "G2_OPERATIONAL_ISSUANCE_PREFLIGHT_V1",
+        "status": "BLOCKED",
+        "reason": "UNATTESTED_FORECAST_ISSUANCE",
+        "source_bound_live_issuer_verified": False,
+        "canonical_write_authorized": False,
+        "production_authorized": False,
+    }
+
+
+def test_analysis_run_core_abstains_before_any_six_market_history_or_forecast_write():
+    from datetime import datetime, timezone
+    from birzha.application.market_analysis import MarketAnalysisService
+    from birzha.application.orchestration_plan import CORE_SYMBOLS
+
+    class NoSync:
+        calls=0
+        def sync(self,*args,**kwargs):
+            self.calls+=1
+            raise AssertionError("D1 source sync must never be reached")
+
+    history=NoSync()
+    forecasts,journal=NoBuild(),NoAppend()
+    operational=ForecastJournalService(forecasts=forecasts,journal=journal)
+    result=MarketAnalysisService(history=history,journal=operational).run(
+        now=datetime(2026,10,12,12,0,tzinfo=timezone.utc))
+    assert result["status"]=="BLOCKED"
+    assert result["reason"]=="UNATTESTED_FORECAST_ISSUANCE"
+    assert result["requested"]==len(CORE_SYMBOLS)
+    assert result["passed"]==0
+    assert result["failed"]==0
+    assert result["blocked"]==len(CORE_SYMBOLS)
+    assert result["history_sync_attempted"] is False
+    assert result["forecast_issuance_attempted"] is False
+    assert result["production_authorized"] is False
+    assert [x["symbol"] for x in result["items"]]==list(CORE_SYMBOLS)
+    assert all(x["status"]=="BLOCKED" and x["stage"]=="issuance_preflight"
+               for x in result["items"])
+    assert history.calls==0 and forecasts.calls==0 and journal.calls==0
+
+
+def test_operational_analysis_cannot_infer_forecast_permission_from_custom_positive_preflight():
+    from birzha.application.market_analysis import MarketAnalysisService
+
+    class ForgedApproval(ForecastJournalService):
+        @staticmethod
+        def issuance_preflight():
+            return {"status":"PASS","canonical_write_authorized":True}
+
+    class NoSync:
+        def sync(self,*args,**kwargs):
+            raise AssertionError("untrusted preflight must not reach source sync")
+
+    blocked=ForgedApproval(forecasts=NoBuild(),journal=NoAppend())
+    with pytest.raises(RuntimeError,match="separately reviewed"):
+        MarketAnalysisService(history=NoSync(),journal=blocked).run()
+
+
+def test_operational_analysis_mcp_description_does_not_promise_saving_six_forecasts():
+    source=(Path(__file__).resolve().parents[1] /
+            "src/birzha/mcp/server.py").read_text(encoding="utf-8")
+    assert 'name="analysis.run_core"' in source
+    assert "issuance preflight" in source
+    assert "history sync" in source

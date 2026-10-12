@@ -29,6 +29,40 @@ class MarketAnalysisService:
     journal: ForecastJournalService
 
     def run(self, *, now: datetime | None = None) -> dict[str, object]:
+        # The actual operational ForecastJournalService.create_and_save()
+        # refuses event-time T0 even after a successful history.sync().
+        # Check that LIVE authority BEFORE any history network calls or
+        # durable cache writes. Keep small fake Journal fixtures compatible.
+        if isinstance(self.journal, ForecastJournalService):
+            gate = self.journal.issuance_preflight()
+            if (gate["status"] != "BLOCKED"
+                or gate["canonical_write_authorized"] is not False):
+                raise RuntimeError("operational issuer requires a separately reviewed route")
+            return {
+                "status": "BLOCKED",
+                "reason": gate["reason"],
+                "requested": len(CORE_SYMBOLS),
+                "passed": 0,
+                "failed": 0,
+                "blocked": len(CORE_SYMBOLS),
+                "history_sync_attempted": False,
+                "forecast_issuance_attempted": False,
+                "recent_history_from": None,
+                "recent_history_till": None,
+                "full_archive_verified": False,
+                "model_accuracy_confirmed": False,
+                "production_authorized": False,
+                "message_ru": (
+                    "Операционный выпуск прогнозов заблокирован: не доказано "
+                    "фактическое получение исходных данных до времени T0. "
+                    "Сбор и запись истории не запускались."
+                ),
+                "items": [
+                    {"symbol": symbol, "status": "BLOCKED",
+                     "stage": "issuance_preflight", "reason": gate["reason"]}
+                    for symbol in CORE_SYMBOLS
+                ],
+            }
         observed = now or datetime.now(UTC)
         safe_till = latest_safe_d1_calendar_date(observed)
         recent_from = max(
