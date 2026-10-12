@@ -154,11 +154,12 @@ def replay_completed_m15(*, instrument: Instrument, pages: tuple[OriginalM1Page,
     observed_previous = None
     saw_cursor = None
     total = None
+    cursor_page_size = None
     seen_params = None
     entries = []
     meta = []
     last_page_count = 0
-    for p in pages:
+    for index, p in enumerate(pages):
         if not isinstance(p, OriginalM1Page):
             raise TypeError("typed original HTTP page required")
         if not isinstance(p.raw_body, bytes) or not 0 < len(p.raw_body) <= MAX_BYTES:
@@ -232,7 +233,17 @@ def replay_completed_m15(*, instrument: Instrument, pages: tuple[OriginalM1Page,
                 raise SourceReplayRefused("invalid original cursor values")
             if total is not None and page_total != total:
                 raise SourceReplayRefused("pagination TOTAL changed")
+            if cursor_page_size is not None and cursor_page_size != page_size:
+                raise SourceReplayRefused("pagination PAGESIZE changed")
+            if (p.start % page_size != 0 or p.start >= page_total
+                or len(raw_rows) != min(page_size, page_total-p.start)):
+                raise SourceReplayRefused("cursor page truncated or wrong offset")
+            cursor_page_size = page_size
             total = page_total
+        elif index < len(pages)-1 and len(raw_rows) != PAGE_SIZE:
+            # Without a cursor only a full 500-row source page may
+            # legally precede another requested page.
+            raise SourceReplayRefused("unexpected nonterminal short source page")
         if not raw_rows and not entries:
             raise SourceReplayRefused("no original M1 rows")
         expected_offset += len(raw_rows)

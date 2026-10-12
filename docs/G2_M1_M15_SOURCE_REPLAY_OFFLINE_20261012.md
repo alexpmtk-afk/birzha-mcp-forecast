@@ -36,3 +36,9 @@ capture in isolation, never protected OOS or real trades.
 
 Do not merge/deploy/main/HOME/production without explicit authorizations.
 All 12 release-gate blockers remain open and Alignment weights unapproved.
+
+Page evidence is also checked against declared pagination PAGESIZE: all
+nonterminal cursor pages must contain the exact expected number of rows,
+the page size cannot change across pages and a cursorless short page is
+terminal. Partial intermediate pages are a hard refusal even when the
+assembled M1 rows happen to contain all 15 requested minutes.

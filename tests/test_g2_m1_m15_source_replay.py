@@ -167,3 +167,33 @@ def test_duplicate_json_member_refused_even_if_source_sha_is_recomputed():
     raw=p.raw_body.replace(b'"candles":',b'"candles":{},"candles":',1)
     with pytest.raises(SourceReplayRefused):
         checked((replace(p,raw_body=raw,raw_sha256=sha256(raw).hexdigest()),))
+
+
+@pytest.mark.parametrize("variant",[
+    "short_cursor_nonterminal","page_size_changes","uncursored_midpage",
+    "cursor_offset_invalid","cursor_more_than_total",
+])
+def test_cursor_and_page_size_evidence_must_match_actual_source_rows(variant):
+    a=rows()
+    if variant=="short_cursor_nonterminal":
+        page0=make_page(a[:7],start=0,total=15,page_size=8)
+        page1=make_page(a[7:],start=7,total=15,page_size=8,
+                        first="2026-10-09T07:16:05Z",last="2026-10-09T07:16:08Z")
+    elif variant=="page_size_changes":
+        page0=make_page(a[:8],start=0,total=15,page_size=8)
+        page1=make_page(a[8:],start=8,total=15,page_size=9,
+                        first="2026-10-09T07:16:05Z",last="2026-10-09T07:16:08Z")
+    elif variant=="uncursored_midpage":
+        page0=make_page(a[:8],start=0)
+        page1=make_page(a[8:],start=8,
+                        first="2026-10-09T07:16:05Z",last="2026-10-09T07:16:08Z")
+    elif variant=="cursor_offset_invalid":
+        page0=make_page(a[:8],start=0,total=15,page_size=8)
+        page1=make_page(a[8:],start=9,total=15,page_size=8,
+                        first="2026-10-09T07:16:05Z",last="2026-10-09T07:16:08Z")
+    else:
+        page0=make_page(a[:8],start=0,total=14,page_size=8)
+        page1=make_page(a[8:],start=8,total=14,page_size=8,
+                        first="2026-10-09T07:16:05Z",last="2026-10-09T07:16:08Z")
+    with pytest.raises(SourceReplayRefused):
+        checked((page0,page1),evaluated_at_utc="2026-10-09T07:16:10Z")
