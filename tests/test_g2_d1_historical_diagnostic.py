@@ -253,7 +253,7 @@ def test_q125_development_calendar_query_is_sql_bounded_before_oos():
                               if "FROM historical_sessions" in sql)
         assert "trade_date>=?" in sessions_query[0]
         assert "trade_date<=?" in sessions_query[0]
-        assert sessions_query[1] == ["SBER", "2021-01-01", "2021-02-15"]
+        assert sessions_query[1] == [_root_key("SBER"), "2021-01-01", "2021-02-15"]
         ranges_query = next((sql, params) for sql, params in proxy.calls
                             if "FROM historical_session_verified_ranges" in sql)
         assert "till_date>=?" in ranges_query[0]
