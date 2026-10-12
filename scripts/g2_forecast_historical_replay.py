@@ -6,7 +6,7 @@ zero trend signals. No network provider or journal is constructed.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import math
@@ -80,12 +80,19 @@ def replay_existing_forecast(
         item = series[tf]
         if not isinstance(item, CandleSeries) or item.instrument != instrument or item.timeframe != tf:
             raise ValueError("timeframe or exact SECID mismatch")
-        previous = None
+        previous_begin = None
+        previous_end = None
         for candle in item.candles:
             begin, end = _when(candle.begin), _when(candle.end)
-            if end <= begin or (previous is not None and begin <= previous):
+            if end <= begin or (previous_begin is not None and begin <= previous_begin):
                 raise ValueError("duplicate or unsorted candle chronology")
-            previous = begin
+            # Sorting begins alone does not prove the bars are disjoint.
+            # Reject overlap even when each H1/M15 bar has valid duration.
+            if previous_end is not None and begin < previous_end:
+                raise ValueError("overlapping timeframe candle intervals")
+            if tf == "D1" and end - begin > timedelta(days=1):
+                raise ValueError("D1 candle longer than one day")
+            previous_begin, previous_end = begin, end
             if type(candle.completed) is not bool:
                 raise ValueError("completion must be explicitly boolean")
             if not candle.completed or end > cutoff:
@@ -104,7 +111,6 @@ def replay_existing_forecast(
                 raise ValueError("inconsistent OHLC")
     provider = _OfflinePrices(instrument, series, cutoff)
     # Use the same retained windows as the current canonical builder.
-    from datetime import timedelta
     day = cutoff.astimezone(MOSCOW).date()
     lookbacks = {"D1":260, "H1":60, "M15":20}
     counts = {tf:provider.candles_for_instrument(

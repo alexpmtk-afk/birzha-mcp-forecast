@@ -150,3 +150,42 @@ def test_original_engine_result_cannot_change_between_prediction_and_assessment(
     replay["research_engine_result"]["engine_payload"]["horizons"][0]["expected_move_pct"] = 999.0
     with pytest.raises(ValueError,match="changed"):
         module.evaluate_replay_outcomes(replay,future=future,expected_session_dates=dates)
+
+
+def test_overlapping_valid_duration_hourly_bars_are_refused():
+    """Distinct increasing start times may still double count one price interval."""
+    instrument, series = fixture()
+    first, second = series["H1"].candles[:2]
+    changed_begin = datetime.fromisoformat(first.begin) + timedelta(minutes=30)
+    # The modified second bar remains exactly 1h (minus 1 second) long.
+    overlapping = replace(
+        second,
+        begin=changed_begin.isoformat(),
+        end=(changed_begin + timedelta(hours=1) - timedelta(seconds=1)).isoformat(),
+    )
+    series["H1"] = replace(
+        series["H1"], candles=(first, overlapping) + series["H1"].candles[2:]
+    )
+    assert datetime.fromisoformat(overlapping.begin) > datetime.fromisoformat(first.begin)
+    assert datetime.fromisoformat(overlapping.begin) < datetime.fromisoformat(first.end)
+    with pytest.raises(ValueError, match="overlapping"):
+        module.replay_existing_forecast(
+            instrument, cutoff_at=CUTOFF, series=series, source_sha256=SHA
+        )
+
+
+def test_forty_eight_hour_d1_candle_is_not_one_completed_session():
+    """An anomalous multi-day D1 must not satisfy the 50-bar input gate."""
+    instrument, series = fixture()
+    last = series["D1"].candles[-1]
+    changed_end = datetime.fromisoformat(last.begin) + timedelta(days=2)
+    assert changed_end < datetime.fromisoformat(CUTOFF)
+    series["D1"] = replace(
+        series["D1"],
+        candles=series["D1"].candles[:-1] + (
+            replace(last, end=changed_end.isoformat()),),
+    )
+    with pytest.raises(ValueError, match="D1 candle longer"):
+        module.replay_existing_forecast(
+            instrument, cutoff_at=CUTOFF, series=series, source_sha256=SHA
+        )
