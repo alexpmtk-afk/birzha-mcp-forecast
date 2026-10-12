@@ -504,7 +504,7 @@ def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, s
     "counts", "boolean_count", "accuracy", "boolean_accuracy", "duplicate_row", "missing_horizon",
     "missing_group", "duplicate_group", "included", "correctness", "return", "reference",
     "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
-    "unknown_status", "version", "evidence_claim", "limits", "extra_field",
+    "unknown_status", "version", "evidence_claim", "limits", "coverage", "abstention_reason", "extra_field",
 ])
 def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
     ledger = tmp_path / "pilot.sqlite3"
@@ -556,6 +556,10 @@ def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect
         report["future_evidence_validation"] = "Independent source authenticated"
     elif defect == "limits":
         report["limits"] = []
+    elif defect == "coverage":
+        report["coverage_summary"]["directional_rows"] += 1
+    elif defect == "abstention_reason":
+        row["abstention_reasons"] = ["invented cause"]
     else:
         row["unsupported"] = True
     _resign_report(report)
