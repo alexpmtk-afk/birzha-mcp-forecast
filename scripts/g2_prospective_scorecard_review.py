@@ -34,7 +34,7 @@ ROW_FIELDS = {
     "candidate_correct", "always_up_correct_same_row",
     "forecast_record_version", "engine_version", "abstention_reasons",
     "explicit_abstention_fields_present", "expected_move_pct", "implied_target_price",
-    "absolute_move_error_percentage_points",
+    "absolute_move_error_percentage_points", "flat_price_absolute_error_percentage_points",
 }
 COUNT_FIELDS = {
     "forecasts_frozen", "outcomes_completed", "outcomes_pending", "directional_forecasts",
@@ -42,7 +42,8 @@ COUNT_FIELDS = {
     "always_up_correct_same_rows", "numeric_move_forecasts", "numeric_move_forecasts_scored",
 }
 RATE_FIELDS = {"candidate_accuracy", "always_up_accuracy_same_rows", "accuracy_difference_percentage_points",
-               "directional_coverage_of_frozen_forecasts", "mean_absolute_move_error_percentage_points"}
+               "directional_coverage_of_frozen_forecasts", "mean_absolute_move_error_percentage_points",
+               "flat_price_mean_absolute_error_percentage_points", "numeric_minus_flat_error_percentage_points"}
 
 
 def _refuse(message: str) -> None:
@@ -92,7 +93,7 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
     if report["storage_format"] != expected_format:
         _refuse("Формат журнала не соответствует его версии.")
     if (report["comparison"] != "fixed always-UP reference on the same completed outcomes as directional forecasts" or
-            report["metric"] != "horizon-end close direction and optional expected-move absolute error; a flat return is incorrect for either directional call"):
+            report["metric"] != "horizon-end close direction and optional expected-move absolute error against fixed zero-move price on the same rows; a flat return is incorrect for either directional call"):
         _refuse("Правило сравнения или способ оценки изменены.")
     expected_evidence = (
         "SQLite pilot: source-byte hash binding and recorded price/time consistency only; individual future candles are not preserved as structured evidence."
@@ -150,7 +151,8 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             _refuse("Исходная цена должна быть положительной.")
         expected_move = row["expected_move_pct"]
         if expected_move is None:
-            if row["implied_target_price"] is not None or row["absolute_move_error_percentage_points"] is not None:
+            if (row["implied_target_price"] is not None or row["absolute_move_error_percentage_points"] is not None
+                    or row["flat_price_absolute_error_percentage_points"] is not None):
                 _refuse("Числовая оценка указана без исходного числового прогноза.")
         else:
             expected_move = _finite_number(expected_move, "ожидаемое движение")
@@ -177,7 +179,7 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             if any(row[field] is not None for field in (
                 "actual_return_pct", "target_close", "target_session", "target_session_end",
                 "future_source_sha256", "outcome_sha256", "candidate_correct", "always_up_correct_same_row",
-                "absolute_move_error_percentage_points",
+                "absolute_move_error_percentage_points", "flat_price_absolute_error_percentage_points",
             )):
                 _refuse("Ожидающий исход содержит выдуманную цену или оценку.")
         else:
@@ -190,6 +192,9 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             expected_error = None if expected_move is None else round(abs(expected_move - actual), 8)
             if row["absolute_move_error_percentage_points"] != expected_error:
                 _refuse("Ошибка числового прогноза не соответствует записанному исходу.")
+            flat_error = None if expected_move is None else round(abs(actual), 8)
+            if row["flat_price_absolute_error_percentage_points"] != flat_error:
+                _refuse("Ошибка ориентира постоянной цены не соответствует исходу.")
             end = _time(row["target_session_end"], "время закрытия исхода")
             try:
                 day = date.fromisoformat(row["target_session"])
@@ -235,6 +240,8 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
         n = len(scored)
         numeric_errors = [row["absolute_move_error_percentage_points"] for row in rows
                           if row["absolute_move_error_percentage_points"] is not None]
+        flat_errors = [row["flat_price_absolute_error_percentage_points"] for row in rows
+                       if row["flat_price_absolute_error_percentage_points"] is not None]
         accuracy, up_accuracy = (candidate / n, baseline / n) if n else (None, None)
         expected = {
             "market": key[0], "secid": key[1], "horizon_sessions": key[2],
@@ -248,6 +255,8 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             "numeric_move_forecasts": sum(row["expected_move_pct"] is not None for row in rows),
             "numeric_move_forecasts_scored": len(numeric_errors),
             "mean_absolute_move_error_percentage_points": sum(numeric_errors) / len(numeric_errors) if numeric_errors else None,
+            "flat_price_mean_absolute_error_percentage_points": sum(flat_errors) / len(flat_errors) if flat_errors else None,
+            "numeric_minus_flat_error_percentage_points": (sum(numeric_errors) - sum(flat_errors)) / len(numeric_errors) if numeric_errors else None,
             "always_up_correct_same_rows": baseline, "candidate_accuracy": accuracy,
             "always_up_accuracy_same_rows": up_accuracy,
             "accuracy_difference_percentage_points": (accuracy - up_accuracy) * 100.0 if n else None,
@@ -342,6 +351,7 @@ def render_scorecard_csv(report: dict[str, Any]) -> str:
                      "Изменение цены в процентах", "Участвует в сравнении", "Причины исключения",
                      "Исходные причины явного отказа", "Ожидаемое движение в процентах",
                      "Расчётная цена в конце срока", "Абсолютная ошибка в процентных пунктах",
+                     "Ошибка постоянной цены в процентных пунктах",
                      "Результат прогноза", "Результат правила всегда рост", "Контрольная сумма прогноза",
                      "Контрольная сумма исхода", "Контрольная сумма отчёта"])
 
@@ -363,6 +373,7 @@ def render_scorecard_csv(report: dict[str, Any]) -> str:
                   "; ".join(REASONS[reason] for reason in row["comparison_exclusion_reasons"]),
                   "; ".join(row["abstention_reasons"]), row["expected_move_pct"],
                   row["implied_target_price"], row["absolute_move_error_percentage_points"],
+                  row["flat_price_absolute_error_percentage_points"],
                   result(row["candidate_correct"]), result(row["always_up_correct_same_row"]),
                   row["forecast_sha256"], row["outcome_sha256"], report["report_sha256"]]
         writer.writerow([cell(value) for value in values])

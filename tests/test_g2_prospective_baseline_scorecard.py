@@ -511,7 +511,8 @@ def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, s
     "missing_group", "duplicate_group", "included", "correctness", "return", "reference",
     "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
     "unknown_status", "version", "evidence_claim", "limits", "coverage", "market_coverage",
-    "horizon_coverage", "abstention_reason", "abstention_field_flag", "numeric_error", "numeric_price", "extra_field",
+    "horizon_coverage", "abstention_reason", "abstention_field_flag", "numeric_error", "numeric_price",
+    "flat_price_error", "extra_field",
 ])
 def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
     ledger = tmp_path / "pilot.sqlite3"
@@ -577,6 +578,8 @@ def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect
         row["absolute_move_error_percentage_points"] = 1.0
     elif defect == "numeric_price":
         row["implied_target_price"] = 100.0
+    elif defect == "flat_price_error":
+        row["flat_price_absolute_error_percentage_points"] = 0.0
     else:
         row["unsupported"] = True
     _resign_report(report)
@@ -704,13 +707,17 @@ def test_numeric_move_forecast_is_scored_only_after_a_realized_outcome(tmp_path:
             assert row["expected_move_pct"] == 5.0
             assert row["implied_target_price"] == 105.0
             assert row["absolute_move_error_percentage_points"] == 5.0
+            assert row["flat_price_absolute_error_percentage_points"] == 10.0
         else:
             assert row["expected_move_pct"] is None
             assert row["implied_target_price"] is None
             assert row["absolute_move_error_percentage_points"] is None
+            assert row["flat_price_absolute_error_percentage_points"] is None
     assert all(group["numeric_move_forecasts"] == 1 and
                group["numeric_move_forecasts_scored"] == 1 and
-               group["mean_absolute_move_error_percentage_points"] == 5.0
+               group["mean_absolute_move_error_percentage_points"] == 5.0 and
+               group["flat_price_mean_absolute_error_percentage_points"] == 10.0 and
+               group["numeric_minus_flat_error_percentage_points"] == -5.0
                for group in report["groups"])
     csv_rows = list(csv.DictReader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))
     assert all(row["Расчётная цена в конце срока"] == "105.0" for row in csv_rows if row["Номер прогноза"] == "f-up")
@@ -724,7 +731,10 @@ def test_numeric_move_forecast_is_scored_only_after_a_realized_outcome(tmp_path:
     assert pending["coverage_summary"]["numeric_move_scored_rows"] == 0
     assert all(row["absolute_move_error_percentage_points"] is None
                for row in pending["observations"] if row["forecast_id"] == "f-up")
-    assert all(group["mean_absolute_move_error_percentage_points"] is None for group in pending["groups"])
+    assert all(group["mean_absolute_move_error_percentage_points"] is None and
+               group["flat_price_mean_absolute_error_percentage_points"] is None and
+               group["numeric_minus_flat_error_percentage_points"] is None
+               for group in pending["groups"])
 
 
 @pytest.mark.parametrize("value", [True, -100.0, "five"])
@@ -869,6 +879,7 @@ def _disjoint_copy(source: Path, target: Path) -> None:
 def test_batch_pools_same_instrument_without_averaging_accuracy(tmp_path: Path) -> None:
     first, second = tmp_path / "first.sqlite3", tmp_path / "second.sqlite3"
     _make_ledger(first)
+    _set_synthetic_expected_move(first, 5.0)
     _disjoint_copy(first, second)
     with sqlite3.connect(second) as db:
         db.execute("DELETE FROM outcomes WHERE forecast_id='f-down-second'")
@@ -884,6 +895,11 @@ def test_batch_pools_same_instrument_without_averaging_accuracy(tmp_path: Path) 
     assert group["candidate_accuracy"] == 2 / 3
     assert group["candidate_accuracy"] != (a["groups"][0]["candidate_accuracy"] + b["groups"][0]["candidate_accuracy"]) / 2
     assert group["always_up_accuracy_same_rows"] == 1.
+    assert group["numeric_move_forecasts"] == 2
+    assert group["numeric_move_forecasts_scored"] == 2
+    assert group["mean_absolute_move_error_percentage_points"] == 5.0
+    assert group["flat_price_mean_absolute_error_percentage_points"] == 10.0
+    assert group["numeric_minus_flat_error_percentage_points"] == -5.0
     coverage = combined["coverage_summary"]
     assert coverage["forecast_horizon_rows"] == 18
     assert coverage["directional_rows"] == 12

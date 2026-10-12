@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 LEDGER_VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 DUCKDB_LEDGER_VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
-SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V5"
+SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V6"
 HORIZONS = (5, 10, 20)
 RECORD_VERSIONS = {
     "FORECAST_RECORD_V1_PROTOCOL_08",
@@ -520,6 +520,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 "expected_move_pct": expected_move,
                 "implied_target_price": implied_price,
                 "absolute_move_error_percentage_points": None,
+                "flat_price_absolute_error_percentage_points": None,
                 "outcome_status": "PENDING", "comparison_included": False,
                 "comparison_exclusion_reasons": reasons,
                 "actual_return_pct": None, "target_close": None,
@@ -550,6 +551,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
             observation["absolute_move_error_percentage_points"] = round(
                 abs(observation["expected_move_pct"] - actual_return), 8
             )
+            observation["flat_price_absolute_error_percentage_points"] = round(abs(actual_return), 8)
         observation["outcome_sha256"] = _sha(_canonical_json(outcome))
         direction = linked["decision"]
         if direction in {"UP", "DOWN"}:
@@ -573,6 +575,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         bucket["numeric"] = bucket.get("numeric", 0) + int(observation["expected_move_pct"] is not None)
         bucket["numeric_scored"] = bucket.get("numeric_scored", 0) + int(observation["absolute_move_error_percentage_points"] is not None)
         bucket["numeric_error_sum"] = bucket.get("numeric_error_sum", 0.0) + (observation["absolute_move_error_percentage_points"] or 0.0)
+        bucket["flat_error_sum"] = bucket.get("flat_error_sum", 0.0) + (observation["flat_price_absolute_error_percentage_points"] or 0.0)
 
     rows: list[dict[str, Any]] = []
     for (market, secid, horizon), value in sorted(groups.items()):
@@ -598,6 +601,14 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 value.get("numeric_error_sum", 0.0) / value["numeric_scored"]
                 if value.get("numeric_scored", 0) else None
             ),
+            "flat_price_mean_absolute_error_percentage_points": (
+                value.get("flat_error_sum", 0.0) / value["numeric_scored"]
+                if value.get("numeric_scored", 0) else None
+            ),
+            "numeric_minus_flat_error_percentage_points": (
+                (value.get("numeric_error_sum", 0.0) - value.get("flat_error_sum", 0.0)) / value["numeric_scored"]
+                if value.get("numeric_scored", 0) else None
+            ),
             "candidate_correct": value["candidate_correct"],
             "always_up_correct_same_rows": value["always_up_correct"],
             "candidate_accuracy": candidate_accuracy,
@@ -619,7 +630,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         ),
         "read_only": True,
         "comparison": "fixed always-UP reference on the same completed outcomes as directional forecasts",
-        "metric": "horizon-end close direction and optional expected-move absolute error; a flat return is incorrect for either directional call",
+        "metric": "horizon-end close direction and optional expected-move absolute error against fixed zero-move price on the same rows; a flat return is incorrect for either directional call",
         "groups": rows,
         "observations": observations,
         "coverage_summary": _coverage_summary(observations),
@@ -754,6 +765,9 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
         if row["mean_absolute_move_error_percentage_points"] is not None:
             error = f"{row['mean_absolute_move_error_percentage_points']:.4f}".replace(".", ",")
             lines.append(f"Средняя абсолютная ошибка движения: {error} процентного пункта.")
+            flat_error = f"{row['flat_price_mean_absolute_error_percentage_points']:.4f}".replace(".", ",")
+            difference = f"{row['numeric_minus_flat_error_percentage_points']:+.4f}".replace(".", ",")
+            lines.append(f"Ориентир «цена не изменилась» на тех же строках: {flat_error} процентного пункта; разница ошибки прогноза: {difference}.")
         scored = row["directional_forecasts_scored"]
         lines.append(f"Проверено направленных прогнозов: {scored}.")
         if scored:
@@ -781,7 +795,7 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
             if observation["expected_move_pct"] is not None:
                 lines.append(f"Ожидаемое движение: {observation['expected_move_pct']}%. Расчётная цена в конце срока: {observation['implied_target_price']}.")
                 if observation["absolute_move_error_percentage_points"] is not None:
-                    lines.append(f"Абсолютная ошибка движения: {observation['absolute_move_error_percentage_points']} процентного пункта.")
+                    lines.append(f"Абсолютная ошибка движения: {observation['absolute_move_error_percentage_points']} процентного пункта. Ориентир «цена не изменилась»: {observation['flat_price_absolute_error_percentage_points']} процентного пункта.")
             if observation["outcome_status"] == "PENDING":
                 lines.append("Исход: ожидается.")
             else:

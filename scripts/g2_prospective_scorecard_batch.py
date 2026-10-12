@@ -58,6 +58,10 @@ def combine_scorecards(reports: list[dict[str, Any]]) -> dict[str, Any]:
         up_correct = sum(row["always_up_correct_same_row"] for row in scored)
         accuracy, up_accuracy = (correct / n, up_correct / n) if n else (None, None)
         directional = sum(row["decision"] in ("UP", "DOWN") for row in rows)
+        numeric_errors = [row["absolute_move_error_percentage_points"] for row in rows
+                          if row["absolute_move_error_percentage_points"] is not None]
+        flat_errors = [row["flat_price_absolute_error_percentage_points"] for row in rows
+                       if row["flat_price_absolute_error_percentage_points"] is not None]
         groups.append({
             "market": market, "secid": secid, "horizon_sessions": horizon,
             "forecasts_frozen": len(rows),
@@ -67,6 +71,11 @@ def combine_scorecards(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "explicit_abstentions": sum(row["decision"] == "ABSTAIN" for row in rows),
             "neutral_forecasts": sum(row["decision"] == "NEUTRAL" for row in rows),
             "directional_forecasts_scored": n, "candidate_correct": correct,
+            "numeric_move_forecasts": sum(row["expected_move_pct"] is not None for row in rows),
+            "numeric_move_forecasts_scored": len(numeric_errors),
+            "mean_absolute_move_error_percentage_points": sum(numeric_errors) / len(numeric_errors) if numeric_errors else None,
+            "flat_price_mean_absolute_error_percentage_points": sum(flat_errors) / len(flat_errors) if flat_errors else None,
+            "numeric_minus_flat_error_percentage_points": (sum(numeric_errors) - sum(flat_errors)) / len(numeric_errors) if numeric_errors else None,
             "always_up_correct_same_rows": up_correct, "candidate_accuracy": accuracy,
             "always_up_accuracy_same_rows": up_accuracy,
             "accuracy_difference_percentage_points": (accuracy - up_accuracy) * 100. if n else None,
