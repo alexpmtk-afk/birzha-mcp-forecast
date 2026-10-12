@@ -87,6 +87,14 @@ class OriginalM1LocalIntake:
         self.db=sqlite3.connect(str(dest),isolation_level=None,timeout=5)
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA foreign_keys=ON")
+        # Force durable sync explicitly; do not rely on SQLite build defaults.
+        self.db.execute("PRAGMA synchronous=FULL")
+        if self.db.execute("PRAGMA synchronous").fetchone() != (2,):
+            self.db.close()
+            raise LocalIntakeRefused("full SQLite durability unavailable")
+        if self.db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            self.db.close()
+            raise LocalIntakeCollision("SQLite file integrity check failed")
         before={v[0] for v in self.db.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
         triggers={v[0] for v in self.db.execute(
@@ -95,7 +103,11 @@ class OriginalM1LocalIntake:
         if before and (before!={"m1_local_meta","m1_local_receipts"} or not protected.issubset(triggers)):
             self.db.close()
             raise LocalIntakeRefused("foreign, incomplete, or weakened existing intake journal")
+        # All schema elements and the version row must become visible
+        # together. A process crash during first init rolls back a complete
+        # transaction instead of leaving half-created tables/triggers.
         self.db.executescript("""
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS m1_local_meta (version TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS m1_local_receipts (
               seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,8 +124,9 @@ class OriginalM1LocalIntake:
             CREATE TRIGGER IF NOT EXISTS m1_local_no_delete
               BEFORE DELETE ON m1_local_receipts
               BEGIN SELECT RAISE(ABORT,'append-only M1 receipt'); END;
+            INSERT OR IGNORE INTO m1_local_meta VALUES ('G2_FIRST_LOCAL_M1_INTAKE_V1');
+            COMMIT;
         """)
-        self.db.execute("INSERT OR IGNORE INTO m1_local_meta VALUES (?)",(VERSION,))
         if self.db.execute("SELECT version FROM m1_local_meta").fetchall()!=[(VERSION,)]:
             self.db.close()
             raise LocalIntakeRefused("incorrect intake journal version")
