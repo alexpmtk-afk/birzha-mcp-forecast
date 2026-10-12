@@ -208,6 +208,7 @@ class SingleDuckDBProspectiveStagingJournal:
               forecast_id VARCHAR PRIMARY KEY,payload_hash VARCHAR NOT NULL,payload_json VARCHAR NOT NULL,
               symbol VARCHAR NOT NULL,secid VARCHAR NOT NULL,created_at_t0 VARCHAR NOT NULL,
               engine_version VARCHAR NOT NULL,inserted_at TIMESTAMP DEFAULT current_timestamp)""")
+            self._fault("DURING_INITIAL_SCHEMA")
             self.db.execute("""CREATE TABLE IF NOT EXISTS outcome_records (
               outcome_id VARCHAR PRIMARY KEY,forecast_id VARCHAR NOT NULL,horizon_sessions INTEGER NOT NULL,
               payload_hash VARCHAR NOT NULL,payload_json VARCHAR NOT NULL,
