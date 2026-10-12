@@ -40,6 +40,7 @@ on:
       - chatgpt/g2-q094-snapshot-parallel-session-20261012
       - chatgpt/g2-q095-097-trust-calendar-release-audit-20261012
       - chatgpt/g2-q098-original-byte-replay-and-release-manifest-pin-20261012
+      - chatgpt/g2-q099-operational-analysis-issuance-preflight-20261012
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
