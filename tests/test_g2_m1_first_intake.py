@@ -291,3 +291,92 @@ def test_committed_original_receipt_and_immutable_hash_survive_reopen(tmp_path):
         repeat=append(reopened)
         assert repeat["status"]=="DUPLICATE_IDENTICAL"
         assert repeat["first_local_received_utc"]==original["first_local_received_utc"]
+
+
+def test_two_connections_simultaneous_same_original_are_idempotent(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    with opened(tmp_path):
+        pass
+    barrier=Barrier(2)
+    def worker():
+        with opened(tmp_path) as j:
+            barrier.wait(timeout=15)
+            return append(j)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures=[pool.submit(worker) for _ in range(2)]
+        result=[f.result(timeout=20) for f in futures]
+    assert {x["status"] for x in result}=={"NEW_LOCAL_RECEIPT","DUPLICATE_IDENTICAL"}
+    assert {x["receipt_seq"] for x in result}=={1}
+    with opened(tmp_path) as j:
+        assert j.audit()["receipt_count"]==1
+        assert j.pages(capture_key="TEST_CAPTURE",instrument=inst())==(make_page(),)
+
+
+def test_competing_different_original_metadata_same_key_has_one_winner(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    with opened(tmp_path):
+        pass
+    barrier=Barrier(2)
+    def worker(ctype):
+        with opened(tmp_path) as j:
+            barrier.wait(timeout=15)
+            try:
+                return append(j,replace(make_page(),content_type=ctype))["status"]
+            except LocalIntakeCollision:
+                return "COLLISION"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures=[pool.submit(worker,ctype) for ctype in ("application/json","text/plain")]
+        result=[f.result(timeout=20) for f in futures]
+    assert sorted(result)==["COLLISION","NEW_LOCAL_RECEIPT"]
+    with opened(tmp_path) as j:
+        assert j.audit()["receipt_count"]==1
+
+
+def test_read_handoff_is_one_snapshot_despite_competing_new_page(tmp_path,monkeypatch):
+    from birzha.application import g2_m1_first_intake as module
+    with opened(tmp_path) as reader:
+        append(reader)
+        with opened(tmp_path) as writer:
+            # Keep contention bounded; this is a disposable test DB only.
+            writer.db.execute("PRAGMA busy_timeout=35")
+            called=[]
+            original=module.prepare_m15_staging_preflight
+            def concurrent_writer(**kwargs):
+                called.append(True)
+                assert reader.db.in_transaction
+                # After Q-087 page-body selection but before the Q-090
+                # receipt metadata query, another connection attempts
+                # to commit a late additional page to the SAME capture.
+                new_page=make_page([],start=15)
+                try:
+                    append(writer,new_page)
+                except sqlite3.OperationalError:
+                    # Rollback-journal SQLite blocks its COMMIT while this
+                    # reader's snapshot is active; WAL may permit commit.
+                    pass
+                return original(**kwargs)
+            monkeypatch.setattr(module,"prepare_m15_staging_preflight",
+                                concurrent_writer)
+            result=reader.original_capture_handoff(
+                capture_key="TEST_CAPTURE",instrument=inst(),
+                candidate=candidate(),session_notice=notice(),
+                evaluated_at=AT+timedelta(seconds=5))
+            assert called==[True]
+            assert len(result["manifest"]["original_receipts"])==1
+            assert result["q088"]["source_page_count"]==1
+            assert reader.db.in_transaction is False
+            assert result["production_authorized"] is False
+
+
+def test_handoff_snapshot_rolls_back_on_refusal(tmp_path):
+    with opened(tmp_path) as j:
+        append(j)
+        with pytest.raises(LocalIntakeRefused):
+            j.original_capture_handoff(
+                capture_key="TEST_CAPTURE",instrument=inst(),
+                candidate=replace(candidate(),close=999.),
+                session_notice=notice(),evaluated_at=AT+timedelta(seconds=5))
+        assert j.db.in_transaction is False
+        assert append(j,key="AFTER_REFUSAL")["status"]=="NEW_LOCAL_RECEIPT"
