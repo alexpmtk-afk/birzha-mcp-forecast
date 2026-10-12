@@ -212,7 +212,14 @@ def replay_completed_m15(*, instrument: Instrument, pages: tuple[OriginalM1Page,
         for item in raw_rows:
             if not isinstance(item, list) or len(item) != len(cols):
                 raise SourceReplayRefused("malformed original M1 row")
-            page_rows.append(_minute(dict(zip(cols, item))))
+            minute = _minute(dict(zip(cols, item)))
+            # Causality applies to every retained M1, not only the 15
+            # selected minutes. An unselected future row would otherwise
+            # leak into a supposedly historical source commitment.
+            if minute["end"] > received:
+                raise SourceReplayRefused(
+                    "original source page includes M1 not completed by its own receipt")
+            page_rows.append(minute)
         cursor = payload.get("candles.cursor")
         cursor_present = cursor is not None
         if saw_cursor is not None and saw_cursor != cursor_present:
