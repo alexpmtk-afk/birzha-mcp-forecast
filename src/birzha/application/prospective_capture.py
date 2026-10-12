@@ -253,8 +253,14 @@ class ProspectivePilotLedger:
                 capture_at=_when(receipt["captured_at"])
                 if observed<=capture_at or completed_times[0]<=capture_at:
                     raise AdmissionRefused("outcome must mature AFTER frozen capture")
-                if any(day<=_when(forecast["created_at_t0"]).date().isoformat() for day in evidence.session_dates):
-                    raise AdmissionRefused("outcome session not after forecast T0")
+                # A forecast at 23:30 UTC is already on the NEXT
+                # Moscow-local calendar date. MOEX session days are MSK,
+                # never UTC calendar dates.
+                forecast_moscow_day = _when(
+                    forecast["created_at_t0"]
+                ).astimezone(MOEX_TIMEZONE).date().isoformat()
+                if any(day<=forecast_moscow_day for day in evidence.session_dates):
+                    raise AdmissionRefused("outcome MOEX session not after forecast local date")
                 now=_when(_stamp(self._clock()))
                 if now<observed:
                     raise AdmissionRefused("outcome observation cannot come from the future")
@@ -323,9 +329,20 @@ class ProspectivePilotLedger:
             content=json.loads(receipt)
             if content["forecast_sha256"]!=digest or content["source_sha256"]!=src_digest:
                 raise ImmutableCollision(f"unbound receipt: {fid}")
+        forecast_dates = {
+            fid:_when(json.loads(raw)["created_at_t0"]).astimezone(
+                MOEX_TIMEZONE
+            ).date().isoformat()
+            for fid,raw,*_unused in forecasts
+        }
         for fid,h,body,digest,src,src_digest in outcomes:
             if _sha(body.encode("utf8"))!=digest or _sha(src)!=src_digest or json.loads(body)["future_source_sha256"]!=src_digest:
                 raise ImmutableCollision(f"corrupt outcome row: {fid}/{h}")
+            result = json.loads(body)
+            if (fid not in forecast_dates
+                or result["target_session"] <= forecast_dates[fid]):
+                raise ImmutableCollision(
+                    f"persisted pilot target MOEX session not after forecast date: {fid}/{h}")
         return {"version":VERSION,"captures":len(forecasts),"outcomes":len(outcomes),
             "forecast_ids":[x[0] for x in forecasts],"pilot_only":True,
             "note":"local hash integrity does not prove external timestamp or source authenticity"}
