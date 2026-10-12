@@ -122,8 +122,14 @@ def _validate_future(data, captured_at, evidence, horizon, now):
         raise pilot.AdmissionRefused("invalid completed close")
     if now < observed or observed <= pilot._when(captured_at) or ends[0] <= pilot._when(captured_at):
         raise pilot.AdmissionRefused("outcome source was not truly observed after capture")
-    if any(day <= pilot._when(data["created_at_t0"]).date().isoformat() for day in evidence.session_dates):
-        raise pilot.AdmissionRefused("future sessions precede forecast")
+    # MOEX trading sessions have MOSCOW calendar dates. A late UTC
+    # forecast may already belong to the NEXT Moscow date; comparing
+    # session strings against the UTC date admits same-session lookahead.
+    forecast_moscow_day = pilot._when(data["created_at_t0"]).astimezone(
+        pilot.MOEX_TIMEZONE
+    ).date().isoformat()
+    if any(day <= forecast_moscow_day for day in evidence.session_dates):
+        raise pilot.AdmissionRefused("future MOEX session not after forecast local date")
     direction = next(x["direction"] for x in data["horizons"] if x["sessions"] == horizon)
     close = float(evidence.candle_close[-1])
     ref = float(data["reference_price"])
@@ -293,6 +299,16 @@ class SingleDuckDBProspectiveStagingJournal:
                 raise pilot.ImmutableCollision("future input contradicts canonical terminal facts")
             if dates != expected or dates != sorted(set(dates)):
                 raise pilot.ImmutableCollision("persisted future session/calendar mismatch")
+            # Cold reopen must re-check the same exchange-local T0
+            # boundary as first write. An otherwise hash-consistent
+            # legacy row is not retroactively declared causal.
+            forecast = json.loads(canonical[fid][1])
+            forecast_moscow_day = pilot._when(
+                forecast["created_at_t0"]
+            ).astimezone(pilot.MOEX_TIMEZONE).date().isoformat()
+            if any(day <= forecast_moscow_day for day in dates):
+                raise pilot.ImmutableCollision(
+                    "persisted future session not after MOEX forecast date")
             if _sha(_json(expected).encode("utf-8"))!=meta["calendar_sha256"]:
                 raise pilot.ImmutableCollision("future calendar no longer matches input evidence")
             try:
