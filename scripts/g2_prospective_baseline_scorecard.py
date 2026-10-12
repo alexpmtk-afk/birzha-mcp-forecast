@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 LEDGER_VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 DUCKDB_LEDGER_VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
-SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V4"
+SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V5"
 HORIZONS = (5, 10, 20)
 RECORD_VERSIONS = {
     "FORECAST_RECORD_V1_PROTOCOL_08",
@@ -489,6 +489,19 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 reasons.append("NEUTRAL_DECISION")
             elif decision == "ABSTAIN":
                 reasons.append("EXPLICIT_ABSTENTION")
+            raw_move = row.get("expected_move_pct")
+            expected_move = None if raw_move is None else _finite_number(raw_move, f"expected move {fid}/{horizon}")
+            if decision == "ABSTAIN" and expected_move is not None:
+                raise ScorecardRefused(f"abstention cannot carry a numeric move forecast: {fid}/{horizon}")
+            implied_price = None
+            if expected_move is not None:
+                reference = _finite_number(forecast.get("reference_price"), f"reference price {fid}")
+                raw_price = reference * (1 + expected_move / 100)
+                if reference <= 0 or not math.isfinite(raw_price) or raw_price <= 0:
+                    raise ScorecardRefused(f"numeric move implies an invalid price: {fid}/{horizon}")
+                implied_price = round(raw_price, 8)
+                if implied_price <= 0:
+                    raise ScorecardRefused(f"numeric move rounds to an invalid price: {fid}/{horizon}")
             observation = {
                 "forecast_id": fid, "market": key[0], "secid": key[1],
                 "horizon_sessions": horizon, "decision": decision,
@@ -504,6 +517,9 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 "capture_receipt_sha256": _sha(_canonical_json(receipt)),
                 "capture_source_sha256": receipt.get("source_sha256"),
                 "reference_price": forecast.get("reference_price"),
+                "expected_move_pct": expected_move,
+                "implied_target_price": implied_price,
+                "absolute_move_error_percentage_points": None,
                 "outcome_status": "PENDING", "comparison_included": False,
                 "comparison_exclusion_reasons": reasons,
                 "actual_return_pct": None, "target_close": None,
@@ -530,6 +546,10 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         for field in ("target_close", "target_session", "target_session_end", "future_source_sha256"):
             observation[field] = outcome.get(field)
         observation["actual_return_pct"] = actual_return
+        if observation["expected_move_pct"] is not None:
+            observation["absolute_move_error_percentage_points"] = round(
+                abs(observation["expected_move_pct"] - actual_return), 8
+            )
         observation["outcome_sha256"] = _sha(_canonical_json(outcome))
         direction = linked["decision"]
         if direction in {"UP", "DOWN"}:
@@ -550,6 +570,9 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         bucket["scored"] = bucket.get("scored", 0) + int(observation["comparison_included"])
         bucket["candidate_correct"] += int(observation["candidate_correct"] is True)
         bucket["always_up_correct"] += int(observation["always_up_correct_same_row"] is True)
+        bucket["numeric"] = bucket.get("numeric", 0) + int(observation["expected_move_pct"] is not None)
+        bucket["numeric_scored"] = bucket.get("numeric_scored", 0) + int(observation["absolute_move_error_percentage_points"] is not None)
+        bucket["numeric_error_sum"] = bucket.get("numeric_error_sum", 0.0) + (observation["absolute_move_error_percentage_points"] or 0.0)
 
     rows: list[dict[str, Any]] = []
     for (market, secid, horizon), value in sorted(groups.items()):
@@ -569,6 +592,12 @@ def build_scorecard(path: Path) -> dict[str, Any]:
             "explicit_abstentions": value["abstain"],
             "neutral_forecasts": value["neutral"],
             "directional_forecasts_scored": scored,
+            "numeric_move_forecasts": value.get("numeric", 0),
+            "numeric_move_forecasts_scored": value.get("numeric_scored", 0),
+            "mean_absolute_move_error_percentage_points": (
+                value.get("numeric_error_sum", 0.0) / value["numeric_scored"]
+                if value.get("numeric_scored", 0) else None
+            ),
             "candidate_correct": value["candidate_correct"],
             "always_up_correct_same_rows": value["always_up_correct"],
             "candidate_accuracy": candidate_accuracy,
@@ -590,12 +619,12 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         ),
         "read_only": True,
         "comparison": "fixed always-UP reference on the same completed outcomes as directional forecasts",
-        "metric": "horizon-end close direction; a flat return is incorrect for either directional call",
+        "metric": "horizon-end close direction and optional expected-move absolute error; a flat return is incorrect for either directional call",
         "groups": rows,
         "observations": observations,
         "coverage_summary": _coverage_summary(observations),
         "limits": [
-            "This reports descriptive counts and accuracy only; it does not select or tune a model.",
+            "This reports descriptive counts, directional accuracy, and optional numeric move error only; it does not select or tune a model.",
             "The prospective pilot ledger is local evidence; hashes do not authenticate an outside source, clock, or calendar.",
             "This is not first-touch outcome scoring, profitability, independent out-of-sample proof, or release acceptance.",
             "Overlapping forecast horizons and repeated origins are dependent; no independent-sample confidence claim is made.",
@@ -630,6 +659,8 @@ def _coverage_summary(observations: list[dict[str, Any]]) -> dict[str, Any]:
             "rows_with_explicit_abstention_fields": sum(row["explicit_abstention_fields_present"] for row in rows),
             "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in rows),
             "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in rows),
+            "numeric_move_rows": sum(row["expected_move_pct"] is not None for row in rows),
+            "numeric_move_scored_rows": sum(row["absolute_move_error_percentage_points"] is not None for row in rows),
             "directional_coverage": directional / len(rows) if rows else None,
             "abstention_reasons": [
                 {"reason": reason, "forecast_horizon_rows": value["forecast_horizon_rows"],
@@ -678,6 +709,8 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
         f"нейтральных: {coverage['neutral_rows']}; явных отказов: {coverage['explicit_abstention_rows']}.",
         f"Результат получен для {coverage['completed_outcome_rows']} сроков; ожидается для {coverage['pending_outcome_rows']}.",
         f"Поля для явного отказа и его причин есть в {coverage['rows_with_explicit_abstention_fields']} из {coverage['forecast_horizon_rows']} сохранённых записей сроков.",
+        f"Числовое ожидание движения цены записано для {coverage['numeric_move_rows']} сроков; "
+        f"ошибка может быть рассчитана для {coverage['numeric_move_scored_rows']}.",
     ])
     if coverage["directional_coverage"] is not None:
         lines.append(f"Доля направленных решений среди всех записей сроков: {percent(coverage['directional_coverage'])}.")
@@ -716,6 +749,11 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
             f"Записано решений: {row['forecasts_frozen']}. Исходов завершено: {row['outcomes_completed']}. Ожидают результата: {row['outcomes_pending']}.",
             f"Направленных решений: {row['directional_forecasts']}. Нейтральных: {row['neutral_forecasts']}. Явных отказов: {row['explicit_abstentions']}.",
         ])
+        lines.append(f"Числовой прогноз движения: {row['numeric_move_forecasts']} записей; "
+                     f"с полученным исходом: {row['numeric_move_forecasts_scored']}.")
+        if row["mean_absolute_move_error_percentage_points"] is not None:
+            error = f"{row['mean_absolute_move_error_percentage_points']:.4f}".replace(".", ",")
+            lines.append(f"Средняя абсолютная ошибка движения: {error} процентного пункта.")
         scored = row["directional_forecasts_scored"]
         lines.append(f"Проверено направленных прогнозов: {scored}.")
         if scored:
@@ -740,6 +778,10 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
             lines.extend(["", f"Запись: {label(observation['forecast_id'])}. Рынок: {label(observation['market'])}. Инструмент: {label(observation['secid'])}.",
                           f"Срок: {observation['horizon_sessions']} торговых сессий. Направление: {decisions[observation['decision']]}.",
                           f"Время прогноза: {label(observation['created_at_t0'])}. Исходная цена: {observation['reference_price']}."])
+            if observation["expected_move_pct"] is not None:
+                lines.append(f"Ожидаемое движение: {observation['expected_move_pct']}%. Расчётная цена в конце срока: {observation['implied_target_price']}.")
+                if observation["absolute_move_error_percentage_points"] is not None:
+                    lines.append(f"Абсолютная ошибка движения: {observation['absolute_move_error_percentage_points']} процентного пункта.")
             if observation["outcome_status"] == "PENDING":
                 lines.append("Исход: ожидается.")
             else:

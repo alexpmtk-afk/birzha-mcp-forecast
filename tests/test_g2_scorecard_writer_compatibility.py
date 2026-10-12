@@ -49,6 +49,8 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
     pending = build_scorecard(ledger)
     validate_scorecard(pending)
     assert pending["coverage_summary"]["rows_with_explicit_abstention_fields"] == 0
+    assert pending["coverage_summary"]["numeric_move_rows"] == 0
+    assert pending["coverage_summary"]["numeric_move_scored_rows"] == 0
     assert all(row["explicit_abstention_fields_present"] is False and row["abstention_reasons"] == []
                for row in pending["observations"])
     assert all(row["outcomes_pending"] == 1 and row["candidate_accuracy"] is None for row in pending["groups"])

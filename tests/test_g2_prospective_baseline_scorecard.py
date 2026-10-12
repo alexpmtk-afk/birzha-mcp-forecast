@@ -511,7 +511,7 @@ def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, s
     "missing_group", "duplicate_group", "included", "correctness", "return", "reference",
     "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
     "unknown_status", "version", "evidence_claim", "limits", "coverage", "market_coverage",
-    "horizon_coverage", "abstention_reason", "abstention_field_flag", "extra_field",
+    "horizon_coverage", "abstention_reason", "abstention_field_flag", "numeric_error", "numeric_price", "extra_field",
 ])
 def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
     ledger = tmp_path / "pilot.sqlite3"
@@ -573,6 +573,10 @@ def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect
         row["abstention_reasons"] = ["invented cause"]
     elif defect == "abstention_field_flag":
         row["explicit_abstention_fields_present"] = None
+    elif defect == "numeric_error":
+        row["absolute_move_error_percentage_points"] = 1.0
+    elif defect == "numeric_price":
+        row["implied_target_price"] = 100.0
     else:
         row["unsupported"] = True
     _resign_report(report)
@@ -666,6 +670,70 @@ def test_csv_preserves_pending_neutral_and_abstention_without_false_scores(tmp_p
     assert "3 записей сроков, 1 прогноз" in text
     assert "Охват отдельно по срокам" in text
     assert "Охват отдельно по точным инструментам" in text
+
+
+def _set_synthetic_expected_move(ledger: Path, value: object) -> None:
+    """Change only a synthetic forecast and its matching capture hashes."""
+    with sqlite3.connect(ledger) as db:
+        raw, receipt_raw = db.execute(
+            "SELECT forecast_json,receipt_json FROM captures WHERE forecast_id='f-up'"
+        ).fetchone()
+        forecast, receipt = json.loads(raw), json.loads(receipt_raw)
+        for horizon in forecast["horizons"]:
+            horizon["expected_move_pct"] = value
+        encoded = _encoded(forecast)
+        receipt["forecast_sha256"] = _sha(encoded.encode())
+        encoded_receipt = _encoded(receipt)
+        db.execute(
+            "UPDATE captures SET forecast_json=?,forecast_sha=?,receipt_json=?,receipt_sha=? WHERE forecast_id='f-up'",
+            (encoded, receipt["forecast_sha256"], encoded_receipt, _sha(encoded_receipt.encode())),
+        )
+
+
+def test_numeric_move_forecast_is_scored_only_after_a_realized_outcome(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    _set_synthetic_expected_move(ledger, 5.0)
+    report = build_scorecard(ledger)
+    validate_scorecard(report)
+    match_ledger(report, ledger)
+    assert report["coverage_summary"]["numeric_move_rows"] == 3
+    assert report["coverage_summary"]["numeric_move_scored_rows"] == 3
+    for row in report["observations"]:
+        if row["forecast_id"] == "f-up":
+            assert row["expected_move_pct"] == 5.0
+            assert row["implied_target_price"] == 105.0
+            assert row["absolute_move_error_percentage_points"] == 5.0
+        else:
+            assert row["expected_move_pct"] is None
+            assert row["implied_target_price"] is None
+            assert row["absolute_move_error_percentage_points"] is None
+    assert all(group["numeric_move_forecasts"] == 1 and
+               group["numeric_move_forecasts_scored"] == 1 and
+               group["mean_absolute_move_error_percentage_points"] == 5.0
+               for group in report["groups"])
+    csv_rows = list(csv.DictReader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))
+    assert all(row["Расчётная цена в конце срока"] == "105.0" for row in csv_rows if row["Номер прогноза"] == "f-up")
+    assert "Средняя абсолютная ошибка движения" in render_scorecard_text(report)
+
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes WHERE forecast_id='f-up'")
+    pending = build_scorecard(ledger)
+    validate_scorecard(pending)
+    assert pending["coverage_summary"]["numeric_move_rows"] == 3
+    assert pending["coverage_summary"]["numeric_move_scored_rows"] == 0
+    assert all(row["absolute_move_error_percentage_points"] is None
+               for row in pending["observations"] if row["forecast_id"] == "f-up")
+    assert all(group["mean_absolute_move_error_percentage_points"] is None for group in pending["groups"])
+
+
+@pytest.mark.parametrize("value", [True, -100.0, "five"])
+def test_numeric_move_refuses_invalid_frozen_prediction(tmp_path: Path, value: object) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    _set_synthetic_expected_move(ledger, value)
+    with pytest.raises(ScorecardRefused):
+        build_scorecard(ledger)
 
 
 @pytest.mark.parametrize("name", ['=1+1', ' +SUM(1;2)', '@command', '-formula', 'quoted;"name\nnext'])
