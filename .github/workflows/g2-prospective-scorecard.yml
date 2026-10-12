@@ -45,10 +45,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout current writer line through PR 209 in the disposable runner
+      - name: Checkout pinned writer line through PR 224 in the disposable runner
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: cb16b815ed06923292da9def8a454d8a0f33cb8f
+          ref: ed4e9905c8e29798018b06b07f251fa06ebaf3af
           path: peer-code
           persist-credentials: false
       - name: Checkout this exact scorecard version

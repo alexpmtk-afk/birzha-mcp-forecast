@@ -19,7 +19,7 @@ if __package__ in (None, ""):
 
 from scripts.g2_prospective_baseline_scorecard import (
     DUCKDB_LEDGER_VERSION, HORIZONS, LEDGER_VERSION, RECORD_VERSIONS, SCORECARD_VERSION,
-    ScorecardRefused, _canonical_json, _finite_number, _sha, _time,
+    LEVEL_STATUS_RU, ScorecardRefused, _canonical_json, _finite_number, _sha, _time,
     build_scorecard, render_scorecard_text,
 )
 
@@ -156,6 +156,8 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             target_level = _finite_number(target_level, "целевой уровень")
         if stop_level is not None:
             stop_level = _finite_number(stop_level, "защитный уровень")
+        if (target_level is not None and target_level <= 0) or (stop_level is not None and stop_level <= 0):
+            _refuse("Целевой и защитный уровни должны быть положительными.")
         if direction in ("NEUTRAL", "ABSTAIN") and (target_level is not None or stop_level is not None):
             _refuse("Нейтральное решение или отказ не должны иметь уровни.")
         if direction == "UP" and ((target_level is not None and target_level <= row["reference_price"]) or (stop_level is not None and stop_level >= row["reference_price"])):
@@ -209,11 +211,11 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             if target <= 0 or actual != round((target / reference - 1.0) * 100.0, 8):
                 _refuse("Изменение цены не соответствует исходной и конечной цене.")
             if row["target_level"] is not None:
-                expected_target_status = "REACHED_AT_CLOSE" if (target > row["target_level"] if direction == "UP" else target < row["target_level"]) else "NOT_REACHED_AT_CLOSE"
+                expected_target_status = "REACHED_AT_CLOSE" if (target >= row["target_level"] if direction == "UP" else target <= row["target_level"]) else "NOT_REACHED_AT_CLOSE"
                 if row["target_close_status"] != expected_target_status:
                     _refuse("Статус целевого уровня не соответствует конечной цене.")
             if row["stop_level"] is not None:
-                expected_stop_status = "REACHED_AT_CLOSE" if (target < row["stop_level"] if direction == "UP" else target > row["stop_level"]) else "NOT_REACHED_AT_CLOSE"
+                expected_stop_status = "REACHED_AT_CLOSE" if (target <= row["stop_level"] if direction == "UP" else target >= row["stop_level"]) else "NOT_REACHED_AT_CLOSE"
                 if row["stop_close_status"] != expected_stop_status:
                     _refuse("Статус защитного уровня не соответствует конечной цене.")
             expected_error = None if expected_move is None else round(abs(expected_move - actual), 8)
@@ -227,7 +229,7 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
                 day = date.fromisoformat(row["target_session"])
             except (ValueError, TypeError) as exc:
                 raise ScorecardRefused("Неверная дата сессии исхода.") from exc
-            if (day.isoformat() != row["target_session"] or day <= t0.date() or end <= t0 or
+            if (day.isoformat() != row["target_session"] or day <= t0.astimezone(ZoneInfo("Europe/Moscow")).date() or end <= t0 or
                     (end.astimezone(ZoneInfo("Europe/Moscow")).date() - day).days not in (0, 1)):
                 _refuse("Дата и время исхода не согласованы с прогнозом.")
             candidate = (actual > 0 if direction == "UP" else actual < 0) if included else None
@@ -239,7 +241,7 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
 
     origin_fields = ("market", "secid", "created_at_t0", "captured_at", "reference_price",
                      "forecast_record_version", "engine_version",
-                     "forecast_sha256", "capture_receipt_sha256", "capture_source_sha256")
+                     "forecast_sha256", "capture_receipt_sha256", "capture_source_sha256", "target_level", "stop_level")
     for rows in by_forecast.values():
         if {row["horizon_sessions"] for row in rows} != set(HORIZONS):
             _refuse("У прогноза отсутствует один из сроков 5/10/20.")
@@ -379,6 +381,7 @@ def render_scorecard_csv(report: dict[str, Any]) -> str:
                      "Исходные причины явного отказа", "Ожидаемое движение в процентах",
                      "Расчётная цена в конце срока", "Абсолютная ошибка в процентных пунктах",
                      "Ошибка постоянной цены в процентных пунктах",
+                     "Целевой уровень", "Защитный уровень", "Цель по конечной цене", "Защита по конечной цене",
                      "Результат прогноза", "Результат правила всегда рост", "Контрольная сумма прогноза",
                      "Контрольная сумма исхода", "Контрольная сумма отчёта"])
 
@@ -401,6 +404,9 @@ def render_scorecard_csv(report: dict[str, Any]) -> str:
                   "; ".join(row["abstention_reasons"]), row["expected_move_pct"],
                   row["implied_target_price"], row["absolute_move_error_percentage_points"],
                   row["flat_price_absolute_error_percentage_points"],
+                  row["target_level"], row["stop_level"],
+                  "" if row["target_close_status"] is None else LEVEL_STATUS_RU[row["target_close_status"]],
+                  "" if row["stop_close_status"] is None else LEVEL_STATUS_RU[row["stop_close_status"]],
                   result(row["candidate_correct"]), result(row["always_up_correct_same_row"]),
                   row["forecast_sha256"], row["outcome_sha256"], report["report_sha256"]]
         writer.writerow([cell(value) for value in values])

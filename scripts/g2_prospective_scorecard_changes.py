@@ -20,6 +20,7 @@ MUTABLE_FIELDS = {
     "target_close", "target_session", "target_session_end", "future_source_sha256", "outcome_sha256",
     "candidate_correct", "always_up_correct_same_row",
     "target_close_status", "stop_close_status",
+    "absolute_move_error_percentage_points", "flat_price_absolute_error_percentage_points",
 }
 
 

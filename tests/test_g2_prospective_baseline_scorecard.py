@@ -732,8 +732,8 @@ def test_target_and_stop_levels_are_checked_only_at_terminal_close(tmp_path: Pat
                and row["stop_close_status"] == "NOT_REACHED_AT_CLOSE"
                for row in report["observations"] if row["forecast_id"] == "f-up")
     text = render_scorecard_text(report, include_details=True)
-    assert "Проверка по конечной цене: REACHED_AT_CLOSE" in text
-    assert "Проверка по конечной цене: NOT_REACHED_AT_CLOSE" in text
+    assert "Проверка по конечной цене: конечная цена достигла уровня или прошла за него" in text
+    assert "Проверка по конечной цене: конечная цена не достигла уровня" in text
 
 
 def test_numeric_move_forecast_is_scored_only_after_a_realized_outcome(tmp_path: Path) -> None:
@@ -1244,3 +1244,168 @@ def test_changes_refuse_a_package_changed_during_comparison(tmp_path: Path, monk
     monkeypatch.setattr(changes_module, "verify_package", changed)
     with pytest.raises(ScorecardRefused, match="изменился во время"):
         compare_packages(package, package)
+
+
+def _rewrite_synthetic_capture(ledger: Path, fid: str, mutate) -> None:
+    """Rewrite a disposable fixture and bind its receipt to the changed forecast."""
+    with sqlite3.connect(ledger) as db:
+        raw, receipt_raw = db.execute(
+            "SELECT forecast_json,receipt_json FROM captures WHERE forecast_id=?", (fid,)
+        ).fetchone()
+        forecast, receipt = json.loads(raw), json.loads(receipt_raw)
+        mutate(forecast)
+        encoded = _encoded(forecast)
+        receipt["forecast_sha256"] = _sha(encoded.encode())
+        encoded_receipt = _encoded(receipt)
+        db.execute(
+            "UPDATE captures SET forecast_json=?,forecast_sha=?,receipt_json=?,receipt_sha=? WHERE forecast_id=?",
+            (encoded, receipt["forecast_sha256"], encoded_receipt, _sha(encoded_receipt.encode()), fid),
+        )
+
+
+@pytest.mark.parametrize("direction,field,level", [
+    ("UP", "target_levels", 110.0), ("DOWN", "stop_level", 110.0),
+])
+def test_exact_close_equality_survives_build_review_and_export(tmp_path: Path, direction: str, field: str, level: float) -> None:
+    ledger = tmp_path / "equality.sqlite3"
+    _make_ledger(ledger)
+    fid = "f-up" if direction == "UP" else "f-down"
+    _rewrite_synthetic_capture(ledger, fid, lambda forecast: forecast.update(
+        {field: [level] if field == "target_levels" else level}
+    ))
+    before = ledger.read_bytes()
+    report = build_scorecard(ledger)
+    validate_scorecard(report)
+    match_ledger(report, ledger)
+    key = "target_close_status" if field == "target_levels" else "stop_close_status"
+    assert all(row[key] == "REACHED_AT_CLOSE" for row in report["observations"] if row["forecast_id"] == fid)
+    assert "конечная цена достигла уровня или прошла за него" in render_scorecard_csv(report)
+    assert "REACHED_AT_CLOSE" not in render_scorecard_text(report, include_details=True)
+    assert ledger.read_bytes() == before
+
+
+@pytest.mark.parametrize("fid,field,value", [
+    ("f-up", "stop_level", 0.0), ("f-up", "stop_level", -5.0),
+    ("f-down", "target_levels", [0.0]), ("f-down", "target_levels", [-5.0]),
+])
+def test_nonpositive_levels_are_refused_even_on_the_correct_side(tmp_path: Path, fid: str, field: str, value: object) -> None:
+    ledger = tmp_path / "invalid-level.sqlite3"
+    _make_ledger(ledger)
+    _rewrite_synthetic_capture(ledger, fid, lambda forecast: forecast.update({field: value}))
+    with pytest.raises(ScorecardRefused, match="positive"):
+        build_scorecard(ledger)
+
+
+@pytest.mark.parametrize("field,value", [("stop_level", 0.0), ("target_level", -5.0)])
+def test_rehashed_report_cannot_hide_nonpositive_levels(tmp_path: Path, field: str, value: float) -> None:
+    ledger = tmp_path / "report.sqlite3"
+    _make_ledger(ledger)
+    report = build_scorecard(ledger)
+    fid = "f-up" if field == "stop_level" else "f-down"
+    row = next(row for row in report["observations"] if row["forecast_id"] == fid)
+    row[field] = value
+    row["stop_close_status" if field == "stop_level" else "target_close_status"] = "NOT_REACHED_AT_CLOSE"
+    _resign_report(report)
+    with pytest.raises(ScorecardRefused, match="положительными"):
+        validate_scorecard(report)
+
+
+def test_unadmitted_horizon_override_does_not_mask_record_stop(tmp_path: Path) -> None:
+    ledger = tmp_path / "override.sqlite3"
+    _make_ledger(ledger)
+    def override(forecast):
+        forecast["target_levels"] = [105.0]
+        forecast["stop_level"] = 95.0
+        forecast["horizons"][0]["target_levels"] = [106.0]
+    _rewrite_synthetic_capture(ledger, "f-up", override)
+    with pytest.raises(ScorecardRefused, match="unsupported horizon-level"):
+        build_scorecard(ledger)
+
+
+def test_numeric_errors_may_appear_only_with_a_new_outcome(tmp_path: Path) -> None:
+    ledger = tmp_path / "numeric-transition.sqlite3"
+    _make_ledger(ledger)
+    _set_synthetic_expected_move(ledger, 5.0)
+    _set_synthetic_levels(ledger)
+    observed = build_scorecard(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    pending = build_scorecard(ledger)
+    result = compare_scorecards(pending, observed)
+    assert len(result["newly_observed_existing_rows"]) == 9
+    assert all(row["absolute_move_error_percentage_points"] == 5.0
+               for row in result["newly_observed_existing_rows"] if row["forecast_id"] == "f-up")
+    with pytest.raises(ScorecardRefused, match="Прежний записанный исход"):
+        compare_scorecards(observed, pending)
+
+
+def test_level_csv_preserves_pending_status_as_blank(tmp_path: Path) -> None:
+    ledger = tmp_path / "pending-level.sqlite3"
+    _make_ledger(ledger)
+    _set_synthetic_levels(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    report = build_scorecard(ledger)
+    rows = list(csv.DictReader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))
+    up = [row for row in rows if row["Номер прогноза"] == "f-up"]
+    assert len(up) == 3
+    assert all(row["Целевой уровень"] == "105.0" and row["Защитный уровень"] == "95.0"
+               and row["Цель по конечной цене"] == row["Защита по конечной цене"] == "" for row in up)
+
+
+def test_previous_schema_version_requires_rebuilding_the_report(tmp_path: Path) -> None:
+    ledger = tmp_path / "version.sqlite3"
+    _make_ledger(ledger)
+    report = build_scorecard(ledger)
+    assert report["scorecard_version"] == "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V8"
+    report["scorecard_version"] = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V6"
+    _resign_report(report)
+    with pytest.raises(ScorecardRefused, match="версия"):
+        validate_scorecard(report)
+
+
+def test_same_moscow_day_is_not_a_future_outcome_even_after_utc_midnight(tmp_path: Path) -> None:
+    ledger = tmp_path / "moscow.sqlite3"
+    _make_ledger(ledger)
+    with sqlite3.connect(ledger) as db:
+        for fid, raw, receipt_raw in db.execute("SELECT forecast_id,forecast_json,receipt_json FROM captures").fetchall():
+            forecast, receipt = json.loads(raw), json.loads(receipt_raw)
+            forecast["created_at_t0"] = "2026-10-19T23:30:00Z"
+            encoded = _encoded(forecast)
+            receipt.update(decision_t0=forecast["created_at_t0"], captured_at="2026-10-19T23:31:00Z",
+                           forecast_sha256=_sha(encoded.encode()))
+            encoded_receipt = _encoded(receipt)
+            db.execute("UPDATE captures SET forecast_json=?,forecast_sha=?,receipt_json=?,receipt_sha=? WHERE forecast_id=?",
+                       (encoded, receipt["forecast_sha256"], encoded_receipt, _sha(encoded_receipt.encode()), fid))
+            for horizon, outcome_raw in db.execute("SELECT horizon,payload_json FROM outcomes WHERE forecast_id=?", (fid,)).fetchall():
+                outcome = json.loads(outcome_raw)
+                outcome["capture_at"] = receipt["captured_at"]
+                encoded_outcome = _encoded(outcome)
+                db.execute("UPDATE outcomes SET payload_json=?,payload_sha=? WHERE forecast_id=? AND horizon=?",
+                           (encoded_outcome, _sha(encoded_outcome.encode()), fid, horizon))
+    with pytest.raises(ScorecardRefused, match="after forecast date"):
+        build_scorecard(ledger)
+
+
+def test_review_rejects_same_moscow_day_in_a_rehashed_report(tmp_path: Path) -> None:
+    ledger = tmp_path / "review-moscow.sqlite3"
+    _make_ledger(ledger)
+    report = build_scorecard(ledger)
+    for row in report["observations"]:
+        row["created_at_t0"] = "2026-10-19T23:30:00Z"
+        row["captured_at"] = "2026-10-19T23:31:00Z"
+    _resign_report(report)
+    with pytest.raises(ScorecardRefused, match="Дата и время"):
+        validate_scorecard(report)
+
+
+def test_one_record_cannot_report_different_levels_at_different_horizons(tmp_path: Path) -> None:
+    ledger = tmp_path / "same-record.sqlite3"
+    _make_ledger(ledger)
+    _set_synthetic_levels(ledger)
+    report = build_scorecard(ledger)
+    row = next(row for row in report["observations"] if row["forecast_id"] == "f-up")
+    row["target_level"] = 106.0
+    _resign_report(report)
+    with pytest.raises(ScorecardRefused, match="разные исходные записи"):
+        validate_scorecard(report)

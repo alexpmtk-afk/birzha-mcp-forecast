@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 LEDGER_VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 DUCKDB_LEDGER_VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
-SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V6"
+SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V8"
 HORIZONS = (5, 10, 20)
 RECORD_VERSIONS = {
     "FORECAST_RECORD_V1_PROTOCOL_08",
@@ -288,6 +288,7 @@ def _read_duckdb_staging(path: Path) -> tuple[list[dict[str, Any]], list[dict[st
         if (
             any(day.isoformat() != raw for day, raw in zip(parsed_days, session_dates))
             or parsed_days != tuple(sorted(set(parsed_days)))
+            or parsed_days[0] <= _time(forecast_by_id[str(fid)][5], f"forecast T0 {fid}").astimezone(ZoneInfo("Europe/Moscow")).date()
             or any(left >= right for left, right in zip(completed_at, completed_at[1:]))
             or any(end > source_seen_at or (end.astimezone(ZoneInfo("Europe/Moscow")).date() - day).days not in (0, 1)
                    for day, end in zip(parsed_days, completed_at))
@@ -441,7 +442,7 @@ def _check_outcome(
     except (TypeError, ValueError) as exc:
         raise ScorecardRefused(f"invalid outcome target session: {fid}/{horizon}") from exc
     target_close_day = target_end.astimezone(ZoneInfo("Europe/Moscow")).date()
-    if target_day <= t0.date():
+    if target_day <= t0.astimezone(ZoneInfo("Europe/Moscow")).date():
         raise ScorecardRefused(f"outcome is not after forecast date: {fid}/{horizon}")
     if target_day.isoformat() != outcome.get("target_session") or (target_close_day - target_day).days not in (0, 1):
         raise ScorecardRefused(f"outcome target session and close time disagree: {fid}/{horizon}")
@@ -468,18 +469,21 @@ def _check_outcome(
 def _level_plan(
     forecast: dict[str, Any], decision: str, fid: str, horizon: dict[str, Any] | None = None
 ) -> tuple[float | None, float | None]:
-    # Accept per-horizon levels when a Forecast Record carries them there;
-    # otherwise use the record-level levels used by the pilot fixtures.
-    level_source = horizon if horizon and ("target_levels" in horizon or "stop_level" in horizon) else forecast
-    raw_targets = level_source.get("target_levels", [])
-    if raw_targets in (None, []):
+    # Protocol-08 levels belong to the immutable Forecast Record.
+    # A horizon-level override has no admitted contract; do not shadow either field.
+    if horizon is not None and ("target_levels" in horizon or "stop_level" in horizon):
+        raise ScorecardRefused(f"unsupported horizon-level target/stop override: {fid}")
+    raw_targets = forecast.get("target_levels", [])
+    if raw_targets is None or raw_targets == []:
         target = None
     elif isinstance(raw_targets, list) and len(raw_targets) == 1:
         target = _finite_number(raw_targets[0], f"target level {fid}")
     else:
         raise ScorecardRefused(f"target levels must be absent or contain one explicit level: {fid}")
-    raw_stop = level_source.get("stop_level")
+    raw_stop = forecast.get("stop_level")
     stop = None if raw_stop is None else _finite_number(raw_stop, f"stop level {fid}")
+    if (target is not None and target <= 0) or (stop is not None and stop <= 0):
+        raise ScorecardRefused(f"target/stop levels must be positive: {fid}")
     reference = _finite_number(forecast.get("reference_price"), f"reference price {fid}")
     if reference <= 0:
         raise ScorecardRefused(f"reference price must be positive: {fid}")
@@ -490,6 +494,14 @@ def _level_plan(
     if decision == "DOWN" and ((target is not None and target >= reference) or (stop is not None and stop <= reference)):
         raise ScorecardRefused(f"DOWN target/stop levels must be on their respective sides of reference: {fid}")
     return target, stop
+
+
+LEVEL_STATUS_RU = {
+    None: "результат ещё не получен",
+    "NOT_SET": "уровень не задан",
+    "REACHED_AT_CLOSE": "конечная цена достигла уровня или прошла за него",
+    "NOT_REACHED_AT_CLOSE": "конечная цена не достигла уровня",
+}
 
 
 def build_scorecard(path: Path) -> dict[str, Any]:
@@ -842,9 +854,9 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
                           f"Срок: {observation['horizon_sessions']} торговых сессий. Направление: {decisions[observation['decision']]}.",
                           f"Время прогноза: {label(observation['created_at_t0'])}. Исходная цена: {observation['reference_price']}."])
             if observation["target_level"] is not None:
-                lines.append(f"Целевой уровень: {observation['target_level']}. Проверка по конечной цене: {observation['target_close_status']}.")
+                lines.append(f"Целевой уровень: {observation['target_level']}. Проверка по конечной цене: {LEVEL_STATUS_RU[observation['target_close_status']]}.")
             if observation["stop_level"] is not None:
-                lines.append(f"Защитный уровень: {observation['stop_level']}. Проверка по конечной цене: {observation['stop_close_status']}.")
+                lines.append(f"Защитный уровень: {observation['stop_level']}. Проверка по конечной цене: {LEVEL_STATUS_RU[observation['stop_close_status']]}.")
             if observation["expected_move_pct"] is not None:
                 lines.append(f"Ожидаемое движение: {observation['expected_move_pct']}%. Расчётная цена в конце срока: {observation['implied_target_price']}.")
                 if observation["absolute_move_error_percentage_points"] is not None:
@@ -866,6 +878,7 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
         lines.append("Проверено полное сохранённое окно будущих свечей, его связь с исходными байтами и итоговой записью результата.")
     lines.extend([
         "Исходные ответы поставщика здесь не разбираются заново. Контрольные суммы сами по себе не подтверждают подлинность источника, часов или календаря.",
+        "Уровни сравниваются только с конечной ценой закрытия; касание в течение срока по этому статусу неизвестно.",
         "Для доходности и порядка достижения ценовых целей нужны отдельные расчёты. Перекрывающиеся сроки не дают независимой статистической оценки.",
         "Ожидающие результаты не заменяются нулём. Файл базы открыт только для чтения.",
     ])
