@@ -20,7 +20,39 @@ class OutcomeService:
     forecasts: DuckDBForecastJournal
     outcomes: DuckDBOutcomeJournal
 
+    def operational_evaluate(self, forecast_id: str, *, evaluation_date: str | None = None) -> dict[str, object]:
+        """Refuse live Outcome persistence BEFORE any source/read/write.
+
+        This is an explicit MCP runtime admission route, not a forecast
+        validity certificate. The older evaluate() remains DEVELOPMENT-
+        ONLY for offline fixtures and historical compatibility tests.
+        An independently witnessed prospective Outcome pipeline must
+        be separately implemented and reviewed before activation.
+        """
+        if type(forecast_id) is not str or not forecast_id.strip():
+            raise ValueError("nonempty forecast_id required")
+        if evaluation_date is not None and (
+            type(evaluation_date) is not str or len(evaluation_date) > 32
+        ):
+            raise ValueError("invalid evaluation_date")
+        return {
+            "schema": "G2_OPERATIONAL_OUTCOME_ADMISSION_V1",
+            "forecast_id": forecast_id,
+            "status": "BLOCKED",
+            "reason": "UNATTESTED_FUTURE_SOURCE_AND_SESSIONS",
+            "evaluated_future_sessions": 0,
+            "new_outcomes_written": 0,
+            "forecast_journal_read_attempted": False,
+            "future_source_fetch_attempted": False,
+            "outcome_journal_append_attempted": False,
+            "independent_future_receipt_verified": False,
+            "official_session_calendar_verified": False,
+            "canonical_outcome_write_authorized": False,
+            "production_authorized": False,
+        }
+
     def evaluate(self, forecast_id: str, *, evaluation_date: str | None = None) -> OutcomeEvaluation:
+        """DEVELOPMENT-only legacy evaluation; not an attested LIVE writer."""
         forecast = self.forecasts.get(forecast_id)
         if forecast is None:
             raise KeyError(f"forecast not found: {forecast_id}")
