@@ -134,3 +134,69 @@ def test_operational_analysis_mcp_description_does_not_promise_saving_six_foreca
     assert 'name="analysis.run_core"' in source
     assert "issuance preflight" in source
     assert "history sync" in source
+
+
+
+def test_operational_outcome_refuses_before_any_future_market_or_database_io():
+    from birzha.application.outcome import OutcomeService
+
+    class ForbiddenMarket:
+        @property
+        def direct_resolver(self):
+            raise AssertionError("live resolver must never be read")
+        def candles_for_instrument(self,*args,**kwargs):
+            raise AssertionError("future MOEX fetch must never be called")
+
+    class ForbiddenJournal:
+        def get(self,*args,**kwargs):
+            raise AssertionError("forecast database must not be read")
+        def list_for_forecast(self,*args,**kwargs):
+            raise AssertionError("outcome database must not be read")
+        def append(self,*args,**kwargs):
+            raise AssertionError("outcome database must never be modified")
+
+    store=ForbiddenJournal()
+    service=OutcomeService(
+        market_data=ForbiddenMarket(),forecasts=store,outcomes=store)
+    for evaluation_date in (None,"2026-10-30"):
+        result=service.operational_evaluate("fcst_future_not_certified",
+                                             evaluation_date=evaluation_date)
+        assert result["status"]=="BLOCKED"
+        assert result["reason"]=="UNATTESTED_FUTURE_SOURCE_AND_SESSIONS"
+        assert result["new_outcomes_written"]==0
+        assert result["evaluated_future_sessions"]==0
+        assert result["forecast_journal_read_attempted"] is False
+        assert result["future_source_fetch_attempted"] is False
+        assert result["outcome_journal_append_attempted"] is False
+        assert result["official_session_calendar_verified"] is False
+        assert result["independent_future_receipt_verified"] is False
+        assert result["production_authorized"] is False
+
+
+@pytest.mark.parametrize("forecast_id,evaluation_date",[
+    ("",None),("   ",None),(None,None),(True,None),
+    ("fcst",(123)),("fcst", "a"*35),
+])
+def test_operational_outcome_refuses_invalid_ids_dates_before_source_access(
+    forecast_id,evaluation_date,
+):
+    from birzha.application.outcome import OutcomeService
+    service=OutcomeService(market_data=NoBuild(),forecasts=NoBuild(),
+                           outcomes=NoAppend())
+    with pytest.raises(ValueError):
+        service.operational_evaluate(forecast_id,evaluation_date=evaluation_date)
+
+
+def test_mcp_outcome_tool_uses_operational_guard_instead_of_unsafe_legacy_evaluate():
+    root=Path(__file__).resolve().parents[1]
+    source=(root/"src/birzha/mcp/server.py").read_text(encoding="utf-8")
+    assert 'name="outcome.evaluate"' in source
+    assert "return _outcomes.operational_evaluate(" in source
+    assert "return _outcomes.evaluate(" not in source
+    assert "do not fetch future source or append" in source
+
+
+def test_legacy_development_outcome_engine_still_exists_without_live_mcp_admission():
+    from birzha.application.outcome import OutcomeService
+    assert callable(OutcomeService.evaluate)
+    assert "DEVELOPMENT-only" in OutcomeService.evaluate.__doc__
