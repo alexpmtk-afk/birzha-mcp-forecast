@@ -137,6 +137,11 @@ def audit_source_chain_no_go(
             raise SourceChainAuditRefused("calendar notice/SECID not bound to source")
         original_receipts = local["manifest"]["original_receipts"]
         origin_receipt = governed_capture["receipt"]
+        if (origin_receipt["status"] not in ("NEW_LOCAL_RECEIPT","DUPLICATE_IDENTICAL")
+            or origin_receipt["new_receipts"] !=
+               (1 if origin_receipt["status"] == "NEW_LOCAL_RECEIPT" else 0)
+            or origin_receipt["independently_attested"] is not False):
+            raise SourceChainAuditRefused("false original local receipt state")
         if (governed_capture["capture_key"] != capture_key
             or local["manifest"]["capture_key"] != capture_key
             or governed_capture["receipt"]["original_bytes_sha256"] !=
