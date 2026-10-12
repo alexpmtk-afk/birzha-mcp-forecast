@@ -114,11 +114,21 @@ class ProspectivePilotLedger:
         self._db = sqlite3.connect(str(p), isolation_level=None)
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA busy_timeout=4000")
+        self._db.execute("PRAGMA synchronous=FULL")
+        if self._db.execute("PRAGMA synchronous").fetchone() != (2,):
+            self._db.close()
+            raise AdmissionRefused("durable pilot SQLite unavailable")
+        if self._db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            self._db.close()
+            raise ImmutableCollision("pilot SQLite integrity check failed")
         tables = {r[0] for r in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if tables and "pilot_meta" not in tables:
             self._db.close()
             raise AdmissionRefused("target already has unrelated tables")
+        # First schema, triggers AND schema-version must be one atomic
+        # transaction: hard-exit before COMMIT leaves no partial journal.
         self._db.executescript("""
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS pilot_meta (version TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS captures (
                 forecast_id TEXT PRIMARY KEY, forecast_json TEXT NOT NULL,
@@ -141,8 +151,9 @@ class ProspectivePilotLedger:
               BEGIN SELECT RAISE(ABORT, 'append-only outcome'); END;
             CREATE TRIGGER IF NOT EXISTS outcomes_no_delete BEFORE DELETE ON outcomes
               BEGIN SELECT RAISE(ABORT, 'append-only outcome'); END;
+            INSERT OR IGNORE INTO pilot_meta(version) VALUES ('G2_PROSPECTIVE_CAPTURE_PILOT_V1');
+            COMMIT;
         """)
-        self._db.execute("INSERT OR IGNORE INTO pilot_meta(version) VALUES (?)", (VERSION,))
         versions = [x[0] for x in self._db.execute("SELECT version FROM pilot_meta")]
         if versions != [VERSION]:
             self._db.close()
