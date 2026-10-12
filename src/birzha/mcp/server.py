@@ -340,7 +340,7 @@ def forecast_list(limit: int = 20, symbol: str | None = None) -> dict[str, objec
     return _journal.list_recent(limit=limit, symbol=symbol)
 
 
-@mcp.tool(name="analysis.run_core", description="When the user asks to analyze the market, verify and refresh recent completed daily history, then create and save a preliminary forecast for each of the six configured instruments. Return a plain Russian summary and per-instrument errors. This does not certify the full archive or model accuracy.")
+@mcp.tool(name="analysis.run_core", description="Run an issuance preflight BEFORE any six-market daily history sync or forecast journal write. While original source receipt/issued-at T0 is unattested, return explicit BLOCKED with zero history sync and zero forecast writes. An independently approved operational live issuer would require a separately reviewed implementation; this tool does not certify market source or model accuracy.")
 def analysis_run_core() -> dict[str, object]:
     return _analysis.run()
 
