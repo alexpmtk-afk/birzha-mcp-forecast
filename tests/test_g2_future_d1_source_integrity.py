@@ -29,9 +29,10 @@ def native_d1(evidence):
     # or actually fetched exchange response.
     return json.dumps({
         "candles":{
-            "columns":["begin","end","close"],
+            "columns":["begin","end","close","open","high","low","volume","value"],
             "data":[[
-                f"{day} 10:00:00",f"{day} 23:00:00",price
+                f"{day} 10:00:00",f"{day} 23:00:00",
+                price, price, price+0.25, price-0.25, 100.0, price*100.0
             ] for day,price in zip(
                 evidence.session_dates,evidence.candle_close)]
         }
@@ -51,6 +52,9 @@ def test_native_source_complete_replay_is_content_only():
 @pytest.mark.parametrize("bad",[
     "wrong_close","wrong_time","extra","missing","same_day_twice",
     "duplicate_json_key","bad_close","bad_row",
+    "high_below_close","low_above_open","negative_volume",
+    "negative_value","boolean_close","partial_native_columns",
+    "malformed_json_escaped_candle",
 ])
 def test_native_original_source_mismatch_refused(bad):
     ev=duck_future()
@@ -69,7 +73,21 @@ def test_native_original_source_mismatch_refused(bad):
         doc["candles"]["data"][0][2]=0.0
     elif bad=="bad_row":
         doc["candles"]["data"][0].pop()
+    elif bad=="high_below_close":
+        doc["candles"]["data"][0][4]=doc["candles"]["data"][0][2]-1
+    elif bad=="low_above_open":
+        doc["candles"]["data"][0][5]=doc["candles"]["data"][0][3]+1
+    elif bad=="negative_volume":
+        doc["candles"]["data"][0][6]=-1
+    elif bad=="negative_value":
+        doc["candles"]["data"][0][7]=-10
+    elif bad=="boolean_close":
+        doc["candles"]["data"][0][2]=True
+    elif bad=="partial_native_columns":
+        doc["candles"]["columns"]=["begin","end","close"]
+        doc["candles"]["data"]=[v[:3] for v in doc["candles"]["data"]]
     raw=(b'{"candles":{},"candles":{}}' if bad=="duplicate_json_key"
+         else b'{"\\u0063andles":' if bad=="malformed_json_escaped_candle"
          else json.dumps(doc).encode())
     with pytest.raises(FutureD1ContentRefused):
         replay_native_d1_if_present(raw,dates=ev.session_dates,
