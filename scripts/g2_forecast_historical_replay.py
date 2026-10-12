@@ -111,7 +111,6 @@ def replay_existing_forecast(
                 raise ValueError("inconsistent OHLC")
     provider = _OfflinePrices(instrument, series, cutoff)
     # Use the same retained windows as the current canonical builder.
-    from datetime import timedelta
     day = cutoff.astimezone(MOSCOW).date()
     lookbacks = {"D1":260, "H1":60, "M15":20}
     counts = {tf:provider.candles_for_instrument(
