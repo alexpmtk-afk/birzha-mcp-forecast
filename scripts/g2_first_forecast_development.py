@@ -11,6 +11,8 @@ from collections import Counter, defaultdict
 import hashlib
 import json
 import math
+import os
+import tempfile
 from pathlib import Path
 
 FEATURE_VERSION = 'G2_D1_RESEARCH_SMA_TR14_D20_ER20_W20_V1'
@@ -160,19 +162,52 @@ def score(predictions,rows):
     return outcomes,summary
 
 
+def _write_immutable(path: Path, payload: bytes) -> None:
+    """Atomic no-clobber research artifact; never rewrite frozen predictions.
+
+    A symlink is never a valid existing result. Hard-link temp to target
+    atomically (no OS replace of existing unlike bytes); remove the temp.
+    """
+    path=Path(path)
+    if path.is_symlink():
+        raise FileExistsError(f"research artifact is a symlink: {path}")
+    if path.exists():
+        if not path.is_file() or path.read_bytes()!=payload:
+            raise FileExistsError(f"refusing unlike research artifact: {path}")
+        return
+    with tempfile.NamedTemporaryFile(prefix='g2_exp_',dir=path.parent,delete=False) as h:
+        temp=Path(h.name)
+        h.write(payload)
+        h.flush()
+        os.fsync(h.fileno())
+    try:
+        try:
+            os.link(temp,path)
+        except FileExistsError:
+            if path.is_symlink() or not path.is_file() or path.read_bytes()!=payload:
+                raise FileExistsError(f"refusing concurrent unlike research artifact: {path}")
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def write_jsonl(path,values):
-    with path.open('w',encoding='utf-8',newline='\n') as f:
-        for v in values:f.write(stable_json(v)+'\n')
+    payload=''.join(stable_json(v)+'\n' for v in values).encode('utf-8')
+    _write_immutable(Path(path),payload)
 
 
 def run(input_path,output_dir):
     input_path=Path(input_path); output_dir=Path(output_dir)
+    source_sha=sha(input_path)
     rows=load_rows(input_path)
+    if sha(input_path)!=source_sha:
+        raise RuntimeError('source historical feature bytes changed during read')
     output_dir.mkdir(parents=True,exist_ok=True)
     predictions=predict(rows)
     predictions_path=output_dir/'g2_first_forecast_predictions.jsonl'
     write_jsonl(predictions_path,predictions)
-    # Prediction artifact is complete before outcome generation or score calls.
+    # Freeze all predictions before reading future outcome features.
+    if sha(input_path)!=source_sha:
+        raise RuntimeError('source historical features changed before scoring')
     outcomes,summary=score(predictions,rows)
     outcomes_path=output_dir/'g2_first_forecast_outcomes.jsonl'
     write_jsonl(outcomes_path,outcomes)
@@ -185,11 +220,13 @@ def run(input_path,output_dir):
       'limitations':['Overlapping label horizons; no independence assumed',
         'No proven vintage/as-known-at-T0; neither OOS nor paper/live performance',
         'Cross-contract future windows not scored; especially BR H20'],
-      'input_sha256':sha(input_path), 'predictions_sha256':sha(predictions_path),
+      'input_sha256':source_sha, 'predictions_sha256':sha(predictions_path),
       'outcomes_sha256':sha(outcomes_path), 'input_rows':len(rows),
       'prediction_rows':len(predictions),'outcome_rows':len(outcomes),
       'per_market_horizon':summary}
-    summary_path.write_text(stable_json(payload)+'\n',encoding='utf-8')
+    if sha(input_path)!=source_sha:
+        raise RuntimeError('source historical features changed during scoring')
+    _write_immutable(summary_path,(stable_json(payload)+'\n').encode('utf-8'))
     return payload
 
 
