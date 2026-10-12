@@ -155,9 +155,8 @@ class OriginalM1LocalIntake:
             reported=claimed_time(page.response_received_utc)
         except ValueError as exc:
             raise LocalIntakeRefused("invalid caller-reported response times") from exc
-        if (not request<=reported<=now or
-            (now-reported).total_seconds()>MAX_RECEIPT_DELAY):
-            raise LocalIntakeRefused("new original page reported too late or from future")
+        if not request<=reported<=now:
+            raise LocalIntakeRefused("noncausal caller-reported page receipt")
         fields={
             "request_url_claim":page.request_url,
             "http_status_claim":page.http_status,
@@ -175,7 +174,8 @@ class OriginalM1LocalIntake:
                 "FROM m1_local_receipts WHERE capture_key=? AND stream=? AND page_start=?",
                 (key,stream,page.start)).fetchone()
             if existing:
-                if existing[1]!=with_envelope or existing[3]!=page.raw_sha256:
+                saved=json.loads(existing[1])["original_page"]
+                if _canon(saved)!=with_envelope or existing[3]!=page.raw_sha256:
                     raise LocalIntakeCollision("conflicting original bytes/page metadata")
                 self.db.execute("COMMIT")
                 return {"status":"DUPLICATE_IDENTICAL","receipt_seq":existing[0],
