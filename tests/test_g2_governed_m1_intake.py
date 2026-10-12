@@ -130,6 +130,7 @@ def test_storage_failure_aborts_with_no_extra_network_attempt(tmp_path,monkeypat
 @pytest.mark.parametrize("kind",[
     "disabled","wrong_day","bad_start","non_json","empty_body",
     "status_404","bad_json","missing_column","short_row",
+    "bad_native_ohlc","future_unselected_minute","duplicate_native_minute",
 ])
 def test_invalid_sources_refused_without_intake(tmp_path,kind):
     raw=body()
@@ -147,6 +148,20 @@ def test_invalid_sources_refused_without_intake(tmp_path,kind):
         responses=[FakeResponse(body_bytes=json.dumps(payload).encode())]
     elif kind=="short_row":
         payload=json.loads(raw);payload["candles"]["data"][0].pop()
+        responses=[FakeResponse(body_bytes=json.dumps(payload).encode())]
+    elif kind=="bad_native_ohlc":
+        payload=json.loads(raw);payload["candles"]["data"][0][2]=0
+        responses=[FakeResponse(body_bytes=json.dumps(payload).encode())]
+    elif kind=="future_unselected_minute":
+        payload=json.loads(raw)
+        future=payload["candles"]["data"][-1][:]
+        future[6]="2026-10-09 10:18:00"
+        future[7]="2026-10-09 10:18:59"
+        payload["candles"]["data"].append(future)
+        responses=[FakeResponse(body_bytes=json.dumps(payload).encode())]
+    elif kind=="duplicate_native_minute":
+        payload=json.loads(raw)
+        payload["candles"]["data"][8]=payload["candles"]["data"][7][:]
         responses=[FakeResponse(body_bytes=json.dumps(payload).encode())]
     p,j,c,attempts=environment(tmp_path,responses)
     try:
