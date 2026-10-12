@@ -465,15 +465,20 @@ def _check_outcome(
     return actual_return
 
 
-def _level_plan(forecast: dict[str, Any], decision: str, fid: str) -> tuple[float | None, float | None]:
-    raw_targets = forecast.get("target_levels", [])
+def _level_plan(
+    forecast: dict[str, Any], decision: str, fid: str, horizon: dict[str, Any] | None = None
+) -> tuple[float | None, float | None]:
+    # Accept per-horizon levels when a Forecast Record carries them there;
+    # otherwise use the record-level levels used by the pilot fixtures.
+    level_source = horizon if horizon and ("target_levels" in horizon or "stop_level" in horizon) else forecast
+    raw_targets = level_source.get("target_levels", [])
     if raw_targets in (None, []):
         target = None
     elif isinstance(raw_targets, list) and len(raw_targets) == 1:
         target = _finite_number(raw_targets[0], f"target level {fid}")
     else:
         raise ScorecardRefused(f"target levels must be absent or contain one explicit level: {fid}")
-    raw_stop = forecast.get("stop_level")
+    raw_stop = level_source.get("stop_level")
     stop = None if raw_stop is None else _finite_number(raw_stop, f"stop level {fid}")
     reference = _finite_number(forecast.get("reference_price"), f"reference price {fid}")
     if reference <= 0:
@@ -524,7 +529,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 implied_price = round(raw_price, 8)
                 if implied_price <= 0:
                     raise ScorecardRefused(f"numeric move rounds to an invalid price: {fid}/{horizon}")
-            target_level, stop_level = _level_plan(forecast, decision, fid)
+            target_level, stop_level = _level_plan(forecast, decision, fid, row)
             observation = {
                 "forecast_id": fid, "market": key[0], "secid": key[1],
                 "horizon_sessions": horizon, "decision": decision,
