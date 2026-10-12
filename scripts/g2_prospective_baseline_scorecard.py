@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 LEDGER_VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 DUCKDB_LEDGER_VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
-SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V2"
+SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V3"
 HORIZONS = (5, 10, 20)
 RECORD_VERSIONS = {
     "FORECAST_RECORD_V1_PROTOCOL_08",
@@ -607,31 +607,47 @@ def build_scorecard(path: Path) -> dict[str, Any]:
 
 def _coverage_summary(observations: list[dict[str, Any]]) -> dict[str, Any]:
     """Summarize forecast availability using only frozen decisions and source reasons."""
-    by_decision = {decision: sum(row["decision"] == decision for row in observations)
-                   for decision in ("UP", "DOWN", "NEUTRAL", "ABSTAIN")}
-    directional = by_decision["UP"] + by_decision["DOWN"]
-    reasons: dict[str, dict[str, Any]] = {}
+    def summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
+        decisions = {decision: sum(row["decision"] == decision for row in rows)
+                     for decision in ("UP", "DOWN", "NEUTRAL", "ABSTAIN")}
+        directional = decisions["UP"] + decisions["DOWN"]
+        reasons: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if row["decision"] != "ABSTAIN":
+                continue
+            for reason in row["abstention_reasons"]:
+                item = reasons.setdefault(reason, {"forecast_horizon_rows": 0, "forecast_ids": set()})
+                item["forecast_horizon_rows"] += 1
+                item["forecast_ids"].add(row["forecast_id"])
+        return {
+            "forecast_horizon_rows": len(rows),
+            "directional_rows": directional,
+            "neutral_rows": decisions["NEUTRAL"],
+            "explicit_abstention_rows": decisions["ABSTAIN"],
+            "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in rows),
+            "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in rows),
+            "directional_coverage": directional / len(rows) if rows else None,
+            "abstention_reasons": [
+                {"reason": reason, "forecast_horizon_rows": value["forecast_horizon_rows"],
+                 "unique_forecasts": len(value["forecast_ids"])}
+                for reason, value in sorted(reasons.items())
+            ],
+        }
+
+    markets: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    horizons: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in observations:
-        if row["decision"] != "ABSTAIN":
-            continue
-        for reason in row["abstention_reasons"]:
-            item = reasons.setdefault(reason, {"forecast_horizon_rows": 0, "forecast_ids": set()})
-            item["forecast_horizon_rows"] += 1
-            item["forecast_ids"].add(row["forecast_id"])
-    return {
-        "forecast_horizon_rows": len(observations),
-        "directional_rows": directional,
-        "neutral_rows": by_decision["NEUTRAL"],
-        "explicit_abstention_rows": by_decision["ABSTAIN"],
-        "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in observations),
-        "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in observations),
-        "directional_coverage": directional / len(observations) if observations else None,
-        "abstention_reasons": [
-            {"reason": reason, "forecast_horizon_rows": value["forecast_horizon_rows"],
-             "unique_forecasts": len(value["forecast_ids"])}
-            for reason, value in sorted(reasons.items())
-        ],
-    }
+        markets[(row["market"], row["secid"])].append(row)
+        horizons[row["horizon_sessions"]].append(row)
+    by_market = [
+        {"market": market, "secid": secid, **summarize(rows)}
+        for (market, secid), rows in sorted(markets.items())
+    ]
+    by_horizon = [
+        {"horizon_sessions": horizon, **summarize(rows)}
+        for horizon, rows in sorted(horizons.items())
+    ]
+    return {**summarize(observations), "by_market": by_market, "by_horizon": by_horizon}
 
 
 def render_scorecard_text(report: dict[str, Any], *, include_details: bool = False) -> str:
@@ -666,6 +682,21 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
             lines.append(f"• {label(item['reason'])}: {item['forecast_horizon_rows']} записей сроков, {item['unique_forecasts']} прогнозов.")
     else:
         lines.append("Исходные причины отказа не перечислены: явных отказов нет.")
+    if coverage["by_horizon"]:
+        lines.extend(["", "Охват отдельно по срокам:"])
+        for item in coverage["by_horizon"]:
+            rate = "не рассчитана" if item["directional_coverage"] is None else percent(item["directional_coverage"])
+            lines.append(f"{item['horizon_sessions']} сессий: направлено {item['directional_rows']} из {item['forecast_horizon_rows']} ({rate}); "
+                         f"нейтральных {item['neutral_rows']}, отказов {item['explicit_abstention_rows']}, "
+                         f"ожидают исхода {item['pending_outcome_rows']}.")
+    if coverage["by_market"]:
+        lines.extend(["", "Охват отдельно по точным инструментам:"])
+        for item in coverage["by_market"]:
+            rate = "не рассчитана" if item["directional_coverage"] is None else percent(item["directional_coverage"])
+            lines.append(f"{label(item['market'])}/{label(item['secid'])}: направлено {item['directional_rows']} из {item['forecast_horizon_rows']} ({rate}); "
+                         f"нейтральных {item['neutral_rows']}, отказов {item['explicit_abstention_rows']}.")
+            for reason in item["abstention_reasons"]:
+                lines.append(f"  Причина отказа — {label(reason['reason'])}: {reason['forecast_horizon_rows']} записей сроков.")
     if not report["groups"]:
         lines.extend(["", "Сохранённых прогнозов нет."])
     previous = None

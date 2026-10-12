@@ -231,27 +231,43 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
         _refuse("Для части отдельных записей отсутствуют итоги.")
     # Recompute the project-wide coverage totals from the separate forecast rows.
     rows = report["observations"]
-    decisions = {name: sum(row["decision"] == name for row in rows)
-                 for name in ("UP", "DOWN", "NEUTRAL", "ABSTAIN")}
-    directional = decisions["UP"] + decisions["DOWN"]
-    reason_counts: dict[str, dict[str, Any]] = {}
+    def summarize_coverage(part: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = {name: sum(row["decision"] == name for row in part)
+                  for name in ("UP", "DOWN", "NEUTRAL", "ABSTAIN")}
+        n_directional = counts["UP"] + counts["DOWN"]
+        counts_by_reason: dict[str, dict[str, Any]] = {}
+        for row in part:
+            for reason in row["abstention_reasons"]:
+                entry = counts_by_reason.setdefault(reason, {"rows": 0, "forecasts": set()})
+                entry["rows"] += 1
+                entry["forecasts"].add(row["forecast_id"])
+        return {
+            "forecast_horizon_rows": len(part), "directional_rows": n_directional,
+            "neutral_rows": counts["NEUTRAL"], "explicit_abstention_rows": counts["ABSTAIN"],
+            "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in part),
+            "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in part),
+            "directional_coverage": n_directional / len(part) if part else None,
+            "abstention_reasons": [
+                {"reason": reason, "forecast_horizon_rows": item["rows"],
+                 "unique_forecasts": len(item["forecasts"])}
+                for reason, item in sorted(counts_by_reason.items())
+            ],
+        }
+
+    market_rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    horizon_rows: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        for reason in row["abstention_reasons"]:
-            item = reason_counts.setdefault(reason, {"forecast_horizon_rows": 0, "forecast_ids": set()})
-            item["forecast_horizon_rows"] += 1
-            item["forecast_ids"].add(row["forecast_id"])
+        market_rows[(row["market"], row["secid"])].append(row)
+        horizon_rows[row["horizon_sessions"]].append(row)
     coverage = {
-        "forecast_horizon_rows": len(rows),
-        "directional_rows": directional,
-        "neutral_rows": decisions["NEUTRAL"],
-        "explicit_abstention_rows": decisions["ABSTAIN"],
-        "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in rows),
-        "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in rows),
-        "directional_coverage": directional / len(rows) if rows else None,
-        "abstention_reasons": [
-            {"reason": reason, "forecast_horizon_rows": value["forecast_horizon_rows"],
-             "unique_forecasts": len(value["forecast_ids"])}
-            for reason, value in sorted(reason_counts.items())
+        **summarize_coverage(rows),
+        "by_market": [
+            {"market": market, "secid": secid, **summarize_coverage(part)}
+            for (market, secid), part in sorted(market_rows.items())
+        ],
+        "by_horizon": [
+            {"horizon_sessions": horizon, **summarize_coverage(part)}
+            for horizon, part in sorted(horizon_rows.items())
         ],
     }
     if report["coverage_summary"] != coverage:

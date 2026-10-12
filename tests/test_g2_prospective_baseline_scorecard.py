@@ -169,6 +169,12 @@ def test_detail_rows_reconcile_with_every_summary_group(tmp_path: Path) -> None:
     assert coverage["explicit_abstention_rows"] == 0
     assert coverage["directional_coverage"] == 6 / 9
     assert coverage["abstention_reasons"] == []
+    assert len(coverage["by_market"]) == 1
+    assert coverage["by_market"][0]["market"] == "SBER"
+    assert coverage["by_market"][0]["directional_rows"] == 6
+    assert len(coverage["by_horizon"]) == 3
+    assert all(item["forecast_horizon_rows"] == 3 and item["directional_rows"] == 2
+               for item in coverage["by_horizon"])
     assert ledger.read_bytes() == before
 
 
@@ -504,7 +510,8 @@ def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, s
     "counts", "boolean_count", "accuracy", "boolean_accuracy", "duplicate_row", "missing_horizon",
     "missing_group", "duplicate_group", "included", "correctness", "return", "reference",
     "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
-    "unknown_status", "version", "evidence_claim", "limits", "coverage", "abstention_reason", "extra_field",
+    "unknown_status", "version", "evidence_claim", "limits", "coverage", "market_coverage",
+    "horizon_coverage", "abstention_reason", "extra_field",
 ])
 def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
     ledger = tmp_path / "pilot.sqlite3"
@@ -558,6 +565,10 @@ def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect
         report["limits"] = []
     elif defect == "coverage":
         report["coverage_summary"]["directional_rows"] += 1
+    elif defect == "market_coverage":
+        report["coverage_summary"]["by_market"][0]["directional_rows"] += 1
+    elif defect == "horizon_coverage":
+        report["coverage_summary"]["by_horizon"][0]["directional_coverage"] = 1.
     elif defect == "abstention_reason":
         row["abstention_reasons"] = ["invented cause"]
     else:
@@ -638,9 +649,17 @@ def test_csv_preserves_pending_neutral_and_abstention_without_false_scores(tmp_p
     assert report["coverage_summary"]["abstention_reasons"] == [
         {"reason": "synthetic insufficient input", "forecast_horizon_rows": 3, "unique_forecasts": 1}
     ]
+    assert report["coverage_summary"]["by_market"][0]["abstention_reasons"] == [
+        {"reason": "synthetic insufficient input", "forecast_horizon_rows": 3, "unique_forecasts": 1}
+    ]
+    assert all(item["abstention_reasons"] == [
+        {"reason": "synthetic insufficient input", "forecast_horizon_rows": 1, "unique_forecasts": 1}
+    ] for item in report["coverage_summary"]["by_horizon"])
     text = render_scorecard_text(report)
     assert "synthetic insufficient input" in text
     assert "3 записей сроков, 1 прогноз" in text
+    assert "Охват отдельно по срокам" in text
+    assert "Охват отдельно по точным инструментам" in text
 
 
 @pytest.mark.parametrize("name", ['=1+1', ' +SUM(1;2)', '@command', '-formula', 'quoted;"name\nnext'])
@@ -791,6 +810,16 @@ def test_batch_pools_same_instrument_without_averaging_accuracy(tmp_path: Path) 
     assert group["candidate_accuracy"] == 2 / 3
     assert group["candidate_accuracy"] != (a["groups"][0]["candidate_accuracy"] + b["groups"][0]["candidate_accuracy"]) / 2
     assert group["always_up_accuracy_same_rows"] == 1.
+    coverage = combined["coverage_summary"]
+    assert coverage["forecast_horizon_rows"] == 18
+    assert coverage["directional_rows"] == 12
+    assert coverage["neutral_rows"] == 6
+    assert coverage["completed_outcome_rows"] == 17
+    assert coverage["pending_outcome_rows"] == 1
+    assert coverage["by_market"][0]["forecast_horizon_rows"] == 18
+    assert [row["horizon_sessions"] for row in coverage["by_horizon"]] == [5, 10, 20]
+    assert all(row["forecast_horizon_rows"] == 6 and row["directional_rows"] == 4
+               for row in coverage["by_horizon"])
 
 
 @pytest.mark.parametrize("storage", ["sqlite3", "duckdb"])

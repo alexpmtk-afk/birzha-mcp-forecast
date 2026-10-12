@@ -14,7 +14,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts.g2_prospective_baseline_scorecard import (
-    ScorecardRefused, _canonical_json, _sha, build_scorecard, render_scorecard_text,
+    ScorecardRefused, _canonical_json, _coverage_summary, _sha, build_scorecard, render_scorecard_text,
 )
 from scripts.g2_prospective_scorecard_review import load_scorecard, render_scorecard_csv, validate_scorecard
 
@@ -73,30 +73,8 @@ def combine_scorecards(reports: list[dict[str, Any]]) -> dict[str, Any]:
             "directional_coverage_of_frozen_forecasts": directional / len(rows),
         })
     result = {field: reports[0][field] for field in metadata}
-    decisions = {name: sum(row["decision"] == name for row in observations)
-                 for name in ("UP", "DOWN", "NEUTRAL", "ABSTAIN")}
-    directional = decisions["UP"] + decisions["DOWN"]
-    reason_counts: dict[str, dict[str, Any]] = {}
-    for row in observations:
-        for reason in row["abstention_reasons"]:
-            item = reason_counts.setdefault(reason, {"forecast_horizon_rows": 0, "forecast_ids": set()})
-            item["forecast_horizon_rows"] += 1
-            item["forecast_ids"].add(row["forecast_id"])
     result["groups"], result["observations"] = groups, observations
-    result["coverage_summary"] = {
-        "forecast_horizon_rows": len(observations),
-        "directional_rows": directional,
-        "neutral_rows": decisions["NEUTRAL"],
-        "explicit_abstention_rows": decisions["ABSTAIN"],
-        "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in observations),
-        "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in observations),
-        "directional_coverage": directional / len(observations) if observations else None,
-        "abstention_reasons": [
-            {"reason": reason, "forecast_horizon_rows": value["forecast_horizon_rows"],
-             "unique_forecasts": len(value["forecast_ids"])}
-            for reason, value in sorted(reason_counts.items())
-        ],
-    }
+    result["coverage_summary"] = _coverage_summary(observations)
     result["report_sha256"] = _sha(_canonical_json(result))
     return validate_scorecard(result)
 
