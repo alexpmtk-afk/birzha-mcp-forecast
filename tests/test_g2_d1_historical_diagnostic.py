@@ -8,7 +8,7 @@ import pytest
 
 from birzha.domain.market import Candle,CandleSeries
 from scripts.g2_d1_development_dataset import (
-    FUTURES,MARKETS,_root_key,_canonical,_validate_schema,make_dataset,
+    FUTURES,MARKETS,_root_key,_active_calendar,_canonical,_validate_schema,make_dataset,
 )
 from scripts.g2_d1_historical_diagnostic import (
     HORIZONS,METHOD,_complete_close,evaluate_historical_development,run,
@@ -186,7 +186,79 @@ def test_offline_real_file_fixture_run_is_deterministic_and_archive_sha_unchange
         "evaluated_horizon_pairs"]
     assert len((outputs/"g2_d1_historical_exclusions.jsonl").read_text().splitlines())==a[
         "excluded_horizon_pairs"]
+    # A directory at the last output target must fail BEFORE any
+    # partial report is written.
+    conflict = tmp_path/"collision_out"
+    conflict.mkdir()
+    (conflict/"g2_d1_historical_manifest.json").mkdir()
+    with pytest.raises(FileExistsError, match="unlike historical"):
+        run(archive, witness, conflict)
+    assert not (conflict/"g2_d1_historical_results.jsonl").exists()
+    assert not (conflict/"g2_d1_historical_exclusions.jsonl").exists()
     p=outputs/"g2_d1_historical_results.jsonl"
     p.write_text("FORGED\n")
     with pytest.raises(FileExistsError,match="unlike historical"):
         run(archive,witness,outputs)
+
+
+@pytest.mark.parametrize("bad_end", (
+    "2021-01-26T09:00:00",   # earlier than begin
+    "2021-01-26T10:00:00",   # zero duration
+    "2021-01-27T23:49:59",   # spans longer than one day
+))
+def test_q124_invalid_future_d1_end_time_is_excluded_not_scored(bad_end):
+    store, _ = _fixture_db()
+    try:
+        history_45(store)
+        t0 = next(r for r in extracted(store)
+                  if r["market"] == "SBER" and r["session"] == "2021-01-21")
+        store._connection.execute("""
+            UPDATE historical_candles SET end_time=?
+            WHERE timeframe='D1' AND secid='SBER' AND begin LIKE ?
+        """, [bad_end, "2021-01-26%"])
+        assert _complete_close(store._connection, "SBER", "2021-01-26") is None
+        scored, rejected, reasons = evaluate_historical_development(
+            store._connection, [t0], till_day="2021-02-15")
+        assert not any(r["horizon"] == 5 for r in scored)
+        assert any(r["horizon"] == 5 and
+                   r["reason"] == "MISSING_OR_INVALID_FUTURE_D1"
+                   for r in rejected)
+        assert reasons["MISSING_OR_INVALID_FUTURE_D1"] >= 1
+    finally:
+        store.close()
+
+
+def test_q125_development_calendar_query_is_sql_bounded_before_oos():
+    store, _ = _fixture_db()
+    try:
+        history_45(store)
+        store.record_sessions(_root_key("SBER"), "SBER", ("2023-01-05",))
+        store.mark_session_range_verified(_root_key("SBER"),
+                                          "2023-01-05", "2023-01-05")
+        class RecordedConnection:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+                self.calls = []
+
+            def execute(self, sql, args=None):
+                self.calls.append((sql, args))
+                return self.wrapped.execute(sql, args or [])
+
+        proxy = RecordedConnection(store._connection)
+        calendar = _active_calendar(proxy, "SBER", through_day="2021-02-15")
+        assert calendar and all("2021-01-01" <= day <= "2021-02-15"
+                                for day, _ in calendar)
+        assert "2023-01-05" not in [day for day, _ in calendar]
+        sessions_query = next((sql, params) for sql, params in proxy.calls
+                              if "FROM historical_sessions" in sql)
+        assert "trade_date>=?" in sessions_query[0]
+        assert "trade_date<=?" in sessions_query[0]
+        assert sessions_query[1] == ["SBER", "2021-01-01", "2021-02-15"]
+        ranges_query = next((sql, params) for sql, params in proxy.calls
+                            if "FROM historical_session_verified_ranges" in sql)
+        assert "till_date>=?" in ranges_query[0]
+        assert "from_date<=?" in ranges_query[0]
+        with pytest.raises(ValueError, match="2021-22"):
+            _active_calendar(proxy, "SBER", through_day="2023-01-05")
+    finally:
+        store.close()
