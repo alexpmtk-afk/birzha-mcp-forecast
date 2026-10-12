@@ -8,6 +8,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 import pytest
@@ -716,13 +717,17 @@ def test_target_and_stop_levels_are_checked_only_at_terminal_close(tmp_path: Pat
     ledger = tmp_path / "pilot.sqlite3"
     _make_ledger(ledger)
     _set_synthetic_levels(ledger)
+    observed_ledger = tmp_path / "observed.sqlite3"
+    shutil.copy2(ledger, observed_ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
     pending = build_scorecard(ledger)
     assert all(row["target_level"] == 105.0 and row["stop_level"] == 95.0
                and row["target_close_status"] is None and row["stop_close_status"] is None
                for row in pending["observations"] if row["forecast_id"] == "f-up")
-    report = build_scorecard(ledger)
+    report = build_scorecard(observed_ledger)
     validate_scorecard(report)
-    match_ledger(report, ledger)
+    match_ledger(report, observed_ledger)
     assert all(row["target_close_status"] == "REACHED_AT_CLOSE"
                and row["stop_close_status"] == "NOT_REACHED_AT_CLOSE"
                for row in report["observations"] if row["forecast_id"] == "f-up")
