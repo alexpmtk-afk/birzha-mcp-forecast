@@ -408,6 +408,11 @@ class ProspectivePilotLedger:
             ).date().isoformat()
             for fid,raw,*_unused in forecasts
         }
+        forecast_profiles = {
+            fid:(json.loads(raw),json.loads(receipt))
+            for fid,raw,_digest,_src,_source_sha,receipt,_receipt_sha,_saved_at
+            in forecasts
+        }
         for fid,h,body,digest,src,src_digest in outcomes:
             if _sha(body.encode("utf8"))!=digest or _sha(src)!=src_digest or json.loads(body)["future_source_sha256"]!=src_digest:
                 raise ImmutableCollision(f"corrupt outcome row: {fid}/{h}")
@@ -450,8 +455,37 @@ class ProspectivePilotLedger:
                 raise ImmutableCollision(
                     f"persisted pilot future sessions detached from forecast: {fid}/{h}")
             try:
+                if h not in HORIZONS:
+                    raise ValueError("noncanonical horizon")
+                original,original_receipt=forecast_profiles[fid]
+                if (result["version"]!=VERSION or result["forecast_id"]!=fid
+                    or result["horizon_sessions"]!=h
+                    or result["market"]!=original["symbol"]
+                    or result["secid"]!=original["secid"]
+                    or result["capture_at"]!=original_receipt["captured_at"]
+                    or result["pilot_only"] is not True):
+                    raise ValueError("outcome identity not bound to original forecast")
+                reference=float(original["reference_price"])
+                if (not math.isfinite(reference) or reference<=0
+                    or type(result["reference_price"]) not in (int,float)
+                    or result["reference_price"]!=reference):
+                    raise ValueError("outcome reference price does not match forecast")
+                target=float(closes[-1])
+                if (type(result["actual_return_pct"]) not in (int,float)
+                    or result["actual_return_pct"]!=round((target/reference-1)*100,8)):
+                    raise ValueError("outcome return differs from frozen market data")
+                direction=next(x["direction"] for x in original["horizons"]
+                               if x["sessions"]==h)
+                expected_hit=((target/reference-1)>0 if direction=="UP"
+                              else (target/reference-1)<0 if direction=="DOWN" else None)
+                if result["direction_hit"] is not expected_hit:
+                    raise ValueError("outcome hit differs from original prediction")
                 completed=tuple(_when(item) for item in ends)
                 observed=_when(result["source_observed_at"])
+                written=_when(result["outcome_written_at"])
+                captured=_when(result["capture_at"])
+                if not completed[-1]<=observed<=written or observed<=captured:
+                    raise ValueError("outcome observed before last session or original receipt")
                 for day,done in zip(dates,completed):
                     actual=done.astimezone(MOEX_TIMEZONE).date()
                     session=date.fromisoformat(day)
@@ -460,8 +494,8 @@ class ProspectivePilotLedger:
                         raise ValueError("invalid session completion/receipt")
                 if any(a>=b for a,b in zip(completed,completed[1:])):
                     raise ValueError("non-monotonic future session completion")
-            except (ValueError,TypeError,KeyError) as exc:
-                raise ImmutableCollision("persisted pilot session chronology invalid") from exc
+            except (ValueError,TypeError,KeyError,StopIteration,OverflowError) as exc:
+                raise ImmutableCollision("persisted pilot Outcome causal/mathematical audit failed") from exc
         return {"version":VERSION,"captures":len(forecasts),"outcomes":len(outcomes),
             "forecast_ids":[x[0] for x in forecasts],"pilot_only":True,
             "note":"local hash integrity does not prove external timestamp or source authenticity"}
