@@ -32,6 +32,7 @@ ROW_FIELDS = {
     "target_close", "target_session", "target_session_end", "future_source_sha256", "outcome_sha256",
     "candidate_correct", "always_up_correct_same_row",
     "forecast_record_version", "engine_version", "abstention_reasons",
+    "explicit_abstention_fields_present",
 }
 COUNT_FIELDS = {
     "forecasts_frozen", "outcomes_completed", "outcomes_pending", "directional_forecasts",
@@ -127,6 +128,10 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             _text(row["engine_version"], "версия прогнозной модели")
         if not isinstance(direction, str) or direction not in DECISIONS:
             _refuse("Неизвестное направление прогноза.")
+        if type(row["explicit_abstention_fields_present"]) is not bool:
+            _refuse("Неверный признак наличия полей явного отказа.")
+        if direction == "ABSTAIN" and not row["explicit_abstention_fields_present"]:
+            _refuse("Явный отказ невозможен без полей причины в исходной записи.")
         source_reasons = row["abstention_reasons"]
         if (not isinstance(source_reasons, list) or
                 not all(isinstance(reason, str) and reason.strip() for reason in source_reasons)):
@@ -244,6 +249,7 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
         return {
             "forecast_horizon_rows": len(part), "directional_rows": n_directional,
             "neutral_rows": counts["NEUTRAL"], "explicit_abstention_rows": counts["ABSTAIN"],
+            "rows_with_explicit_abstention_fields": sum(row["explicit_abstention_fields_present"] for row in part),
             "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in part),
             "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in part),
             "directional_coverage": n_directional / len(part) if part else None,

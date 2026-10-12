@@ -511,7 +511,7 @@ def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, s
     "missing_group", "duplicate_group", "included", "correctness", "return", "reference",
     "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
     "unknown_status", "version", "evidence_claim", "limits", "coverage", "market_coverage",
-    "horizon_coverage", "abstention_reason", "extra_field",
+    "horizon_coverage", "abstention_reason", "abstention_field_flag", "extra_field",
 ])
 def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
     ledger = tmp_path / "pilot.sqlite3"
@@ -571,6 +571,8 @@ def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect
         report["coverage_summary"]["by_horizon"][0]["directional_coverage"] = 1.
     elif defect == "abstention_reason":
         row["abstention_reasons"] = ["invented cause"]
+    elif defect == "abstention_field_flag":
+        row["explicit_abstention_fields_present"] = None
     else:
         row["unsupported"] = True
     _resign_report(report)
@@ -645,6 +647,10 @@ def test_csv_preserves_pending_neutral_and_abstention_without_false_scores(tmp_p
     assert len(abstaining) == 3
     assert all(row["abstention_reasons"] == ["synthetic insufficient input"] for row in abstaining)
     assert report["coverage_summary"]["explicit_abstention_rows"] == 3
+    assert report["coverage_summary"]["rows_with_explicit_abstention_fields"] == 3
+    assert all(row["explicit_abstention_fields_present"] is True for row in abstaining)
+    assert all(item["rows_with_explicit_abstention_fields"] == 1
+               for item in report["coverage_summary"]["by_horizon"])
     assert report["coverage_summary"]["directional_coverage"] == 6 / 9
     assert report["coverage_summary"]["abstention_reasons"] == [
         {"reason": "synthetic insufficient input", "forecast_horizon_rows": 3, "unique_forecasts": 1}

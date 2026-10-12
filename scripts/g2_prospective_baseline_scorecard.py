@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 LEDGER_VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 DUCKDB_LEDGER_VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
-SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V3"
+SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V4"
 HORIZONS = (5, 10, 20)
 RECORD_VERSIONS = {
     "FORECAST_RECORD_V1_PROTOCOL_08",
@@ -377,6 +377,8 @@ def _forecast_horizons(forecast: dict[str, Any]) -> dict[int, dict[str, Any]]:
 
 
 def _decision(forecast: dict[str, Any], horizon: dict[str, Any]) -> str:
+    if ("decision_status" in forecast) != ("abstention_reasons" in forecast):
+        raise ScorecardRefused("explicit abstention fields must be recorded together")
     status = forecast.get("decision_status")
     if status not in {None, "ABSTAIN", "BASELINE_NEUTRAL", "BASELINE_DIRECTIONAL_ESTIMATE"}:
         raise ScorecardRefused("unknown decision status")
@@ -495,6 +497,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 # Preserve only the reason text recorded by the forecasting engine.
                 # A blank list means no explicit abstention reason was recorded.
                 "abstention_reasons": list(forecast.get("abstention_reasons", [])),
+                "explicit_abstention_fields_present": "decision_status" in forecast,
                 "created_at_t0": forecast.get("created_at_t0"),
                 "captured_at": receipt.get("captured_at"),
                 "forecast_sha256": receipt.get("forecast_sha256"),
@@ -624,6 +627,7 @@ def _coverage_summary(observations: list[dict[str, Any]]) -> dict[str, Any]:
             "directional_rows": directional,
             "neutral_rows": decisions["NEUTRAL"],
             "explicit_abstention_rows": decisions["ABSTAIN"],
+            "rows_with_explicit_abstention_fields": sum(row["explicit_abstention_fields_present"] for row in rows),
             "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in rows),
             "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in rows),
             "directional_coverage": directional / len(rows) if rows else None,
@@ -673,6 +677,7 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
         f"Направленных решений: {coverage['directional_rows']} из {coverage['forecast_horizon_rows']}; "
         f"нейтральных: {coverage['neutral_rows']}; явных отказов: {coverage['explicit_abstention_rows']}.",
         f"Результат получен для {coverage['completed_outcome_rows']} сроков; ожидается для {coverage['pending_outcome_rows']}.",
+        f"Поля для явного отказа и его причин есть в {coverage['rows_with_explicit_abstention_fields']} из {coverage['forecast_horizon_rows']} сохранённых записей сроков.",
     ])
     if coverage["directional_coverage"] is not None:
         lines.append(f"Доля направленных решений среди всех записей сроков: {percent(coverage['directional_coverage'])}.")
@@ -681,7 +686,7 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
         for item in coverage["abstention_reasons"]:
             lines.append(f"• {label(item['reason'])}: {item['forecast_horizon_rows']} записей сроков, {item['unique_forecasts']} прогнозов.")
     else:
-        lines.append("Исходные причины отказа не перечислены: явных отказов нет.")
+        lines.append("Исходные причины отказа не перечислены: явных отказов нет; в старом формате записи причины могли вообще не сохраняться.")
     if coverage["by_horizon"]:
         lines.extend(["", "Охват отдельно по срокам:"])
         for item in coverage["by_horizon"]:
