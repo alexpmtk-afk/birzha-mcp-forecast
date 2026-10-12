@@ -162,6 +162,13 @@ def test_detail_rows_reconcile_with_every_summary_group(tmp_path: Path) -> None:
     assert neutral["comparison_exclusion_reasons"] == ["NEUTRAL_DECISION"]
     assert neutral["candidate_correct"] is None
     assert neutral["always_up_correct_same_row"] is None
+    coverage = report["coverage_summary"]
+    assert coverage["forecast_horizon_rows"] == 9
+    assert coverage["directional_rows"] == 6
+    assert coverage["neutral_rows"] == 3
+    assert coverage["explicit_abstention_rows"] == 0
+    assert coverage["directional_coverage"] == 6 / 9
+    assert coverage["abstention_reasons"] == []
     assert ledger.read_bytes() == before
 
 
@@ -618,6 +625,18 @@ def test_csv_preserves_pending_neutral_and_abstention_without_false_scores(tmp_p
             assert row["Направление"] == "явный отказ"
             assert row["Изменение цены в процентах"] == "10.0"
             assert row["Участвует в сравнении"] == "нет"
+            assert row["Исходные причины явного отказа"] == "synthetic insufficient input"
+    abstaining = [row for row in report["observations"] if row["decision"] == "ABSTAIN"]
+    assert len(abstaining) == 3
+    assert all(row["abstention_reasons"] == ["synthetic insufficient input"] for row in abstaining)
+    assert report["coverage_summary"]["explicit_abstention_rows"] == 3
+    assert report["coverage_summary"]["directional_coverage"] == 6 / 9
+    assert report["coverage_summary"]["abstention_reasons"] == [
+        {"reason": "synthetic insufficient input", "forecast_horizon_rows": 3, "unique_forecasts": 1}
+    ]
+    text = render_scorecard_text(report)
+    assert "synthetic insufficient input" in text
+    assert "3 записей сроков, 1 прогноз" in text
 
 
 @pytest.mark.parametrize("name", ['=1+1', ' +SUM(1;2)', '@command', '-formula', 'quoted;"name\nnext'])

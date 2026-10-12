@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 LEDGER_VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 DUCKDB_LEDGER_VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
-SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V1"
+SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V2"
 HORIZONS = (5, 10, 20)
 RECORD_VERSIONS = {
     "FORECAST_RECORD_V1_PROTOCOL_08",
@@ -492,6 +492,9 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 "horizon_sessions": horizon, "decision": decision,
                 "forecast_record_version": forecast.get("record_version"),
                 "engine_version": forecast.get("engine_version"),
+                # Preserve only the reason text recorded by the forecasting engine.
+                # A blank list means no explicit abstention reason was recorded.
+                "abstention_reasons": list(forecast.get("abstention_reasons", [])),
                 "created_at_t0": forecast.get("created_at_t0"),
                 "captured_at": receipt.get("captured_at"),
                 "forecast_sha256": receipt.get("forecast_sha256"),
@@ -587,6 +590,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         "metric": "horizon-end close direction; a flat return is incorrect for either directional call",
         "groups": rows,
         "observations": observations,
+        "coverage_summary": _coverage_summary(observations),
         "limits": [
             "This reports descriptive counts and accuracy only; it does not select or tune a model.",
             "The prospective pilot ledger is local evidence; hashes do not authenticate an outside source, clock, or calendar.",
@@ -599,6 +603,35 @@ def build_scorecard(path: Path) -> dict[str, Any]:
     # No current clock or file path is included: identical evidence is repeatable.
     report["report_sha256"] = _sha(_canonical_json(report))
     return report
+
+
+def _coverage_summary(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize forecast availability using only frozen decisions and source reasons."""
+    by_decision = {decision: sum(row["decision"] == decision for row in observations)
+                   for decision in ("UP", "DOWN", "NEUTRAL", "ABSTAIN")}
+    directional = by_decision["UP"] + by_decision["DOWN"]
+    reasons: dict[str, dict[str, Any]] = {}
+    for row in observations:
+        if row["decision"] != "ABSTAIN":
+            continue
+        for reason in row["abstention_reasons"]:
+            item = reasons.setdefault(reason, {"forecast_horizon_rows": 0, "forecast_ids": set()})
+            item["forecast_horizon_rows"] += 1
+            item["forecast_ids"].add(row["forecast_id"])
+    return {
+        "forecast_horizon_rows": len(observations),
+        "directional_rows": directional,
+        "neutral_rows": by_decision["NEUTRAL"],
+        "explicit_abstention_rows": by_decision["ABSTAIN"],
+        "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in observations),
+        "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in observations),
+        "directional_coverage": directional / len(observations) if observations else None,
+        "abstention_reasons": [
+            {"reason": reason, "forecast_horizon_rows": value["forecast_horizon_rows"],
+             "unique_forecasts": len(value["forecast_ids"])}
+            for reason, value in sorted(reasons.items())
+        ],
+    }
 
 
 def render_scorecard_text(report: dict[str, Any], *, include_details: bool = False) -> str:
@@ -617,6 +650,22 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
         "Один прогноз представлен отдельно для каждого срока; строки разных сроков не являются независимыми прогнозами.",
         f"Контрольная сумма отчёта: {report['report_sha256']}.",
     ]
+    coverage = report["coverage_summary"]
+    lines.extend([
+        "",
+        "Охват направлений по всем сохранённым срокам:",
+        f"Направленных решений: {coverage['directional_rows']} из {coverage['forecast_horizon_rows']}; "
+        f"нейтральных: {coverage['neutral_rows']}; явных отказов: {coverage['explicit_abstention_rows']}.",
+        f"Результат получен для {coverage['completed_outcome_rows']} сроков; ожидается для {coverage['pending_outcome_rows']}.",
+    ])
+    if coverage["directional_coverage"] is not None:
+        lines.append(f"Доля направленных решений среди всех записей сроков: {percent(coverage['directional_coverage'])}.")
+    if coverage["abstention_reasons"]:
+        lines.append("Исходные причины явного отказа (текст сохранён как в записи прогноза):")
+        for item in coverage["abstention_reasons"]:
+            lines.append(f"• {label(item['reason'])}: {item['forecast_horizon_rows']} записей сроков, {item['unique_forecasts']} прогнозов.")
+    else:
+        lines.append("Исходные причины отказа не перечислены: явных отказов нет.")
     if not report["groups"]:
         lines.extend(["", "Сохранённых прогнозов нет."])
     previous = None

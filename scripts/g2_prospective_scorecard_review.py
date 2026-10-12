@@ -31,7 +31,7 @@ ROW_FIELDS = {
     "outcome_status", "comparison_included", "comparison_exclusion_reasons", "actual_return_pct",
     "target_close", "target_session", "target_session_end", "future_source_sha256", "outcome_sha256",
     "candidate_correct", "always_up_correct_same_row",
-    "forecast_record_version", "engine_version",
+    "forecast_record_version", "engine_version", "abstention_reasons",
 }
 COUNT_FIELDS = {
     "forecasts_frozen", "outcomes_completed", "outcomes_pending", "directional_forecasts",
@@ -70,7 +70,8 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
     if not isinstance(report, dict):
         _refuse("Отчёт должен быть объектом с отдельными записями и итогами.")
     top_fields = {"scorecard_version", "ledger_version", "storage_format", "future_evidence_validation",
-                  "read_only", "comparison", "metric", "groups", "observations", "limits", "report_sha256"}
+                  "read_only", "comparison", "metric", "groups", "observations", "coverage_summary",
+                  "limits", "report_sha256"}
     if set(report) != top_fields:
         _refuse("Состав отчёта неизвестен или устарел; постройте его заново из журнала.")
     _digest(report["report_sha256"], "отчёт")
@@ -126,6 +127,12 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             _text(row["engine_version"], "версия прогнозной модели")
         if not isinstance(direction, str) or direction not in DECISIONS:
             _refuse("Неизвестное направление прогноза.")
+        source_reasons = row["abstention_reasons"]
+        if (not isinstance(source_reasons, list) or
+                not all(isinstance(reason, str) and reason.strip() for reason in source_reasons)):
+            _refuse("Исходная причина отказа должна быть непустым текстом.")
+        if ((direction == "ABSTAIN") != bool(source_reasons)):
+            _refuse("Исходные причины должны быть только у явного отказа от направления.")
         for field in ("forecast_sha256", "capture_receipt_sha256", "capture_source_sha256"):
             _digest(row[field], field)
         t0 = _time(row["created_at_t0"], "время прогноза")
@@ -222,6 +229,33 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             _refuse("Итоговые числа не совпадают с отдельными записями прогноза.")
     if group_keys != set(by_group):
         _refuse("Для части отдельных записей отсутствуют итоги.")
+    # Recompute the project-wide coverage totals from the separate forecast rows.
+    rows = report["observations"]
+    decisions = {name: sum(row["decision"] == name for row in rows)
+                 for name in ("UP", "DOWN", "NEUTRAL", "ABSTAIN")}
+    directional = decisions["UP"] + decisions["DOWN"]
+    reason_counts: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        for reason in row["abstention_reasons"]:
+            item = reason_counts.setdefault(reason, {"forecast_horizon_rows": 0, "forecast_ids": set()})
+            item["forecast_horizon_rows"] += 1
+            item["forecast_ids"].add(row["forecast_id"])
+    coverage = {
+        "forecast_horizon_rows": len(rows),
+        "directional_rows": directional,
+        "neutral_rows": decisions["NEUTRAL"],
+        "explicit_abstention_rows": decisions["ABSTAIN"],
+        "pending_outcome_rows": sum(row["outcome_status"] == "PENDING" for row in rows),
+        "completed_outcome_rows": sum(row["outcome_status"] == "OBSERVED" for row in rows),
+        "directional_coverage": directional / len(rows) if rows else None,
+        "abstention_reasons": [
+            {"reason": reason, "forecast_horizon_rows": value["forecast_horizon_rows"],
+             "unique_forecasts": len(value["forecast_ids"])}
+            for reason, value in sorted(reason_counts.items())
+        ],
+    }
+    if report["coverage_summary"] != coverage:
+        _refuse("Общая сводка охвата или исходных причин отказа не совпадает с отдельными записями.")
     return report
 
 
@@ -259,6 +293,7 @@ def render_scorecard_csv(report: dict[str, Any]) -> str:
     writer.writerow(["Номер прогноза", "Рынок", "Точный инструмент", "Срок в торговых сессиях", "Направление",
                      "Время прогноза", "Исходная цена", "Состояние исхода", "Сессия исхода", "Цена закрытия",
                      "Изменение цены в процентах", "Участвует в сравнении", "Причины исключения",
+                     "Исходные причины явного отказа",
                      "Результат прогноза", "Результат правила всегда рост", "Контрольная сумма прогноза",
                      "Контрольная сумма исхода", "Контрольная сумма отчёта"])
 
@@ -278,6 +313,7 @@ def render_scorecard_csv(report: dict[str, Any]) -> str:
                   row["target_session"], row["target_close"], row["actual_return_pct"],
                   "да" if row["comparison_included"] else "нет",
                   "; ".join(REASONS[reason] for reason in row["comparison_exclusion_reasons"]),
+                  "; ".join(row["abstention_reasons"]),
                   result(row["candidate_correct"]), result(row["always_up_correct_same_row"]),
                   row["forecast_sha256"], row["outcome_sha256"], report["report_sha256"]]
         writer.writerow([cell(value) for value in values])
