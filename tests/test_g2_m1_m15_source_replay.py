@@ -197,3 +197,23 @@ def test_cursor_and_page_size_evidence_must_match_actual_source_rows(variant):
                         first="2026-10-09T07:16:05Z",last="2026-10-09T07:16:08Z")
     with pytest.raises(SourceReplayRefused):
         checked((page0,page1),evaluated_at_utc="2026-10-09T07:16:10Z")
+
+
+def test_unselected_future_m1_cannot_be_bound_to_old_completed_m15():
+    future = rows()[-1][:]
+    future[6] = "2026-10-09 10:18:00"
+    future[7] = "2026-10-09 10:18:59"
+    page = make_page(rows() + [future])
+    with pytest.raises(SourceReplayRefused,
+                       match="not completed by its own receipt"):
+        checked((page,), candidate=candidate())
+
+
+def test_page_cannot_claim_m1_closed_after_that_page_arrived():
+    page = make_page()
+    page = replace(page,
+                   response_received_utc="2026-10-09T07:14:10Z",
+                   request_started_utc="2026-10-09T07:14:05Z")
+    with pytest.raises(SourceReplayRefused,
+                       match="not completed by its own receipt"):
+        checked((page,), evaluated_at_utc="2026-10-09T07:16:10Z")

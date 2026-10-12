@@ -35,6 +35,7 @@ on:
       - chatgpt/g2-m15-external-proof-offline-20261012
       - chatgpt/g2-m1-first-local-intake-journal-20261012
       - chatgpt/g2-governed-m1-callback-offline-20261012
+      - chatgpt/g2-q092-causal-chain-independent-audit-20261012
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010

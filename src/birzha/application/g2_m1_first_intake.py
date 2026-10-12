@@ -295,8 +295,11 @@ class OriginalM1LocalIntake:
         record=self.db.execute(
             "SELECT seq,local_received_utc,raw_sha256,envelope FROM m1_local_receipts "
             "WHERE capture_key=? ORDER BY seq",(_key(capture_key),)).fetchall()
-        if not record or record[0][1]>_stamp(when):
-            raise LocalIntakeRefused("invalid local receipt/evaluation order")
+        # Require every page to be locally committed by the claimed T0.
+        # Checking just the first receipt let subsequent pages enter
+        # a historical preflight before their original local intake.
+        if not record or any(claimed_time(row[1]) > when for row in record):
+            raise LocalIntakeRefused("M15 evaluation predates a locally received page")
         from birzha.application.g2_m15_staging_preflight import DryRunRefused
         try:
             proof=prepare_m15_staging_preflight(
