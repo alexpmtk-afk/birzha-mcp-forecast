@@ -120,21 +120,35 @@ def _validate_schema(db: Any) -> bool:
     return "data_capabilities_json" in columns
 
 
-def _active_calendar(db: Any, market: str) -> tuple[tuple[str, str], ...]:
+def _active_calendar(
+    db: Any, market: str, *, through_day: str | None = None
+) -> tuple[tuple[str, str], ...]:
+    """Use a SQL-scoped Development calendar; never scan reserved OOS sessions.
+
+    The default unbounded read remains available for existing read-only
+    callers, but research extraction must pass its Development cutoff.
+    """
     key = _root_key(market)
-    rows = tuple((str(day), str(secid)) for day, secid in db.execute("""
+    if through_day is not None and not (
+        DEVELOPMENT_START <= through_day <= DEVELOPMENT_END
+    ):
+        raise ValueError("calendar cutoff must stay within 2021-22 Development")
+    scope = "" if through_day is None else " AND trade_date>=? AND trade_date<=?"
+    args = [key] if through_day is None else [key, DEVELOPMENT_START, through_day]
+    rows = tuple((str(day), str(secid)) for day, secid in db.execute(f"""
         SELECT trade_date, secid FROM historical_sessions
-        WHERE symbol=? ORDER BY trade_date, secid
-    """, [key]).fetchall())
+        WHERE symbol=?{scope} ORDER BY trade_date, secid
+    """, args).fetchall())
     if not rows:
         raise ValueError(f"{market}: no archived active-root calendar")
     dates = tuple(day for day, _ in rows)
     if dates != tuple(sorted(set(dates))):
         raise ValueError(f"{market}: duplicate/unsorted calendar")
-    ranges = tuple((str(start), str(end)) for start, end in db.execute("""
+    range_scope = "" if through_day is None else " AND till_date>=? AND from_date<=?"
+    ranges = tuple((str(start), str(end)) for start, end in db.execute(f"""
         SELECT from_date, till_date FROM historical_session_verified_ranges
-        WHERE symbol=? ORDER BY from_date
-    """, [key]).fetchall())
+        WHERE symbol=?{range_scope} ORDER BY from_date
+    """, args).fetchall())
     if not ranges or any(not any(start <= day <= end for start, end in ranges)
                          for day in dates):
         raise ValueError(f"{market}: unverified active-root dates")
@@ -189,7 +203,7 @@ def make_dataset(
     excluded: list[dict[str, str]] = []
     totals: dict[str, Any] = {}
     for market in MARKETS:
-        calendar = _active_calendar(db, market)
+        calendar = _active_calendar(db, market, through_day=till_day)
         seen_contract: list[tuple[str, str]] = []
         eligible = 0
         rejects = Counter()

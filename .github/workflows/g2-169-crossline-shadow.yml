@@ -48,6 +48,7 @@ on:
       - chatgpt/g2-q110-113-source-causality-cold-audit-20261012
       - chatgpt/g2-q114-119-atomic-outcome-audit-20261012
       - chatgpt/g2-q120-123-historical-2021-22-offline-walkforward-20261012
+      - chatgpt/g2-q124-126-historical-source-guards-20261013
   pull_request:
     branches:
       - chatgpt/g2-atomic-evidence-replay-20261010
