@@ -352,7 +352,7 @@ def test_forecast_near_utc_midnight_rejects_same_moscow_session_as_future(tmp_pa
     # Issued 2026-10-10 23:30Z == 2026-10-11 02:30 MSK.
     # Previously old UTC date comparison permitted Oct 11 as a FUTURE
     # MOEX session, despite Oct 11 already being the forecast's local day.
-    issue_clock=datetime(2026,10,10,23,35,tzinfo=timezone.utc)
+    issue_clock=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
     store=db(tmp_path,now=issue_clock)
     late=forecast(created_at_t0="2026-10-10T23:30:00Z")
     src=original(source_observed_at="2026-10-10T23:29:00Z")
@@ -366,7 +366,7 @@ def test_forecast_near_utc_midnight_rejects_same_moscow_session_as_future(tmp_pa
 
 
 def test_forecast_near_utc_midnight_accepts_truly_later_moscow_sessions(tmp_path):
-    issue_clock=datetime(2026,10,10,23,35,tzinfo=timezone.utc)
+    issue_clock=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
     store=db(tmp_path,now=issue_clock)
     assert store.capture(
         forecast(created_at_t0="2026-10-10T23:30:00Z"),
@@ -395,7 +395,7 @@ def test_cold_audit_rejects_hash_consistent_legacy_future_date_before_moscow_t0(
     # Model a *pre-fix* staging row accepted under the former UTC cutoff.
     # Do not call a live provider or fabricate genuine future maturity.
     from birzha.storage import prospective_single_store as module
-    issue_clock=datetime(2026,10,10,23,35,tzinfo=timezone.utc)
+    issue_clock=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
     store=db(tmp_path,now=issue_clock)
     assert store.capture(
         forecast(created_at_t0="2026-10-10T23:30:00Z"),
