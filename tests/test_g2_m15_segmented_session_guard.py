@@ -91,8 +91,14 @@ def test_gap_overlap_and_untrusted_normalized_notice_are_refused(kind):
     elif kind=="unbounded":
         doc["segments"]=doc["segments"]*10
     elif kind=="changed_notice":
-        w=replace(w,claimed_notice_sha256="0"*64)
-        with pytest.raises(SessionSegmentRefused):check(w)
+        # Q-088 correctly refuses a malformed notice before Q-096 gets
+        # control. Bind a VALID Q-088, then mutate only the notice passed
+        # to Q-096 to exercise the guard's own rejection contract.
+        original=preflight(session_notice=w)
+        corrupted=replace(w,claimed_notice_sha256="0"*64)
+        with pytest.raises(SessionSegmentRefused):
+            check_normalized_session_segments(
+                preflight=original,instrument=inst(),notice=corrupted)
         return
     elif kind=="notice_inversion":
         doc["session_end_utc"]="2026-10-09T06:40:00Z"
