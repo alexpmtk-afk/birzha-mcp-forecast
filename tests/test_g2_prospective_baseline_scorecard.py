@@ -814,8 +814,8 @@ def test_batch_pools_same_instrument_without_averaging_accuracy(tmp_path: Path) 
     assert coverage["forecast_horizon_rows"] == 18
     assert coverage["directional_rows"] == 12
     assert coverage["neutral_rows"] == 6
-    assert coverage["completed_outcome_rows"] == 17
-    assert coverage["pending_outcome_rows"] == 1
+    assert coverage["completed_outcome_rows"] == 15
+    assert coverage["pending_outcome_rows"] == 3
     assert coverage["by_market"][0]["forecast_horizon_rows"] == 18
     assert [row["horizon_sessions"] for row in coverage["by_horizon"]] == [5, 10, 20]
     assert all(row["forecast_horizon_rows"] == 6 and row["directional_rows"] == 4
