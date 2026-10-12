@@ -6,6 +6,7 @@ default live MOEX httpx transport or changes production provider paths.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from collections import deque
 from hashlib import sha256
 from typing import Callable
 from urllib.parse import urlencode
@@ -13,13 +14,52 @@ from urllib.parse import urlencode
 from birzha.application.g2_m1_first_intake import OriginalM1LocalIntake, _key
 from birzha.application.g2_m1_m15_source_replay import (
     OriginalM1Page, SourceReplayRefused, _identity, _strict_json, _table,
-    COLUMNS, PAGE_SIZE, MAX_BYTES, _minute,
+    COLUMNS, PAGE_SIZE, MAX_BYTES, MOSCOW, _minute,
 )
 from birzha.application.upstream_control import UpstreamRequestGovernor
 from birzha.domain.market import Instrument
 from birzha.providers.moex_iss import IssResponse, MoexIssClient, MoexIssError, ISS_BASE
 
 VERSION = "G2_GOVERNED_M1_CALLBACK_SANDBOX_V1"
+
+
+class FixtureISSResponse:
+    """Bounded in-memory HTTP fixture: no socket, file or network methods."""
+    def __init__(self, *, status: int, headers: dict[str, str], body: bytes):
+        if (type(status) is not int or not 100 <= status <= 599
+            or not isinstance(headers, dict)
+            or not isinstance(body, bytes) or len(body) > MAX_BYTES):
+            raise ValueError("invalid bounded fixture response")
+        self.status = status
+        self.headers = dict(headers)
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class MemoryOnlyISSOpener:
+    """Exactly typed in-memory callback opener, no configurable I/O."""
+    __slots__ = ("_responses", "urls")
+
+    def __init__(self, responses: tuple[FixtureISSResponse, ...]):
+        if (type(responses) is not tuple or not 1 <= len(responses) <= 3
+            or any(type(r) is not FixtureISSResponse for r in responses)):
+            raise ValueError("explicit 1-3 in-memory responses required")
+        self._responses = deque(responses)
+        self.urls: list[str] = []
+
+    def __call__(self, request, timeout):
+        self.urls.append(request.full_url)
+        if not self._responses:
+            raise AssertionError("unexpected request beyond in-memory fixtures")
+        return self._responses.popleft()
 
 
 class GovernedCaptureRefused(ValueError):
@@ -61,8 +101,9 @@ def capture_governed_m1_mock_only(
         raise GovernedCaptureRefused("explicit mock-only opt-in required")
     if (type(provider) is not MoexIssClient
         or not isinstance(provider._governor, UpstreamRequestGovernor)
-        or provider._http_client is not None):
-        raise GovernedCaptureRefused("default/live MOEX transport forbidden")
+        or provider._http_client is not None
+        or type(provider._opener) is not MemoryOnlyISSOpener):
+        raise GovernedCaptureRefused("default/live or arbitrary network-capable transport forbidden")
     if not isinstance(intake, OriginalM1LocalIntake):
         raise GovernedCaptureRefused("isolated original source intake required")
     if type(page_start) is not int or not 0 <= page_start < 12*PAGE_SIZE:
@@ -123,6 +164,8 @@ def capture_governed_m1_mock_only(
                 minute = _minute(dict(zip(columns,row)))
                 if minute["end"] > observed:
                     raise GovernedCaptureRefused("uncompleted native M1 source row")
+                if minute["begin"].astimezone(MOSCOW).date() != date.fromisoformat(day):
+                    raise GovernedCaptureRefused("native M1 outside requested exchange day")
                 if last_begin is not None and minute["begin"] <= last_begin:
                     raise GovernedCaptureRefused("duplicate or reordered native M1")
                 last_begin = minute["begin"]
@@ -149,7 +192,10 @@ def capture_governed_m1_mock_only(
         "governed_attempts":attempts,**capture,
         # A custom opener could perform network I/O; the sandbox cannot
         # independently prove that it was a fake despite test-only usage.
-        "real_moex_transport_used":None,
+        # This *exact* opener implementation reads only bounded in-memory
+        # fixtures. The exchange itself is still NOT authenticated.
+        "real_moex_transport_used":False,
+        "fixture_transport_source_only":True,
         "custom_opener_independently_audited":False,
         "provider_tls_identity_independently_authenticated":False,
         "original_network_arrival_independently_proven":False,
