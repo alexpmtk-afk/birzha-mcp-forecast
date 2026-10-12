@@ -584,14 +584,14 @@ def build_scorecard(path: Path) -> dict[str, Any]:
         direction = observation["decision"]
         if target_level is not None:
             observation["target_close_status"] = (
-                "REACHED_AT_CLOSE" if (target_close >= target_level if direction == "UP" else target_close <= target_level)
+                "REACHED_AT_CLOSE" if (observation["target_close"] >= target_level if direction == "UP" else observation["target_close"] <= target_level)
                 else "NOT_REACHED_AT_CLOSE"
             )
         else:
             observation["target_close_status"] = "NOT_SET"
         if stop_level is not None:
             observation["stop_close_status"] = (
-                "REACHED_AT_CLOSE" if (target_close <= stop_level if direction == "UP" else target_close >= stop_level)
+                "REACHED_AT_CLOSE" if (observation["target_close"] <= stop_level if direction == "UP" else observation["target_close"] >= stop_level)
                 else "NOT_REACHED_AT_CLOSE"
             )
         else:

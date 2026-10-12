@@ -19,6 +19,7 @@ MUTABLE_FIELDS = {
     "outcome_status", "comparison_included", "comparison_exclusion_reasons", "actual_return_pct",
     "target_close", "target_session", "target_session_end", "future_source_sha256", "outcome_sha256",
     "candidate_correct", "always_up_correct_same_row",
+    "target_close_status", "stop_close_status",
 }
 
 
