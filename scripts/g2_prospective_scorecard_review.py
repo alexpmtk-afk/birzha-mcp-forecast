@@ -35,6 +35,7 @@ ROW_FIELDS = {
     "forecast_record_version", "engine_version", "abstention_reasons",
     "explicit_abstention_fields_present", "expected_move_pct", "implied_target_price",
     "absolute_move_error_percentage_points", "flat_price_absolute_error_percentage_points",
+    "target_level", "stop_level", "target_close_status", "stop_close_status",
 }
 COUNT_FIELDS = {
     "forecasts_frozen", "outcomes_completed", "outcomes_pending", "directional_forecasts",
@@ -149,6 +150,18 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
         reference = _finite_number(row["reference_price"], "исходная цена")
         if reference <= 0:
             _refuse("Исходная цена должна быть положительной.")
+        target_level = row["target_level"]
+        stop_level = row["stop_level"]
+        if target_level is not None:
+            target_level = _finite_number(target_level, "целевой уровень")
+        if stop_level is not None:
+            stop_level = _finite_number(stop_level, "защитный уровень")
+        if direction in ("NEUTRAL", "ABSTAIN") and (target_level is not None or stop_level is not None):
+            _refuse("Нейтральное решение или отказ не должны иметь уровни.")
+        if direction == "UP" and ((target_level is not None and target_level <= row["reference_price"]) or (stop_level is not None and stop_level >= row["reference_price"])):
+            _refuse("Уровни роста расположены по неправильную сторону исходной цены.")
+        if direction == "DOWN" and ((target_level is not None and target_level >= row["reference_price"]) or (stop_level is not None and stop_level <= row["reference_price"])):
+            _refuse("Уровни снижения расположены по неправильную сторону исходной цены.")
         expected_move = row["expected_move_pct"]
         if expected_move is None:
             if (row["implied_target_price"] is not None or row["absolute_move_error_percentage_points"] is not None
@@ -176,6 +189,8 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
         if type(row["comparison_included"]) is not bool or row["comparison_included"] is not included:
             _refuse("Неверно указано участие записи в сравнении.")
         if status == "PENDING":
+            if row["target_close_status"] is not None or row["stop_close_status"] is not None:
+                _refuse("Ожидающий исход не должен иметь итоговый статус уровня.")
             if any(row[field] is not None for field in (
                 "actual_return_pct", "target_close", "target_session", "target_session_end",
                 "future_source_sha256", "outcome_sha256", "candidate_correct", "always_up_correct_same_row",
@@ -183,12 +198,24 @@ def validate_scorecard(report: Any) -> dict[str, Any]:
             )):
                 _refuse("Ожидающий исход содержит выдуманную цену или оценку.")
         else:
+            if row["target_level"] is None and row["target_close_status"] != "NOT_SET":
+                _refuse("Статус цели не соответствует отсутствию целевого уровня.")
+            if row["stop_level"] is None and row["stop_close_status"] != "NOT_SET":
+                _refuse("Статус защиты не соответствует отсутствию защитного уровня.")
             _digest(row["future_source_sha256"], "источник исхода")
             _digest(row["outcome_sha256"], "запись исхода")
             target = _finite_number(row["target_close"], "цена исхода")
             actual = _finite_number(row["actual_return_pct"], "изменение цены")
             if target <= 0 or actual != round((target / reference - 1.0) * 100.0, 8):
                 _refuse("Изменение цены не соответствует исходной и конечной цене.")
+            if row["target_level"] is not None:
+                expected_target_status = "REACHED_AT_CLOSE" if (target > row["target_level"] if direction == "UP" else target < row["target_level"]) else "NOT_REACHED_AT_CLOSE"
+                if row["target_close_status"] != expected_target_status:
+                    _refuse("Статус целевого уровня не соответствует конечной цене.")
+            if row["stop_level"] is not None:
+                expected_stop_status = "REACHED_AT_CLOSE" if (target < row["stop_level"] if direction == "UP" else target > row["stop_level"]) else "NOT_REACHED_AT_CLOSE"
+                if row["stop_close_status"] != expected_stop_status:
+                    _refuse("Статус защитного уровня не соответствует конечной цене.")
             expected_error = None if expected_move is None else round(abs(expected_move - actual), 8)
             if row["absolute_move_error_percentage_points"] != expected_error:
                 _refuse("Ошибка числового прогноза не соответствует записанному исходу.")

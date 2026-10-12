@@ -512,7 +512,7 @@ def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, s
     "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
     "unknown_status", "version", "evidence_claim", "limits", "coverage", "market_coverage",
     "horizon_coverage", "abstention_reason", "abstention_field_flag", "numeric_error", "numeric_price",
-    "flat_price_error", "extra_field",
+    "flat_price_error", "target_level", "extra_field",
 ])
 def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
     ledger = tmp_path / "pilot.sqlite3"
@@ -580,6 +580,8 @@ def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect
         row["implied_target_price"] = 100.0
     elif defect == "flat_price_error":
         row["flat_price_absolute_error_percentage_points"] = 0.0
+    elif defect == "target_level":
+        row["target_level"] = 100.0
     else:
         row["unsupported"] = True
     _resign_report(report)
@@ -691,6 +693,42 @@ def _set_synthetic_expected_move(ledger: Path, value: object) -> None:
             "UPDATE captures SET forecast_json=?,forecast_sha=?,receipt_json=?,receipt_sha=? WHERE forecast_id='f-up'",
             (encoded, receipt["forecast_sha256"], encoded_receipt, _sha(encoded_receipt.encode())),
         )
+
+
+def _set_synthetic_levels(ledger: Path) -> None:
+    with sqlite3.connect(ledger) as db:
+        raw, receipt_raw = db.execute(
+            "SELECT forecast_json,receipt_json FROM captures WHERE forecast_id='f-up'"
+        ).fetchone()
+        forecast, receipt = json.loads(raw), json.loads(receipt_raw)
+        forecast["target_levels"] = [105.0]
+        forecast["stop_level"] = 95.0
+        encoded = _encoded(forecast)
+        receipt["forecast_sha256"] = _sha(encoded.encode())
+        encoded_receipt = _encoded(receipt)
+        db.execute(
+            "UPDATE captures SET forecast_json=?,forecast_sha=?,receipt_json=?,receipt_sha=? WHERE forecast_id='f-up'",
+            (encoded, receipt["forecast_sha256"], encoded_receipt, _sha(encoded_receipt.encode())),
+        )
+
+
+def test_target_and_stop_levels_are_checked_only_at_terminal_close(tmp_path: Path) -> None:
+    ledger = tmp_path / "pilot.sqlite3"
+    _make_ledger(ledger)
+    _set_synthetic_levels(ledger)
+    pending = build_scorecard(ledger)
+    assert all(row["target_level"] == 105.0 and row["stop_level"] == 95.0
+               and row["target_close_status"] is None and row["stop_close_status"] is None
+               for row in pending["observations"] if row["forecast_id"] == "f-up")
+    report = build_scorecard(ledger)
+    validate_scorecard(report)
+    match_ledger(report, ledger)
+    assert all(row["target_close_status"] == "REACHED_AT_CLOSE"
+               and row["stop_close_status"] == "NOT_REACHED_AT_CLOSE"
+               for row in report["observations"] if row["forecast_id"] == "f-up")
+    text = render_scorecard_text(report, include_details=True)
+    assert "Проверка по конечной цене: REACHED_AT_CLOSE" in text
+    assert "Проверка по конечной цене: NOT_REACHED_AT_CLOSE" in text
 
 
 def test_numeric_move_forecast_is_scored_only_after_a_realized_outcome(tmp_path: Path) -> None:
