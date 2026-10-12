@@ -163,3 +163,31 @@ def test_handoff_refuses_corrupted_source_or_false_calendar(tmp_path):
                 session_notice=replace(notice(),secid="GAZP"),
                 evaluated_at=AT+timedelta(seconds=5))
         assert j.audit()["receipt_count"]==1
+
+
+def test_handoff_cannot_precede_later_local_original_page_commit(tmp_path):
+    all_rows=rows()
+    first=make_page(all_rows[:8],start=0,total=15,page_size=8)
+    second=make_page(all_rows[8:],start=8,total=15,page_size=8,
+                     first="2026-10-09T07:16:05Z",
+                     last="2026-10-09T07:16:08Z")
+    clock=Clock()
+    with opened(tmp_path,clock) as j:
+        append(j,first)
+        clock.now=AT+timedelta(seconds=4)  # second local commit is 07:16:11
+        append(j,second)
+        assert j.audit()["receipt_count"]==2
+        # Every caller-reported HTTP receipt precedes this evaluation,
+        # but the second *local* receipt does not. Old code accepted it.
+        with pytest.raises(LocalIntakeRefused,
+                           match="evaluation predates a locally received page"):
+            j.original_capture_handoff(
+                capture_key="TEST_CAPTURE",instrument=inst(),
+                candidate=candidate(),session_notice=notice(),
+                evaluated_at=AT+timedelta(seconds=2))
+        allowed=j.original_capture_handoff(
+            capture_key="TEST_CAPTURE",instrument=inst(),
+            candidate=candidate(),session_notice=notice(),
+            evaluated_at=AT+timedelta(seconds=5))
+        assert len(allowed["manifest"]["original_receipts"])==2
+        assert allowed["level_journal_admission_authorized"] is False
