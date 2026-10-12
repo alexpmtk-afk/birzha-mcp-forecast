@@ -30,10 +30,10 @@ def test_real_baseline_labels_are_not_misrepresented_as_protocol08_control():
     original = fcst.to_dict()
     report = audit_protocol08_forecast(fcst)
     assert report["fields"]["snapshot_binding"]["status"] == "STRUCTURE_PRESENT"
-    assert report["fields"]["control_holding_confidence"]["status"] == "NOT_IMPLEMENTED"
-    assert report["fields"]["route_obstacles_and_confidence"]["status"] == "NOT_IMPLEMENTED"
-    assert report["fields"]["alignment_scoring_formula"]["status"] == "SPECIFICATION_TBD"
-    assert report["fields"]["market_state_classifier"]["status"] == "NOT_IMPLEMENTED"
+    assert report["fields"]["control_holding_confidence"]["status"] == "RESEARCH_PRESENT_UNVERIFIED"
+    assert report["fields"]["route_obstacles_and_confidence"]["status"] == "RESEARCH_PRESENT_UNVERIFIED"
+    assert report["fields"]["alignment_scoring_formula"]["status"] == "RESEARCH_PROPOSAL_UNAPPROVED"
+    assert report["fields"]["market_state_classifier"]["status"] == "RESEARCH_PRESENT_UNVERIFIED"
     assert report["full_protocol08_accepted"] is False
     assert report["trade_executable"] is False
     assert report["production_authorized"] is False
@@ -51,9 +51,9 @@ def test_forged_validated_forecast_cannot_upgrade_unsupported_model():
     )
     outcome=audit_protocol08_forecast(fcst)
     assert outcome["full_protocol08_accepted"] is False
-    assert outcome["fields"]["control_holding_confidence"]["status"] == "NOT_IMPLEMENTED"
-    assert outcome["fields"]["route_obstacles_and_confidence"]["status"] == "NOT_IMPLEMENTED"
-    assert outcome["fields"]["alignment_scoring_formula"]["status"] == "SPECIFICATION_TBD"
+    assert outcome["fields"]["control_holding_confidence"]["status"] == "RESEARCH_PRESENT_UNVERIFIED"
+    assert outcome["fields"]["route_obstacles_and_confidence"]["status"] == "RESEARCH_PRESENT_UNVERIFIED"
+    assert outcome["fields"]["alignment_scoring_formula"]["status"] == "RESEARCH_PROPOSAL_UNAPPROVED"
     assert outcome["trade_executable"] is False
 
 
@@ -64,7 +64,7 @@ def test_matching_unclassified_market_state_vector_is_not_regime_certification()
     observed=audit_protocol08_forecast(fcst,market_state_vector=vector)
     assert observed["market_state_vector_matched"] is True
     assert observed["market_state_vector_classified"] is False
-    assert observed["fields"]["market_state_classifier"]["status"] == "NOT_IMPLEMENTED"
+    assert observed["fields"]["market_state_classifier"]["status"] == "RESEARCH_PRESENT_UNVERIFIED"
 
 
 def test_mismatched_snapshot_time_contract_does_not_pass_semantic_audit():
@@ -168,3 +168,30 @@ def test_invalid_scenario_enums_and_claimed_approval_are_rejected(field,value):
     kw[field]=value
     with pytest.raises(ValueError):
         evaluate_mandatory_conditions(**kw)
+
+
+def test_research_engines_are_present_but_cannot_mark_protocol_complete():
+    from birzha.application.control_holding import control_holding_from_snapshot
+    from birzha.application.level_route import assess_levels_and_route
+    from birzha.application.market_state_classifier import classify_market_state_from_snapshot
+    from birzha.application.g2_alignment15_proposal import propose_alignment_and_no_trade
+    assert all(callable(x) for x in (
+        control_holding_from_snapshot, assess_levels_and_route,
+        classify_market_state_from_snapshot, propose_alignment_and_no_trade
+    ))
+    original=baseline()
+    audit=audit_protocol08_forecast(original)
+    required={
+        "market_state_classifier":"RESEARCH_PRESENT_UNVERIFIED",
+        "control_holding_confidence":"RESEARCH_PRESENT_UNVERIFIED",
+        "level_role_strength_and_history":"RESEARCH_PRESENT_UNVERIFIED",
+        "route_obstacles_and_confidence":"RESEARCH_PRESENT_UNVERIFIED",
+        "alignment_scoring_formula":"RESEARCH_PROPOSAL_UNAPPROVED",
+        "scenario_mandatory_conditions":"RESEARCH_PARTIAL_UNVERIFIED",
+    }
+    for key,value in required.items():
+        assert audit["fields"][key]["status"]==value
+        assert key in audit["not_satisfied_for_full_protocol08"]
+    assert audit["full_protocol08_accepted"] is False
+    assert audit["trade_executable"] is False
+    assert audit["production_authorized"] is False

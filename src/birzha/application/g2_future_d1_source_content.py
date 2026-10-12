@@ -6,7 +6,6 @@ A non-ISS synthetic development fixture is explicitly UNREPLAYED.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from math import isfinite
 
 from birzha.application.g2_m1_m15_source_replay import (
@@ -33,19 +32,23 @@ def replay_native_d1_if_present(
     except SourceReplayRefused as exc:
         # A malformed response pretending to contain an ISS candles table
         # is never allowed to downgrade into a harmless opaque fixture.
-        if b'"candles"' in raw:
-            raise FutureD1ContentRefused("malformed native ISS candles source") from exc
+        if raw.lstrip().startswith((b"{", b"[")) or b'"candles"' in raw:
+            # A JSON-shaped document with invalid structure/encoding,
+            # escaped candle keys or duplicate source fields is NEVER a
+            # safe, opaque legacy fixture.
+            raise FutureD1ContentRefused("malformed or ambiguous JSON D1 source") from exc
         # Legacy synthetic fixtures are explicitly UNREPLAYED.
         return False
     if "candles" not in payload:
         return False
     try:
         columns, rows = _table(payload, "candles")
-        if (not all(n in columns for n in ("begin", "end", "close"))
+        required = ("begin", "end", "open", "close", "high", "low", "volume", "value")
+        if (not all(n in columns for n in required)
             or len(rows) != len(dates) or len(rows) != len(closes)
             or len(rows) != len(completed_at)):
-            raise FutureD1ContentRefused("native D1 source has missing or extra rows")
-        indexed = {name: columns.index(name) for name in ("begin", "end", "close")}
+            raise FutureD1ContentRefused("native D1 source has missing OHLCV or extra rows")
+        indexed = {name: columns.index(name) for name in required}
         from birzha.application.prospective_capture import MOEX_TIMEZONE, _when
         previous = None
         for row, claimed_day, claimed_end, claimed_close in zip(
@@ -55,12 +58,19 @@ def replay_native_d1_if_present(
                 raise FutureD1ContentRefused("invalid native D1 source shape")
             opening = _m1_time(row[indexed["begin"]])
             ending = _m1_time(row[indexed["end"]])
-            value = row[indexed["close"]]
-            if (type(value) not in (float, int) or not isfinite(value)
-                or value <= 0 or opening >= ending
+            numbers = {name: row[indexed[name]]
+                       for name in ("open", "close", "high", "low", "volume", "value")}
+            if (any(type(v) not in (float, int) or not isfinite(v)
+                    for v in numbers.values())
+                or any(numbers[k] <= 0 for k in ("open", "close", "high", "low"))
+                or any(numbers[k] < 0 for k in ("volume", "value"))
+                or numbers["low"] > min(numbers["open"], numbers["close"])
+                or numbers["high"] < max(numbers["open"], numbers["close"])
+                or numbers["low"] > numbers["high"]
+                or opening >= ending
                 or opening.astimezone(MOEX_TIMEZONE).date().isoformat() != claimed_day
                 or ending != _when(claimed_end)
-                or float(value) != float(claimed_close)
+                or float(numbers["close"]) != float(claimed_close)
                 or (previous is not None and opening <= previous)):
                 raise FutureD1ContentRefused("native D1 candle disagrees with supplied future window")
             previous = ending
