@@ -112,3 +112,29 @@ def test_invalid_calendar_session_claim_fails_without_network_or_journal(tmp_pat
         preflight(pages=(replace(p,raw_body=altered,
                                 raw_sha256=sha256(altered).hexdigest()),))
     assert list(tmp_path.iterdir())==[]
+
+
+@pytest.mark.parametrize("edge,claim",[
+    ("open_inside","2026-10-09T07:00:00.000001Z"),
+    ("close_before","2026-10-09T07:14:58Z"),
+    ("later_session","2026-10-09T07:15:00Z"),
+])
+def test_m15_cannot_cross_claimed_exchange_session_boundary(edge,claim):
+    witness=notice()
+    if edge in ("open_inside","later_session"):
+        witness=replace(witness,session_start_utc=claim)
+    else:
+        witness=replace(witness,session_end_utc=claim)
+    with pytest.raises(DryRunRefused, match="lacks M15 interval"):
+        preflight(session_notice=witness)
+
+
+def test_exact_claimed_session_boundaries_do_not_promote_calendar_authority():
+    # Boundary inclusivity is precise, but the document/URL and calendar
+    # have only the operator's claimed semantics, not independent MOEX proof.
+    witness=replace(notice(),session_start_utc="2026-10-09T07:00:00Z",
+                    session_end_utc="2026-10-09T07:14:59Z")
+    result=preflight(session_notice=witness)
+    assert result["manifest"]["notice_candidate"]["calendar_independently_authenticated"] is False
+    assert result["manifest"]["may_append_level_event_journal"] is False
+    assert result["level_journal_admission_authorized"] is False

@@ -297,6 +297,29 @@ class OriginalM1LocalIntake:
         self, *, capture_key: str, instrument: Instrument, candidate: Candle,
         session_notice: SessionNoticeCandidate, evaluated_at: datetime,
     ) -> dict:
+        """Build the handoff from ONE consistent SQLite read snapshot.
+
+        A competing writer must never be able to append a different page
+        between page-body lookup and the receipt metadata manifest.
+        """
+        if self.db.in_transaction:
+            raise LocalIntakeRefused("handoff requires a clean SQLite transaction")
+        self.db.execute("BEGIN")
+        try:
+            return self._handoff_in_snapshot(
+                capture_key=capture_key, instrument=instrument,
+                candidate=candidate, session_notice=session_notice,
+                evaluated_at=evaluated_at)
+        finally:
+            # This is strictly read-only; roll back to release the snapshot
+            # on success AND on validation failure.
+            if self.db.in_transaction:
+                self.db.execute("ROLLBACK")
+
+    def _handoff_in_snapshot(
+        self, *, capture_key: str, instrument: Instrument, candidate: Candle,
+        session_notice: SessionNoticeCandidate, evaluated_at: datetime,
+    ) -> dict:
         """Read-only SHA-bound source->M15 preflight from stored original pages.
 
         No RFC3161 token is obtained, no exact source status granted, and
