@@ -251,6 +251,11 @@ class SingleDuckDBProspectiveStagingJournal:
 
     def _audit(self):
         canonical={id:(h,p) for id,h,p in self.db.execute("SELECT forecast_id,payload_hash,payload_json FROM forecast_records").fetchall()}
+        # The denormalized operational journal columns must remain bound
+        # to the frozen canonical payload, not merely its JSON SHA.
+        forecast_columns={id:(symbol,secid,issued,engine) for
+            id,symbol,secid,issued,engine in self.db.execute(
+            "SELECT forecast_id,symbol,secid,created_at_t0,engine_version FROM forecast_records").fetchall()}
         sources=self.db.execute("SELECT forecast_id,forecast_sha,source_blob,source_sha,receipt_json,receipt_sha FROM g2_atomic_captures").fetchall()
         if set(canonical)!={r[0] for r in sources}:
             raise pilot.ImmutableCollision("orphan canonical Forecast/source receipt")
@@ -260,6 +265,33 @@ class SingleDuckDBProspectiveStagingJournal:
             meta=json.loads(receipt)
             if (meta.get("forecast_id"),meta.get("forecast_sha256"),meta.get("source_sha256"))!=(fid,hash_,sourcehash):
                 raise pilot.ImmutableCollision("source receipt detached from forecast")
+            try:
+                record=json.loads(canonical[fid][1])
+                if forecast_columns[fid]!=(record["symbol"],record["secid"],
+                                           record["created_at_t0"],record["engine_version"]):
+                    raise ValueError("canonical operational Forecast columns diverged")
+                expected={
+                    "version":VERSION, "forecast_id":fid,
+                    "forecast_sha256":hash_, "source_sha256":sourcehash,
+                    "source_origin":"LIVE_CAPTURED_PAYLOAD",
+                    "snapshot_id":record["snapshot_id"],
+                    "secid":record["secid"],
+                    "record_version":record["record_version"],
+                    "staging_only":True,
+                }
+                if any(meta.get(key)!=value for key,value in expected.items()):
+                    raise ValueError("persisted first receipt identity changed")
+                completed=pilot._when(meta["latest_completed_event_end"])
+                observed=pilot._when(meta["source_observed_at"])
+                issued=pilot._when(record["created_at_t0"])
+                captured=pilot._when(meta["captured_at"])
+                if (meta["decision_t0"]!=pilot._stamp(issued)
+                    or not completed<=observed<=issued<=captured
+                    or (captured-issued).total_seconds()>pilot.MAX_CAPTURE_LAG_SECONDS
+                    or (captured-observed).total_seconds()>pilot.MAX_CAPTURE_LAG_SECONDS):
+                    raise ValueError("persistent source receipt order invalid")
+            except (ValueError, KeyError, TypeError, OverflowError) as exc:
+                raise pilot.ImmutableCollision("cold source receipt/Forecast causality inconsistent") from exc
             try:
                 manifest_bytes = verified_original_manifest(meta, bytes(raw))
             except (ValueError, KeyError) as exc:
