@@ -40,7 +40,10 @@ def original_files(tmp_path):
 
 
 def accepted(tmp_path, **overrides):
-    kw=original_files(tmp_path)
+    # When exercising missing/symlinked inputs, do NOT recreate test files.
+    kw=overrides.pop("existing_files",None)
+    if kw is None:
+        kw=original_files(tmp_path)
     kw.update(overrides)
     return verify_m15_rfc3161(
         preflight=kw.pop("preflight",preflight()),
@@ -131,10 +134,10 @@ def test_missing_or_symlinked_artifact_fails_closed(tmp_path,material):
     name={"query":"query_path","response":"response_path","ca":"trust_ca_path"}[material]
     files[name].unlink()
     with pytest.raises(M15TimeProofRefused):
-        accepted(tmp_path,**{name:files[name]})
+        accepted(tmp_path,existing_files=dict(files))
     files[name].symlink_to(tmp_path/"somewhere",target_is_directory=False)
     with pytest.raises(M15TimeProofRefused):
-        accepted(tmp_path,**{name:files[name]})
+        accepted(tmp_path,existing_files=dict(files))
 
 
 def test_external_signed_time_is_existence_upper_bound_not_receipt_time(tmp_path):
