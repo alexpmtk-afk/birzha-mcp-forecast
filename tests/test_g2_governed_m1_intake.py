@@ -7,6 +7,7 @@ import pytest
 
 from birzha.application.g2_governed_m1_intake import (
     GovernedCaptureRefused,capture_governed_m1_mock_only,
+    FixtureISSResponse,MemoryOnlyISSOpener,
 )
 from birzha.application.g2_m1_first_intake import OriginalM1LocalIntake,LocalIntakeCollision
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
@@ -38,27 +39,14 @@ def body():
         "data":rows()}},separators=(",",":")).encode()
 
 
-class FakeResponse:
-    def __init__(self,status=200,body_bytes=None,ctype="application/json"):
-        self.status=status
-        self.headers={"Content-Type":ctype}
-        self.content=body() if body_bytes is None else body_bytes
-    def __enter__(self):
-        return self
-    def __exit__(self,*args):
-        return False
-    def read(self):
-        return self.content
+def FakeResponse(status=200,body_bytes=None,ctype="application/json"):
+    return FixtureISSResponse(status=status, headers={"Content-Type":ctype},
+                              body=body() if body_bytes is None else body_bytes)
 
 
 def environment(tmp_path, responses=None):
-    attempts=[]
-    outstanding=list(responses if responses is not None else [FakeResponse()])
-    def opener(request,timeout):
-        attempts.append(request.full_url)
-        if not outstanding:
-            raise AssertionError("unexpected unbounded retry")
-        return outstanding.pop(0)
+    opener=MemoryOnlyISSOpener(tuple(
+        responses if responses is not None else [FakeResponse()]))
     control=ProcessUpstreamControlPlane(
         gate_factory=lambda _:Gate(),sleeper=lambda _:None)
     provider=MoexIssClient(control_plane=control,opener=opener)
@@ -66,7 +54,7 @@ def environment(tmp_path, responses=None):
     journal=OriginalM1LocalIntake(
         tmp_path/"g2_m1_receipts_sandbox.sqlite3",
         staging_root=tmp_path,clock=clock)
-    return provider,journal,clock,attempts
+    return provider,journal,clock,opener.urls
 
 
 def capture(provider,journal,clock,**opts):
@@ -96,7 +84,8 @@ def test_governed_original_response_committed_before_return(tmp_path):
         assert pages[0].response_received_utc=="2026-10-09T07:16:04Z"
         assert j.audit()["receipt_count"]==1
         assert got["provider_tls_identity_independently_authenticated"] is False
-        assert got["real_moex_transport_used"] is None
+        assert got["real_moex_transport_used"] is False
+        assert got["fixture_transport_source_only"] is True
         assert got["custom_opener_independently_audited"] is False
         assert got["level_journal_admission_authorized"] is False
     finally:
@@ -208,6 +197,42 @@ def test_existing_governor_limits_all_503_attempts(tmp_path):
         with pytest.raises(UpstreamRateLimited):
             capture(p,j,c)
         assert len(attempts)==3
+        assert j.audit()["receipt_count"]==0
+    finally:
+        j.close()
+
+
+def test_arbitrary_callable_opener_refused_before_iss_request(tmp_path):
+    events=[]
+    def arbitrary_opener(request,timeout):
+        events.append(request.full_url)
+        raise AssertionError("unapproved user-defined opener invoked")
+    control=ProcessUpstreamControlPlane(
+        gate_factory=lambda _:Gate(),sleeper=lambda _:None)
+    provider=MoexIssClient(control_plane=control,opener=arbitrary_opener)
+    j=OriginalM1LocalIntake(
+        tmp_path/"g2_m1_receipts_sandbox.sqlite3",staging_root=tmp_path,
+        clock=Clock())
+    try:
+        with pytest.raises(GovernedCaptureRefused,match="arbitrary"):
+            capture(provider,j,Clock())
+        assert events==[]
+        assert j.audit()["receipt_count"]==0
+    finally:
+        j.close()
+
+
+def test_in_memory_response_rows_must_belong_to_requested_exchange_day(tmp_path):
+    wrong=json.loads(body())
+    for r in wrong["candles"]["data"]:
+        r[6]=r[6].replace("2026-10-09","2026-10-08")
+        r[7]=r[7].replace("2026-10-09","2026-10-08")
+    p,j,c,attempts=environment(
+        tmp_path,[FakeResponse(body_bytes=json.dumps(wrong).encode())])
+    try:
+        with pytest.raises(GovernedCaptureRefused,match="exchange day"):
+            capture(p,j,c)
+        assert len(attempts)==1
         assert j.audit()["receipt_count"]==0
     finally:
         j.close()
