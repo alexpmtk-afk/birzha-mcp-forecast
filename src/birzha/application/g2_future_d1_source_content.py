@@ -30,8 +30,12 @@ def replay_native_d1_if_present(
         raise FutureD1ContentRefused("missing or unbounded original D1 bytes")
     try:
         payload = _strict_json(raw)
-    except SourceReplayRefused:
-        # Legacy test fixtures may not be JSON at all, but are NOT proved.
+    except SourceReplayRefused as exc:
+        # A malformed response pretending to contain an ISS candles table
+        # is never allowed to downgrade into a harmless opaque fixture.
+        if b'"candles"' in raw:
+            raise FutureD1ContentRefused("malformed native ISS candles source") from exc
+        # Legacy synthetic fixtures are explicitly UNREPLAYED.
         return False
     if "candles" not in payload:
         return False
