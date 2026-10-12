@@ -96,6 +96,8 @@ def test_governed_original_response_committed_before_return(tmp_path):
         assert pages[0].response_received_utc=="2026-10-09T07:16:04Z"
         assert j.audit()["receipt_count"]==1
         assert got["provider_tls_identity_independently_authenticated"] is False
+        assert got["real_moex_transport_used"] is None
+        assert got["custom_opener_independently_audited"] is False
         assert got["level_journal_admission_authorized"] is False
     finally:
         j.close()
