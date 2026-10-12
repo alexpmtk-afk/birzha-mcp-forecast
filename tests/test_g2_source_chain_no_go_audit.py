@@ -113,7 +113,8 @@ def test_normalized_calendar_and_local_clock_do_not_close_release_gates(chain_en
 
 @pytest.mark.parametrize("forgery",[
     "fully_rehashed_m15","rehashed_segment_index","receipt_timestamp",
-    "receipt_seq","capture_key","claimed_callback_received",
+    "receipt_seq","receipt_status","receipt_false_attestation",
+    "capture_key","claimed_callback_received",
     "canonical_gate_evidence","wrong_source_candidate","different_notice",
 ])
 def test_recomputed_hashes_and_swapped_receipts_do_not_bypass_raw_replay(chain_env,forgery):
@@ -136,6 +137,10 @@ def test_recomputed_hashes_and_swapped_receipts_do_not_bypass_raw_replay(chain_e
         source["receipt"]["first_local_received_utc"]="2026-10-09T07:16:01Z"
     elif forgery=="receipt_seq":
         source["receipt"]["receipt_seq"]=999
+    elif forgery=="receipt_status":
+        source["receipt"]["status"]="TRUSTED"
+    elif forgery=="receipt_false_attestation":
+        source["receipt"]["independently_attested"]=True
     elif forgery=="capture_key":
         source["capture_key"]="UNRELATED_CAPTURE"
     elif forgery=="claimed_callback_received":
