@@ -365,14 +365,43 @@ class ProspectivePilotLedger:
             replay_native_d1_if_present, FutureD1ContentRefused,
         )
         with self._lock:
-            forecasts=self._db.execute("SELECT forecast_id,forecast_json,forecast_sha,input_blob,input_sha,receipt_json,receipt_sha FROM captures ORDER BY forecast_id").fetchall()
+            forecasts=self._db.execute("SELECT forecast_id,forecast_json,forecast_sha,input_blob,input_sha,receipt_json,receipt_sha,captured_at FROM captures ORDER BY forecast_id").fetchall()
             outcomes=self._db.execute("SELECT forecast_id,horizon,payload_json,payload_sha,input_blob,input_sha FROM outcomes ORDER BY forecast_id,horizon").fetchall()
-        for fid,body,digest,src,src_digest,receipt,r_digest in forecasts:
-            if _sha(body.encode("utf8"))!=digest or _sha(src)!=src_digest or _sha(receipt.encode("utf8"))!=r_digest:
+        for fid,body,digest,src,src_digest,receipt,r_digest,captured_col in forecasts:
+            if (_sha(body.encode("utf8"))!=digest or _sha(src)!=src_digest
+                or _sha(receipt.encode("utf8"))!=r_digest):
                 raise ImmutableCollision(f"corrupt capture row: {fid}")
-            content=json.loads(receipt)
-            if content["forecast_sha256"]!=digest or content["source_sha256"]!=src_digest:
-                raise ImmutableCollision(f"unbound receipt: {fid}")
+            try:
+                content=json.loads(receipt)
+                record=json.loads(body)
+                expected={
+                    "version":VERSION,
+                    "forecast_id":fid,
+                    "symbol":record["symbol"],
+                    "secid":record["secid"],
+                    "forecast_sha256":digest,
+                    "source_sha256":src_digest,
+                    "source_origin":"LIVE_CAPTURED_PAYLOAD",
+                    "snapshot_id":record["snapshot_id"],
+                    "record_version":record["record_version"],
+                    "schema":record["snapshot_contract_version"],
+                    "pilot_only":True,
+                    "strict_historical_pit":False,
+                }
+                if any(content.get(key)!=value for key,value in expected.items()):
+                    raise ValueError("capture identities and source label differ")
+                completed=_when(content["latest_completed_event_end"])
+                observed=_when(content["source_observed_at"])
+                issued=_when(record["created_at_t0"])
+                captured=_when(content["captured_at"])
+                if (content["decision_t0"]!=_stamp(issued)
+                    or content["captured_at"]!=captured_col
+                    or not completed<=observed<=issued<=captured
+                    or (captured-issued).total_seconds()>MAX_CAPTURE_LAG_SECONDS
+                    or (captured-observed).total_seconds()>MAX_CAPTURE_LAG_SECONDS):
+                    raise ValueError("persisted capture timing is not causal")
+            except (ValueError,KeyError,TypeError,OverflowError) as exc:
+                raise ImmutableCollision(f"persisted pilot receipt is not causal: {fid}") from exc
         forecast_dates = {
             fid:_when(json.loads(raw)["created_at_t0"]).astimezone(
                 MOEX_TIMEZONE

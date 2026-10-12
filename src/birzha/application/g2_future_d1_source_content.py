@@ -6,6 +6,7 @@ A non-ISS synthetic development fixture is explicitly UNREPLAYED.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from math import isfinite
 
 from birzha.application.g2_m1_m15_source_replay import (
@@ -40,6 +41,12 @@ def replay_native_d1_if_present(
         # Legacy synthetic fixtures are explicitly UNREPLAYED.
         return False
     if "candles" not in payload:
+        # ISS-like truncated/renamed candle tables must NOT quietly pass
+        # as harmless offline opaque fixtures. Retain the previously
+        # documented non-native synthetic fixture for legacy tests.
+        if any(key.casefold().startswith(("candle", "candles."))
+               for key in payload):
+            raise FutureD1ContentRefused("ambiguous or incomplete native D1 source table")
         return False
     try:
         columns, rows = _table(payload, "candles")
@@ -68,7 +75,10 @@ def replay_native_d1_if_present(
                 or numbers["high"] < max(numbers["open"], numbers["close"])
                 or numbers["low"] > numbers["high"]
                 or opening >= ending
+                or ending - opening > timedelta(days=1)
                 or opening.astimezone(MOEX_TIMEZONE).date().isoformat() != claimed_day
+                or (ending.astimezone(MOEX_TIMEZONE).date()
+                    - opening.astimezone(MOEX_TIMEZONE).date()).days not in (0, 1)
                 or ending != _when(claimed_end)
                 or float(numbers["close"]) != float(claimed_close)
                 or (previous is not None and opening <= previous)):
