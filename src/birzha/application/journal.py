@@ -14,6 +14,23 @@ class ForecastJournalService:
     forecasts: ForecastService
     journal: DuckDBForecastJournal
 
+    @staticmethod
+    def issuance_preflight() -> dict[str, object]:
+        """Fail-closed operational capability: no source-bound LIVE issuer.
+
+        Read-only, no clock/source/history/journal calls. This reflects the
+        actual blocked create_and_save implementation; a staging writer
+        does not make the legacy operational route safe.
+        """
+        return {
+            "schema": "G2_OPERATIONAL_ISSUANCE_PREFLIGHT_V1",
+            "status": "BLOCKED",
+            "reason": "UNATTESTED_FORECAST_ISSUANCE",
+            "source_bound_live_issuer_verified": False,
+            "canonical_write_authorized": False,
+            "production_authorized": False,
+        }
+
     def create_and_save(self, symbol: str, *, as_of_date: str | None = None) -> dict[str, object]:
         """Refuse unsafe operational issuance before fetching or writing.
 
