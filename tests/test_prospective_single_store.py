@@ -345,3 +345,78 @@ def test_persisted_full_window_chronology_is_audited_against_declared_sessions(t
     with pytest.raises(ImmutableCollision, match="session chronology"):
         store.audit()
     store.close()
+
+
+
+def test_forecast_near_utc_midnight_rejects_same_moscow_session_as_future(tmp_path):
+    # Issued 2026-10-10 23:30Z == 2026-10-11 02:30 MSK.
+    # Previously old UTC date comparison permitted Oct 11 as a FUTURE
+    # MOEX session, despite Oct 11 already being the forecast's local day.
+    issue_clock=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
+    store=db(tmp_path,now=issue_clock)
+    late=forecast(created_at_t0="2026-10-10T23:30:00Z")
+    src=original(source_observed_at="2026-10-10T23:29:00Z")
+    assert store.capture(late,src)["status"]=="APPENDED"
+    store.close()
+    store=db(tmp_path,now=issue_clock+timedelta(days=30))
+    with pytest.raises(AdmissionRefused,match="not after forecast local date"):
+        store.observe("atomic_fixture_01",5,future())
+    assert store.audit()["outcomes"]==0
+    store.close()
+
+
+def test_forecast_near_utc_midnight_accepts_truly_later_moscow_sessions(tmp_path):
+    issue_clock=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
+    store=db(tmp_path,now=issue_clock)
+    assert store.capture(
+        forecast(created_at_t0="2026-10-10T23:30:00Z"),
+        original(source_observed_at="2026-10-10T23:29:00Z"),
+    )["status"]=="APPENDED"
+    store.close()
+    store=db(tmp_path,now=issue_clock+timedelta(days=30))
+    dates=tuple(f"2026-10-{day:02d}" for day in (12,13,14,15,16))
+    good=future(
+        session_dates=dates,
+        expected_calendar_dates=dates,
+        candle_completed_at=tuple(f"{day}T20:00:00Z" for day in dates),
+        source_observed_at="2026-10-16T20:01:00Z",
+    )
+    assert store.observe("atomic_fixture_01",5,good)["status"]=="APPENDED"
+    store.close()
+    reopened=db(tmp_path,now=issue_clock+timedelta(days=30))
+    assert reopened.audit()["outcomes"]==1
+    assert reopened.observe("atomic_fixture_01",5,good)["status"]=="DUPLICATE_IDENTICAL"
+    reopened.close()
+
+
+def test_cold_audit_rejects_hash_consistent_legacy_future_date_before_moscow_t0(
+    tmp_path,monkeypatch,
+):
+    # Model a *pre-fix* staging row accepted under the former UTC cutoff.
+    # Do not call a live provider or fabricate genuine future maturity.
+    from birzha.storage import prospective_single_store as module
+    issue_clock=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
+    store=db(tmp_path,now=issue_clock)
+    assert store.capture(
+        forecast(created_at_t0="2026-10-10T23:30:00Z"),
+        original(source_observed_at="2026-10-10T23:29:00Z"),
+    )["status"]=="APPENDED"
+    store.close()
+    real_validate=module._validate_future
+
+    def legacy_utc_cutoff(forecast_data,captured_at,evidence,horizon,now):
+        old=dict(forecast_data)
+        # UTC-calendar interpretation of the exact same source receipt.
+        old["created_at_t0"]="2026-10-10T11:30:00Z"
+        return real_validate(old,captured_at,evidence,horizon,now)
+
+    monkeypatch.setattr(module,"_validate_future",legacy_utc_cutoff)
+    store=db(tmp_path,now=issue_clock+timedelta(days=30))
+    assert store.observe("atomic_fixture_01",5,future())["status"]=="APPENDED"
+    store.close()
+    monkeypatch.undo()
+    reopened=db(tmp_path,now=issue_clock+timedelta(days=30))
+    with pytest.raises(ImmutableCollision,
+                       match="persisted future session not after MOEX forecast date"):
+        reopened.audit()
+    reopened.close()

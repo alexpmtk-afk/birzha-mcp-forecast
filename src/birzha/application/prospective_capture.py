@@ -8,7 +8,7 @@ The SQLite pilot is deliberately separate from the canonical Forecast/Outcome Jo
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import hashlib
 import json
 import math
@@ -253,8 +253,14 @@ class ProspectivePilotLedger:
                 capture_at=_when(receipt["captured_at"])
                 if observed<=capture_at or completed_times[0]<=capture_at:
                     raise AdmissionRefused("outcome must mature AFTER frozen capture")
-                if any(day<=_when(forecast["created_at_t0"]).date().isoformat() for day in evidence.session_dates):
-                    raise AdmissionRefused("outcome session not after forecast T0")
+                # A forecast at 23:30 UTC is already on the NEXT
+                # Moscow-local calendar date. MOEX session days are MSK,
+                # never UTC calendar dates.
+                forecast_moscow_day = _when(
+                    forecast["created_at_t0"]
+                ).astimezone(MOEX_TIMEZONE).date().isoformat()
+                if any(day<=forecast_moscow_day for day in evidence.session_dates):
+                    raise AdmissionRefused("outcome MOEX session not after forecast local date")
                 now=_when(_stamp(self._clock()))
                 if now<observed:
                     raise AdmissionRefused("outcome observation cannot come from the future")
@@ -267,16 +273,28 @@ class ProspectivePilotLedger:
                     "market":evidence.market,"secid":evidence.secid,"status":"OBSERVED",
                     "target_session":evidence.session_dates[-1],"target_session_end":_stamp(completed_times[-1]),
                     "target_close":target,"reference_price":ref,"actual_return_pct":round(ret,8),
+                    # Exact original prospective window, not only the last
+                    # close. All intermediate sessions are required to audit
+                    # 5/10/20 maturity after a cold restart.
+                    "original_future_window":{
+                        "session_dates":list(evidence.session_dates),
+                        "expected_calendar_dates":list(evidence.expected_calendar_dates),
+                        "candle_completed_at":[_stamp(t) for t in completed_times],
+                        "candle_close":[float(x) for x in evidence.candle_close],
+                    },
                     "direction_hit":hit,"future_source_sha256":_sha(evidence.source_payload),
                     "calendar_sha256":_sha(_json(evidence.expected_calendar_dates).encode("utf8")),
                     "source_observed_at":_stamp(observed),"capture_at":receipt["captured_at"],
                     "outcome_written_at":_stamp(now),"pilot_only":True,
                 }
+                result["original_future_window_sha256"] = _sha(
+                    _json(result["original_future_window"]).encode("utf8")
+                )
                 old=self._db.execute("SELECT payload_json,input_sha FROM outcomes WHERE forecast_id=? AND horizon=?",(forecast_id,horizon)).fetchone()
                 if old:
                     previous=json.loads(old[0])
                     if old[1]!=result["future_source_sha256"] or any(previous.get(k)!=result[k] for k in (
-                        "target_session","target_close","actual_return_pct","target_session_end","calendar_sha256","source_observed_at"
+                        "target_session","target_close","actual_return_pct","target_session_end","calendar_sha256","source_observed_at","original_future_window_sha256"
                     )):
                         raise ImmutableCollision("same horizon identity but changed source/price/calendar")
                     self._db.execute("COMMIT")
@@ -323,9 +341,54 @@ class ProspectivePilotLedger:
             content=json.loads(receipt)
             if content["forecast_sha256"]!=digest or content["source_sha256"]!=src_digest:
                 raise ImmutableCollision(f"unbound receipt: {fid}")
+        forecast_dates = {
+            fid:_when(json.loads(raw)["created_at_t0"]).astimezone(
+                MOEX_TIMEZONE
+            ).date().isoformat()
+            for fid,raw,*_unused in forecasts
+        }
         for fid,h,body,digest,src,src_digest in outcomes:
             if _sha(body.encode("utf8"))!=digest or _sha(src)!=src_digest or json.loads(body)["future_source_sha256"]!=src_digest:
                 raise ImmutableCollision(f"corrupt outcome row: {fid}/{h}")
+            result = json.loads(body)
+            window = result.get("original_future_window")
+            if not isinstance(window,dict) or set(window)!={
+                "session_dates","expected_calendar_dates",
+                "candle_completed_at","candle_close"
+            }:
+                raise ImmutableCollision("unverifiable legacy pilot future-window content")
+            if _sha(_json(window).encode("utf8")) != result.get(
+                "original_future_window_sha256"
+            ):
+                raise ImmutableCollision("pilot future window fingerprint changed")
+            dates=window["session_dates"]
+            expected=window["expected_calendar_dates"]
+            ends=window["candle_completed_at"]
+            closes=window["candle_close"]
+            if (fid not in forecast_dates or type(h) is not int
+                or not isinstance(dates,list) or not isinstance(expected,list)
+                or not isinstance(ends,list) or not isinstance(closes,list)
+                or not all(len(a)==h for a in (dates,expected,ends,closes))
+                or dates!=expected or dates!=sorted(set(dates))
+                or dates[0]<=forecast_dates[fid]
+                or dates[-1]!=result["target_session"]
+                or ends[-1]!=result["target_session_end"]
+                or closes[-1]!=result["target_close"]):
+                raise ImmutableCollision(
+                    f"persisted pilot future sessions detached from forecast: {fid}/{h}")
+            try:
+                completed=tuple(_when(item) for item in ends)
+                observed=_when(result["source_observed_at"])
+                for day,done in zip(dates,completed):
+                    actual=done.astimezone(MOEX_TIMEZONE).date()
+                    session=date.fromisoformat(day)
+                    if (day!=session.isoformat() or (actual-session).days not in (0,1)
+                        or done>observed):
+                        raise ValueError("invalid session completion/receipt")
+                if any(a>=b for a,b in zip(completed,completed[1:])):
+                    raise ValueError("non-monotonic future session completion")
+            except (ValueError,TypeError,KeyError) as exc:
+                raise ImmutableCollision("persisted pilot session chronology invalid") from exc
         return {"version":VERSION,"captures":len(forecasts),"outcomes":len(outcomes),
             "forecast_ids":[x[0] for x in forecasts],"pilot_only":True,
             "note":"local hash integrity does not prove external timestamp or source authenticity"}
