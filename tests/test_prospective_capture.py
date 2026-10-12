@@ -202,3 +202,87 @@ def test_moscow_local_midnight_completion_not_confused_with_utc_date(tmp_path):
     # when its UTC date is the previous day. The final source receipt is later.
     assert l.observe('fcst_pilot_001',5,f)['status']=='APPENDED'
     l.close()
+
+
+
+def test_pilot_forecast_at_utc_midnight_refuses_same_moscow_day_as_future(tmp_path):
+    now=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
+    p=ProspectivePilotLedger(tmp_path/"pilot.sqlite3",clock=lambda:now)
+    assert p.capture(
+        FakeForecastRecord(t0="2026-10-10T23:30:00Z"),
+        source(source_observed_at="2026-10-10T23:29:00Z"),
+    )["status"]=="APPENDED"
+    p.close()
+    p=ledger(tmp_path,now+timedelta(days=30))
+    with pytest.raises(AdmissionRefused,match="not after forecast local date"):
+        p.observe("fcst_pilot_001",5,future())
+    assert p.audit()["outcomes"]==0
+    p.close()
+
+
+def test_pilot_accepts_later_moscow_session_window_and_audits_full_window(tmp_path):
+    now=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
+    p=ProspectivePilotLedger(tmp_path/"pilot.sqlite3",clock=lambda:now)
+    assert p.capture(
+        FakeForecastRecord(t0="2026-10-10T23:30:00Z"),
+        source(source_observed_at="2026-10-10T23:29:00Z"),
+    )["status"]=="APPENDED"
+    p.close()
+    dates=tuple(f"2026-10-{n:02d}" for n in (12,13,14,15,16))
+    fixed=future(
+        session_dates=dates,expected_calendar_dates=dates,
+        candle_completed_at=tuple(f"{day}T20:00:00Z" for day in dates),
+        source_observed_at="2026-10-16T20:01:00Z")
+    p=ledger(tmp_path,now+timedelta(days=30))
+    added=p.observe("fcst_pilot_001",5,fixed)
+    assert added["status"]=="APPENDED"
+    assert added["outcome"]["original_future_window"]["session_dates"]==list(dates)
+    assert len(added["outcome"]["original_future_window_sha256"])==64
+    assert p.audit()["outcomes"]==1
+    with pytest.raises(ImmutableCollision,match="changed source"):
+        revised=future(session_dates=dates,expected_calendar_dates=dates,
+            candle_completed_at=tuple(f"{day}T20:00:00Z" for day in dates),
+            source_observed_at="2026-10-16T20:01:00Z",
+            candle_close=(999,102,103,104,105))
+        p.observe("fcst_pilot_001",5,revised)
+    p.close()
+    p=ledger(tmp_path,now+timedelta(days=30))
+    assert p.audit()["outcomes"]==1
+    p.close()
+
+
+def test_pilot_cold_audit_rejects_rehashed_illegal_first_moscow_session(tmp_path):
+    from hashlib import sha256
+    import json
+    now=datetime(2026,10,10,23,33,tzinfo=timezone.utc)
+    p=ProspectivePilotLedger(tmp_path/"pilot.sqlite3",clock=lambda:now)
+    p.capture(FakeForecastRecord(t0="2026-10-10T23:30:00Z"),
+              source(source_observed_at="2026-10-10T23:29:00Z"))
+    p.close()
+    dates=tuple(f"2026-10-{n:02d}" for n in (12,13,14,15,16))
+    p=ledger(tmp_path,now+timedelta(days=30))
+    p.observe("fcst_pilot_001",5,future(
+        session_dates=dates,expected_calendar_dates=dates,
+        candle_completed_at=tuple(f"{day}T20:00:00Z" for day in dates),
+        source_observed_at="2026-10-16T20:01:00Z"))
+    p.close()
+    database=tmp_path/"pilot.sqlite3"
+    db=sqlite3.connect(database)
+    db.execute("DROP TRIGGER outcomes_no_update")
+    original=db.execute("SELECT payload_json FROM outcomes").fetchone()[0]
+    result=json.loads(original)
+    window=result["original_future_window"]
+    window["session_dates"][0]="2026-10-11"
+    window["expected_calendar_dates"][0]="2026-10-11"
+    canon=lambda v:json.dumps(v,sort_keys=True,ensure_ascii=False,
+                              separators=(",",":"),allow_nan=False)
+    digest=lambda t:sha256(t.encode("utf8")).hexdigest()
+    result["original_future_window_sha256"]=digest(canon(window))
+    encoded=canon(result)
+    db.execute("UPDATE outcomes SET payload_json=?,payload_sha=?",
+               (encoded,digest(encoded)))
+    db.commit();db.close()
+    p=ledger(tmp_path,now+timedelta(days=30))
+    with pytest.raises(ImmutableCollision,match="future sessions detached"):
+        p.audit()
+    p.close()
