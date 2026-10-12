@@ -74,13 +74,13 @@ def test_accuracy_and_baseline_share_scored_rows():
 def test_reject_wrong_provenance(tmp_path):
     p=tmp_path/'in.jsonl';r=row(0);r['historical_first_receipt']='PROVEN'
     p.write_text(json.dumps(r)+'\n',encoding='utf8')
-    with pytest.raises(AssertionError,match='false_first_receipt'):load_rows(p)
+    with pytest.raises(ValueError,match='false_first_receipt'):load_rows(p)
 
 
 def test_reject_duplicate(tmp_path):
     p=tmp_path/'in.jsonl';r=row(0)
     p.write_text(json.dumps(r)+'\n'+json.dumps(r)+'\n',encoding='utf8')
-    with pytest.raises(AssertionError,match='duplicate'):load_rows(p)
+    with pytest.raises(ValueError,match='duplicate'):load_rows(p)
 
 
 def test_determinism(tmp_path):
