@@ -191,3 +191,103 @@ def test_handoff_cannot_precede_later_local_original_page_commit(tmp_path):
             evaluated_at=AT+timedelta(seconds=5))
         assert len(allowed["manifest"]["original_receipts"])==2
         assert allowed["level_journal_admission_authorized"] is False
+
+
+def _killed_child(tmp_path, mode):
+    """Hard-exit ONLY a disposable subprocess, never the pytest process."""
+    import os
+    import subprocess
+    import sys
+
+    (tmp_path/"crash_raw.json").write_bytes(make_page().raw_body)
+    child=r'''
+import os, sqlite3, sys
+from datetime import datetime, timezone
+from hashlib import sha256
+from pathlib import Path
+from birzha.application import g2_m1_first_intake as mod
+from birzha.application.g2_m1_m15_source_replay import OriginalM1Page
+from birzha.domain.market import Instrument
+
+root=Path(sys.argv[1])
+mode=sys.argv[2]
+path=root/"g2_m1_receipts_scratch.sqlite3"
+if mode=="schema":
+    old=sqlite3.connect
+    def patched(*args,**kwargs):
+        connection=old(*args,**kwargs)
+        def trace(sql):
+            if "CREATE TRIGGER IF NOT EXISTS m1_local_no_delete" in sql:
+                os._exit(37)  # atomic initialization must roll back
+        connection.set_trace_callback(trace)
+        return connection
+    mod.sqlite3.connect=patched
+elif mode=="append":
+    old=sqlite3.connect
+    class CrashConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            if sql=="COMMIT":
+                os._exit(37)  # row inserted; transaction not committed
+            return super().execute(sql,parameters)
+    mod.sqlite3.connect=lambda *a,**kw: old(*a,**kw,factory=CrashConnection)
+raw=(root/"crash_raw.json").read_bytes()
+page=OriginalM1Page(
+    raw_body=raw, raw_sha256=sha256(raw).hexdigest(),
+    request_url="https://iss.moex.com/iss/engines/stock/markets/shares/boards/TQBR/securities/SBER/candles.json?interval=1&start=0&from=2026-10-09&till=2026-10-09",
+    http_status=200,content_type="application/json",
+    request_started_utc="2026-10-09T07:16:00Z",
+    response_received_utc="2026-10-09T07:16:05Z",
+    start=0)
+inst=Instrument(symbol="SBER",secid="SBER",board="TQBR",
+                engine="stock",market="shares",asset_class="equity")
+with mod.OriginalM1LocalIntake(
+    path,staging_root=root,
+    clock=lambda:datetime(2026,10,9,7,16,7,tzinfo=timezone.utc)) as j:
+    j.append(capture_key="CRASH",instrument=inst,page=page)
+sys.exit(88)  # should not arrive here
+'''
+    env=os.environ.copy()
+    env["PYTHONPATH"]=os.pathsep.join(x for x in sys.path if x)
+    done=subprocess.run([sys.executable,"-c",child,str(tmp_path),mode],
+                        env=env,capture_output=True,text=True,timeout=15)
+    assert done.returncode==37, (done.returncode,done.stderr[-1400:])
+
+
+def test_uncommitted_first_receipt_is_rolled_back_after_hard_process_exit(tmp_path):
+    with opened(tmp_path) as j:
+        initial=append(j)
+        assert initial["receipt_seq"]==1
+    _killed_child(tmp_path,"append")
+    with opened(tmp_path) as j:
+        assert j.audit()["receipt_count"]==1
+        assert append(j)["status"]=="DUPLICATE_IDENTICAL"
+        assert j.audit()["receipt_count"]==1
+        fresh=append(j,key="AFTER_RECOVERY")
+        assert fresh["status"]=="NEW_LOCAL_RECEIPT"
+        assert j.audit()["receipt_count"]==2
+
+
+def test_partial_schema_init_is_atomic_across_hard_process_exit(tmp_path):
+    _killed_child(tmp_path,"schema")
+    with opened(tmp_path) as j:
+        assert j.audit()["receipt_count"]==0
+        assert j.db.execute("PRAGMA synchronous").fetchone()==(2,)
+        assert append(j)["status"]=="NEW_LOCAL_RECEIPT"
+        assert j.audit()["receipt_count"]==1
+
+
+def test_committed_original_receipt_and_immutable_hash_survive_reopen(tmp_path):
+    with opened(tmp_path) as j:
+        original=append(j)
+        assert j.db.execute("PRAGMA synchronous").fetchone()==(2,)
+        sha=j.db.execute(
+            "SELECT receipt_sha256 FROM m1_local_receipts WHERE seq=1"
+        ).fetchone()[0]
+    with opened(tmp_path) as reopened:
+        assert reopened.audit()["receipt_count"]==1
+        assert reopened.db.execute(
+            "SELECT receipt_sha256 FROM m1_local_receipts WHERE seq=1"
+        ).fetchone()[0]==sha
+        repeat=append(reopened)
+        assert repeat["status"]=="DUPLICATE_IDENTICAL"
+        assert repeat["first_local_received_utc"]==original["first_local_received_utc"]
