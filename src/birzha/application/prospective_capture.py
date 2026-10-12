@@ -18,6 +18,10 @@ import threading
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from birzha.application.g2_future_d1_source_content import (
+    replay_native_d1_if_present, FutureD1ContentRefused,
+)
+
 VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 HORIZONS = (5, 10, 20)
 MAX_CAPTURE_LAG_SECONDS = 300
@@ -237,10 +241,22 @@ class ProspectivePilotLedger:
         observed = _when(evidence.source_observed_at)
         completed_times=tuple(_when(x) for x in evidence.candle_completed_at)
         for day,completed in zip(evidence.session_dates,completed_times):
-            if completed.astimezone(MOEX_TIMEZONE).date().isoformat() < day or completed>observed:
+            try:
+                session=date.fromisoformat(day)
+            except (ValueError,TypeError) as exc:
+                raise AdmissionRefused("noncanonical future exchange session") from exc
+            if (session.isoformat()!=day
+                or (completed.astimezone(MOEX_TIMEZONE).date()-session).days not in (0,1)
+                or completed>observed):
                 raise AdmissionRefused("uncompleted or not-yet-observed candle")
-        if tuple(sorted(completed_times))!=completed_times:
-            raise AdmissionRefused("completion timestamps not ordered")
+        if any(a>=b for a,b in zip(completed_times,completed_times[1:])):
+            raise AdmissionRefused("completion timestamps not strictly ordered")
+        try:
+            native_replayed = replay_native_d1_if_present(
+                evidence.source_payload,dates=evidence.session_dates,
+                completed_at=evidence.candle_completed_at,closes=evidence.candle_close)
+        except FutureD1ContentRefused as exc:
+            raise AdmissionRefused("native future D1 source contradicts claimed window") from exc
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
@@ -283,6 +299,9 @@ class ProspectivePilotLedger:
                         "candle_close":[float(x) for x in evidence.candle_close],
                     },
                     "direction_hit":hit,"future_source_sha256":_sha(evidence.source_payload),
+                    "native_d1_original_rows_match_claims":native_replayed,
+                    "source_transport_independently_authenticated":False,
+                    "calendar_independently_authenticated":False,
                     "calendar_sha256":_sha(_json(evidence.expected_calendar_dates).encode("utf8")),
                     "source_observed_at":_stamp(observed),"capture_at":receipt["captured_at"],
                     "outcome_written_at":_stamp(now),"pilot_only":True,
@@ -294,7 +313,7 @@ class ProspectivePilotLedger:
                 if old:
                     previous=json.loads(old[0])
                     if old[1]!=result["future_source_sha256"] or any(previous.get(k)!=result[k] for k in (
-                        "target_session","target_close","actual_return_pct","target_session_end","calendar_sha256","source_observed_at","original_future_window_sha256"
+                        "target_session","target_close","actual_return_pct","target_session_end","calendar_sha256","source_observed_at","original_future_window_sha256","native_d1_original_rows_match_claims","source_transport_independently_authenticated","calendar_independently_authenticated"
                     )):
                         raise ImmutableCollision("same horizon identity but changed source/price/calendar")
                     self._db.execute("COMMIT")
@@ -361,6 +380,18 @@ class ProspectivePilotLedger:
                 "original_future_window_sha256"
             ):
                 raise ImmutableCollision("pilot future window fingerprint changed")
+            if (result.get("source_transport_independently_authenticated") is not False
+                or result.get("calendar_independently_authenticated") is not False):
+                raise ImmutableCollision("pilot D1 source/calendar falsely certified")
+            try:
+                rechecked = replay_native_d1_if_present(
+                    src,dates=tuple(window["session_dates"]),
+                    completed_at=tuple(window["candle_completed_at"]),
+                    closes=tuple(window["candle_close"]))
+            except (FutureD1ContentRefused,TypeError,ValueError) as exc:
+                raise ImmutableCollision("pilot native D1 source bytes contradict stored window") from exc
+            if result.get("native_d1_original_rows_match_claims") is not rechecked:
+                raise ImmutableCollision("pilot D1 replay claim differs from actual original bytes")
             dates=window["session_dates"]
             expected=window["expected_calendar_dates"]
             ends=window["candle_completed_at"]
