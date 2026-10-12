@@ -18,10 +18,6 @@ import threading
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from birzha.application.g2_future_d1_source_content import (
-    replay_native_d1_if_present, FutureD1ContentRefused,
-)
-
 VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 HORIZONS = (5, 10, 20)
 MAX_CAPTURE_LAG_SECONDS = 300
@@ -236,6 +232,9 @@ class ProspectivePilotLedger:
 
     def observe(self, forecast_id: str, horizon: int, evidence: CompletedSessions) -> dict[str, Any]:
         """Append one validated future horizon, never update the prediction."""
+        from birzha.application.g2_future_d1_source_content import (
+            replay_native_d1_if_present, FutureD1ContentRefused,
+        )
         if horizon not in HORIZONS:
             raise AdmissionRefused("unrecognized horizon")
         if evidence.source_origin != "LIVE_COMPLETED_D1" or evidence.calendar_origin != "VERIFIED_EXCHANGE_SESSION_CALENDAR":
@@ -362,6 +361,9 @@ class ProspectivePilotLedger:
 
     def audit(self) -> dict[str, Any]:
         """Recalculate stored hashes; this is corruption detection, NOT external anchoring."""
+        from birzha.application.g2_future_d1_source_content import (
+            replay_native_d1_if_present, FutureD1ContentRefused,
+        )
         with self._lock:
             forecasts=self._db.execute("SELECT forecast_id,forecast_json,forecast_sha,input_blob,input_sha,receipt_json,receipt_sha FROM captures ORDER BY forecast_id").fetchall()
             outcomes=self._db.execute("SELECT forecast_id,horizon,payload_json,payload_sha,input_blob,input_sha FROM outcomes ORDER BY forecast_id,horizon").fetchall()
