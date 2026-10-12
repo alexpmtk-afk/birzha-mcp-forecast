@@ -35,8 +35,14 @@ def audit_source_chain_no_go(
         raise SourceChainAuditRefused("complete typed research evidence required")
     try:
         release = validate(release_manifest)
-        if release["release_allowed"] or release["release_state"] != "RELEASE_BLOCKED":
-            raise SourceChainAuditRefused("production-ready manifest not a research no-go")
+        if (release["release_allowed"] or release["release_state"] != "RELEASE_BLOCKED"
+            or release_manifest.get("user_approved_main_merge") is not False
+            or release_manifest.get("user_approved_home_deploy") is not False
+            or release["gates_passed"] != 1
+            or len(release["blocking_requirements"]) != 12):
+            # Q-097 must never silently accept forged partial user approvals
+            # or count newly asserted PASS gates without fresh adjudication.
+            raise SourceChainAuditRefused("canonical 12-blocker research no-go changed")
         if (governed_capture["schema"] != CAPTURE_SCHEMA
             or governed_capture["status"] != "SANDBOX_RESPONSE_CALLBACK_LOCALLY_CAPTURED"
             or governed_capture["real_moex_transport_used"] is not False
