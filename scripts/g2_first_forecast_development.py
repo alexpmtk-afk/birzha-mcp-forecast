@@ -30,31 +30,43 @@ def sha(path: Path):
 
 
 def load_rows(path: Path):
+    """Validate reconstructed rows even with Python optimization (-O)."""
     rows=[]
     seen=set()
-    for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), start=1):
-        r=json.loads(line)
-        m=r['market']; session=r['session']; secid=r['secid']
-        assert m in MARKETS, ('unsupported_market',n,m)
-        assert '2021-01-01' <= session <= '2022-12-31', ('out_of_development',n,session)
-        assert r['source']=='HISTORICAL_ARCHIVE_RECONSTRUCTED', ('bad_source',n)
-        assert r['decision_knowledge_cutoff_at'] is None, ('false_historical_cutoff',n)
-        assert r['historical_first_receipt']=='NOT_PROVEN', ('false_first_receipt',n)
-        assert r['features']['schema']==FEATURE_VERSION, ('feature_version_mismatch',n)
-        assert r['features']['secid']==secid and r['features']['session']==session
-        exp=r['expected_sessions']
-        assert len(exp)==21 and exp[-1]==session and len(set(exp))==21 and exp==sorted(exp), ('not_21_sorted_sessions',n)
-        assert (m,session) not in seen, ('duplicate',m,session)
-        seen.add((m,session))
-        assert r['features']['eligibility']=='RECONSTRUCTED_RESEARCH_ONLY'
+    for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(),start=1):
+        try:
+            r=json.loads(line)
+            market,day,secid=r['market'],r['session'],r['secid']
+            features=r['features']
+            window=r['expected_sessions']
+            checks=(
+                (market in MARKETS,'unsupported_market'),
+                ('2021-01-01' <= day <= '2022-12-31','out_of_development'),
+                (r['source']=='HISTORICAL_ARCHIVE_RECONSTRUCTED','bad_source'),
+                (r['decision_knowledge_cutoff_at'] is None,'false_historical_cutoff'),
+                (r['historical_first_receipt']=='NOT_PROVEN','false_first_receipt'),
+                (features['schema']==FEATURE_VERSION,'feature_version_mismatch'),
+                (features['secid']==secid and features['session']==day,'feature_identity'),
+                (isinstance(window,list) and len(window)==21 and
+                 window[-1]==day and window==sorted(set(window)),'not_21_sorted_sessions'),
+                ((market,day) not in seen,'duplicate'),
+                (features['eligibility']=='RECONSTRUCTED_RESEARCH_ONLY','eligibility'),
+            )
+            for valid,reason in checks:
+                if not valid:
+                    raise ValueError(f"{reason}: row {n}")
+        except (KeyError,TypeError,IndexError,json.JSONDecodeError) as exc:
+            raise ValueError(f"invalid reconstructed feature row {n}") from exc
+        seen.add((market,day))
         rows.append(r)
-    assert rows, 'empty_source'
+    if not rows:
+        raise ValueError("empty_source")
     return sorted(rows,key=lambda r:(MARKETS.index(r['market']),r['session']))
 
 
 def feature(row,name):
     v=row['features']['features'][name]
-    if v['status']!='AVAILABLE' or v['value'] is None or not isinstance(v['value'],(float,int)):
+    if v['status']!='AVAILABLE' or type(v['value']) not in (float,int):
         return None
     value=float(v['value'])
     if not math.isfinite(value):return None
@@ -97,7 +109,8 @@ def future_index(rows):
     for r in rows:
         for h in HORIZONS:
             k=(r['market'],r['secid'],r['expected_sessions'][-h-1],h)
-            assert k not in out, ('ambiguous_calendar_evidence',k)
+            if k in out:
+                raise ValueError(f"ambiguous_calendar_evidence: {k}")
             out[k]=r
     return out
 
@@ -116,7 +129,8 @@ def future_price_difference(index,market,secid,origin,h):
         if d is None or atr is None or atr<=0:
             return None,'MISSING_FUTURE_OUTCOME_FEATURE',fut['session']
         return d*atr,'SCORED',fut['session']
-    assert h==10
+    if h!=10:
+        raise ValueError("unsupported historical outcome horizon")
     mid=index.get((market,secid,origin,5))
     if mid is None or fut['expected_sessions'][-6]!=mid['session']:
         return None,'NO_EXACT_SECID_CONTIGUOUS_MIDPOINT',fut['session']
