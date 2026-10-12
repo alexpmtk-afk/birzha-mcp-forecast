@@ -135,7 +135,10 @@ def capture_governed_m1_mock_only(
         "schema":VERSION,"status":"SANDBOX_RESPONSE_CALLBACK_LOCALLY_CAPTURED",
         "capture_key":key,"instrument":exact,"page_start":page_start,
         "governed_attempts":attempts,**capture,
-        "real_moex_transport_used":False,
+        # A custom opener could perform network I/O; the sandbox cannot
+        # independently prove that it was a fake despite test-only usage.
+        "real_moex_transport_used":None,
+        "custom_opener_independently_audited":False,
         "provider_tls_identity_independently_authenticated":False,
         "original_network_arrival_independently_proven":False,
         "local_clock_independently_attested":False,
