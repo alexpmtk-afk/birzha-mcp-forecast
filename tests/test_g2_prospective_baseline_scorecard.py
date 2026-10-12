@@ -513,7 +513,7 @@ def test_review_loads_matches_and_exports_both_journal_formats(tmp_path: Path, s
     "exclusion", "capture_time", "target_time", "origin_binding", "hash", "unknown_direction",
     "unknown_status", "version", "evidence_claim", "limits", "coverage", "market_coverage",
     "horizon_coverage", "abstention_reason", "abstention_field_flag", "numeric_error", "numeric_price",
-    "flat_price_error", "target_level", "extra_field",
+    "flat_price_error", "target_levels", "extra_field",
 ])
 def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect: str) -> None:
     ledger = tmp_path / "pilot.sqlite3"
@@ -581,8 +581,8 @@ def test_review_refuses_resigned_but_inconsistent_reports(tmp_path: Path, defect
         row["implied_target_price"] = 100.0
     elif defect == "flat_price_error":
         row["flat_price_absolute_error_percentage_points"] = 0.0
-    elif defect == "target_level":
-        row["target_level"] = 100.0
+    elif defect == "target_levels":
+        row["target_levels"] = [100.0]
     else:
         row["unsupported"] = True
     _resign_report(report)
@@ -722,13 +722,13 @@ def test_target_and_stop_levels_are_checked_only_at_terminal_close(tmp_path: Pat
     with sqlite3.connect(ledger) as db:
         db.execute("DELETE FROM outcomes")
     pending = build_scorecard(ledger)
-    assert all(row["target_level"] == 105.0 and row["stop_level"] == 95.0
-               and row["target_close_status"] is None and row["stop_close_status"] is None
+    assert all(row["target_levels"] == [105.0] and row["stop_level"] == 95.0
+               and row["target_close_statuses"] is None and row["stop_close_status"] is None
                for row in pending["observations"] if row["forecast_id"] == "f-up")
     report = build_scorecard(observed_ledger)
     validate_scorecard(report)
     match_ledger(report, observed_ledger)
-    assert all(row["target_close_status"] == "REACHED_AT_CLOSE"
+    assert all(row["target_close_statuses"] == ["REACHED_AT_CLOSE"]
                and row["stop_close_status"] == "NOT_REACHED_AT_CLOSE"
                for row in report["observations"] if row["forecast_id"] == "f-up")
     text = render_scorecard_text(report, include_details=True)
@@ -1277,8 +1277,8 @@ def test_exact_close_equality_survives_build_review_and_export(tmp_path: Path, d
     report = build_scorecard(ledger)
     validate_scorecard(report)
     match_ledger(report, ledger)
-    key = "target_close_status" if field == "target_levels" else "stop_close_status"
-    assert all(row[key] == "REACHED_AT_CLOSE" for row in report["observations"] if row["forecast_id"] == fid)
+    key = "target_close_statuses" if field == "target_levels" else "stop_close_status"
+    assert all(row[key] == (["REACHED_AT_CLOSE"] if field == "target_levels" else "REACHED_AT_CLOSE") for row in report["observations"] if row["forecast_id"] == fid)
     assert "конечная цена достигла уровня или прошла за него" in render_scorecard_csv(report)
     assert "REACHED_AT_CLOSE" not in render_scorecard_text(report, include_details=True)
     assert ledger.read_bytes() == before
@@ -1296,15 +1296,15 @@ def test_nonpositive_levels_are_refused_even_on_the_correct_side(tmp_path: Path,
         build_scorecard(ledger)
 
 
-@pytest.mark.parametrize("field,value", [("stop_level", 0.0), ("target_level", -5.0)])
+@pytest.mark.parametrize("field,value", [("stop_level", 0.0), ("target_levels", -5.0)])
 def test_rehashed_report_cannot_hide_nonpositive_levels(tmp_path: Path, field: str, value: float) -> None:
     ledger = tmp_path / "report.sqlite3"
     _make_ledger(ledger)
     report = build_scorecard(ledger)
     fid = "f-up" if field == "stop_level" else "f-down"
     row = next(row for row in report["observations"] if row["forecast_id"] == fid)
-    row[field] = value
-    row["stop_close_status" if field == "stop_level" else "target_close_status"] = "NOT_REACHED_AT_CLOSE"
+    row[field] = value if field == "stop_level" else [value]
+    row["stop_close_status" if field == "stop_level" else "target_close_statuses"] = "NOT_REACHED_AT_CLOSE" if field == "stop_level" else ["NOT_REACHED_AT_CLOSE"]
     _resign_report(report)
     with pytest.raises(ScorecardRefused, match="положительными"):
         validate_scorecard(report)
@@ -1349,15 +1349,15 @@ def test_level_csv_preserves_pending_status_as_blank(tmp_path: Path) -> None:
     rows = list(csv.DictReader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))
     up = [row for row in rows if row["Номер прогноза"] == "f-up"]
     assert len(up) == 3
-    assert all(row["Целевой уровень"] == "105.0" and row["Защитный уровень"] == "95.0"
-               and row["Цель по конечной цене"] == row["Защита по конечной цене"] == "" for row in up)
+    assert all(row["Целевые уровни"] == "105.0" and row["Защитный уровень"] == "95.0"
+               and row["Цели по конечной цене"] == row["Защита по конечной цене"] == "" for row in up)
 
 
 def test_previous_schema_version_requires_rebuilding_the_report(tmp_path: Path) -> None:
     ledger = tmp_path / "version.sqlite3"
     _make_ledger(ledger)
     report = build_scorecard(ledger)
-    assert report["scorecard_version"] == "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V8"
+    assert report["scorecard_version"] == "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V9"
     report["scorecard_version"] = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V6"
     _resign_report(report)
     with pytest.raises(ScorecardRefused, match="версия"):
@@ -1405,7 +1405,104 @@ def test_one_record_cannot_report_different_levels_at_different_horizons(tmp_pat
     _set_synthetic_levels(ledger)
     report = build_scorecard(ledger)
     row = next(row for row in report["observations"] if row["forecast_id"] == "f-up")
-    row["target_level"] = 106.0
+    row["target_levels"] = [106.0]
     _resign_report(report)
     with pytest.raises(ScorecardRefused, match="разные исходные записи"):
         validate_scorecard(report)
+
+
+@pytest.mark.parametrize("fid,targets,expected", [
+    ("f-up", [105.0, 110.0, 115.0], ["REACHED_AT_CLOSE", "REACHED_AT_CLOSE", "NOT_REACHED_AT_CLOSE"]),
+    ("f-down", [95.0, 90.0, 85.0], ["REACHED_AT_CLOSE", "REACHED_AT_CLOSE", "NOT_REACHED_AT_CLOSE"]),
+])
+def test_every_target_is_preserved_and_scored_without_choosing_one(tmp_path: Path, fid: str, targets: list[float], expected: list[str]) -> None:
+    ledger = tmp_path / "all-targets.sqlite3"
+    _make_ledger(ledger)
+    _rewrite_synthetic_capture(ledger, fid, lambda forecast: forecast.update(target_levels=targets))
+    if fid == "f-down":
+        with sqlite3.connect(ledger) as db:
+            for horizon, raw in db.execute("SELECT horizon,payload_json FROM outcomes WHERE forecast_id=?", (fid,)).fetchall():
+                outcome = json.loads(raw)
+                outcome.update(target_close=90.0, actual_return_pct=-10.0, direction_hit=True)
+                encoded = _encoded(outcome)
+                db.execute("UPDATE outcomes SET payload_json=?,payload_sha=? WHERE forecast_id=? AND horizon=?",
+                           (encoded, _sha(encoded.encode()), fid, horizon))
+    before = ledger.read_bytes()
+    report = build_scorecard(ledger)
+    validate_scorecard(report)
+    match_ledger(report, ledger)
+    relevant = [row for row in report["observations"] if row["forecast_id"] == fid]
+    assert len(relevant) == 3
+    assert all(row["target_levels"] == targets and row["target_close_statuses"] == expected for row in relevant)
+    assert report["coverage_summary"]["forecast_horizon_rows"] == 9
+    rows = list(csv.DictReader(io.StringIO(render_scorecard_csv(report)), delimiter=";"))
+    exported = next(row for row in rows if row["Номер прогноза"] == fid)
+    assert exported["Целевые уровни"] == " | ".join(str(value) for value in targets)
+    text = render_scorecard_text(report, include_details=True)
+    assert f"Целевой уровень 3: {targets[2]}" in text
+    assert ledger.read_bytes() == before
+
+
+def test_multiple_targets_stay_pending_and_immutable_across_new_outcomes(tmp_path: Path) -> None:
+    ledger = tmp_path / "transition.sqlite3"
+    _make_ledger(ledger)
+    _rewrite_synthetic_capture(ledger, "f-up", lambda forecast: forecast.update(target_levels=[105.0, 115.0]))
+    observed = build_scorecard(ledger)
+    with sqlite3.connect(ledger) as db:
+        db.execute("DELETE FROM outcomes")
+    pending = build_scorecard(ledger)
+    assert all(row["target_close_statuses"] is None for row in pending["observations"])
+    assert len(compare_scorecards(pending, observed)["newly_observed_existing_rows"]) == 9
+    changed = json.loads(json.dumps(pending))
+    for row in changed["observations"]:
+        if row["forecast_id"] == "f-up":
+            row["target_levels"] = [106.0, 115.0]
+    _resign_report(changed)
+    validate_scorecard(changed)
+    with pytest.raises(ScorecardRefused, match="Прежний прогноз"):
+        compare_scorecards(pending, changed)
+
+
+@pytest.mark.parametrize("defect", ["missing_status", "extra_status", "wrong_status", "reordered", "missing_target"])
+def test_rehashed_multiple_target_results_are_fully_reconciled(tmp_path: Path, defect: str) -> None:
+    ledger = tmp_path / "tamper.sqlite3"
+    _make_ledger(ledger)
+    _rewrite_synthetic_capture(ledger, "f-up", lambda forecast: forecast.update(target_levels=[105.0, 115.0]))
+    report = build_scorecard(ledger)
+    row = next(row for row in report["observations"] if row["forecast_id"] == "f-up")
+    if defect == "missing_status":
+        row["target_close_statuses"].pop()
+    elif defect == "extra_status":
+        row["target_close_statuses"].append("REACHED_AT_CLOSE")
+    elif defect == "wrong_status":
+        row["target_close_statuses"][1] = "REACHED_AT_CLOSE"
+    elif defect == "reordered":
+        row["target_levels"].reverse()
+    else:
+        row["target_levels"].pop()
+    _resign_report(report)
+    with pytest.raises(ScorecardRefused):
+        validate_scorecard(report)
+
+
+@pytest.mark.parametrize("bad", [[105.0, True], [105.0, 0.0], [105.0, 99.0], [105.0, "115"], "105,115"])
+def test_one_bad_target_refuses_the_whole_plan(tmp_path: Path, bad: object) -> None:
+    ledger = tmp_path / "bad-list.sqlite3"
+    _make_ledger(ledger)
+    _rewrite_synthetic_capture(ledger, "f-up", lambda forecast: forecast.update(target_levels=bad))
+    with pytest.raises(ScorecardRefused):
+        build_scorecard(ledger)
+
+
+def test_multiple_targets_survive_batch_package_roundtrip(tmp_path: Path) -> None:
+    ledger = tmp_path / "package.sqlite3"
+    _make_ledger(ledger)
+    _rewrite_synthetic_capture(ledger, "f-up", lambda forecast: forecast.update(target_levels=[115.0, 105.0, 105.0]))
+    package = tmp_path / "package"
+    build_package([ledger], package)
+    verify_package(package)
+    combined = json.loads((package / "combined.json").read_text(encoding="utf8"))
+    rows = [row for row in combined["observations"] if row["forecast_id"] == "f-up"]
+    assert all(row["target_levels"] == [115.0, 105.0, 105.0] for row in rows)
+    assert all(row["target_close_statuses"] == ["NOT_REACHED_AT_CLOSE", "REACHED_AT_CLOSE", "REACHED_AT_CLOSE"] for row in rows)
+    assert combined["coverage_summary"]["forecast_horizon_rows"] == 9

@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 LEDGER_VERSION = "G2_PROSPECTIVE_CAPTURE_PILOT_V1"
 DUCKDB_LEDGER_VERSION = "G2_ATOMIC_SINGLE_DUCKDB_STAGING_V2"
-SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V8"
+SCORECARD_VERSION = "G2_PROSPECTIVE_ALWAYS_UP_SCORECARD_V9"
 HORIZONS = (5, 10, 20)
 RECORD_VERSIONS = {
     "FORECAST_RECORD_V1_PROTOCOL_08",
@@ -468,32 +468,31 @@ def _check_outcome(
 
 def _level_plan(
     forecast: dict[str, Any], decision: str, fid: str, horizon: dict[str, Any] | None = None
-) -> tuple[float | None, float | None]:
-    # Protocol-08 levels belong to the immutable Forecast Record.
-    # A horizon-level override has no admitted contract; do not shadow either field.
+) -> tuple[list[float], float | None]:
+    # Preserve every Protocol-08 target in its original order, without choosing a winner.
     if horizon is not None and ("target_levels" in horizon or "stop_level" in horizon):
         raise ScorecardRefused(f"unsupported horizon-level target/stop override: {fid}")
     raw_targets = forecast.get("target_levels", [])
-    if raw_targets is None or raw_targets == []:
-        target = None
-    elif isinstance(raw_targets, list) and len(raw_targets) == 1:
-        target = _finite_number(raw_targets[0], f"target level {fid}")
-    else:
-        raise ScorecardRefused(f"target levels must be absent or contain one explicit level: {fid}")
+    if raw_targets is None:
+        raw_targets = []
+    if not isinstance(raw_targets, list):
+        raise ScorecardRefused(f"target levels must be a list: {fid}")
+    targets = [_finite_number(value, f"target level {fid}/{index + 1}")
+               for index, value in enumerate(raw_targets)]
     raw_stop = forecast.get("stop_level")
     stop = None if raw_stop is None else _finite_number(raw_stop, f"stop level {fid}")
-    if (target is not None and target <= 0) or (stop is not None and stop <= 0):
+    if any(target <= 0 for target in targets) or (stop is not None and stop <= 0):
         raise ScorecardRefused(f"target/stop levels must be positive: {fid}")
     reference = _finite_number(forecast.get("reference_price"), f"reference price {fid}")
     if reference <= 0:
         raise ScorecardRefused(f"reference price must be positive: {fid}")
-    if decision in {"NEUTRAL", "ABSTAIN"} and (target is not None or stop is not None):
+    if decision in {"NEUTRAL", "ABSTAIN"} and (targets or stop is not None):
         raise ScorecardRefused(f"neutral or abstaining forecast cannot carry target or stop levels: {fid}")
-    if decision == "UP" and ((target is not None and target <= reference) or (stop is not None and stop >= reference)):
+    if decision == "UP" and (any(target <= reference for target in targets) or (stop is not None and stop >= reference)):
         raise ScorecardRefused(f"UP target/stop levels must be on their respective sides of reference: {fid}")
-    if decision == "DOWN" and ((target is not None and target >= reference) or (stop is not None and stop <= reference)):
+    if decision == "DOWN" and (any(target >= reference for target in targets) or (stop is not None and stop <= reference)):
         raise ScorecardRefused(f"DOWN target/stop levels must be on their respective sides of reference: {fid}")
-    return target, stop
+    return targets, stop
 
 
 LEVEL_STATUS_RU = {
@@ -541,7 +540,7 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 implied_price = round(raw_price, 8)
                 if implied_price <= 0:
                     raise ScorecardRefused(f"numeric move rounds to an invalid price: {fid}/{horizon}")
-            target_level, stop_level = _level_plan(forecast, decision, fid, row)
+            target_levels, stop_level = _level_plan(forecast, decision, fid, row)
             observation = {
                 "forecast_id": fid, "market": key[0], "secid": key[1],
                 "horizon_sessions": horizon, "decision": decision,
@@ -561,9 +560,9 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 "implied_target_price": implied_price,
                 "absolute_move_error_percentage_points": None,
                 "flat_price_absolute_error_percentage_points": None,
-                "target_level": target_level,
+                "target_levels": target_levels,
                 "stop_level": stop_level,
-                "target_close_status": None,
+                "target_close_statuses": None,
                 "stop_close_status": None,
                 "outcome_status": "PENDING", "comparison_included": False,
                 "comparison_exclusion_reasons": reasons,
@@ -596,16 +595,15 @@ def build_scorecard(path: Path) -> dict[str, Any]:
                 abs(observation["expected_move_pct"] - actual_return), 8
             )
             observation["flat_price_absolute_error_percentage_points"] = round(abs(actual_return), 8)
-        target_level = observation["target_level"]
         stop_level = observation["stop_level"]
         direction = observation["decision"]
-        if target_level is not None:
-            observation["target_close_status"] = (
-                "REACHED_AT_CLOSE" if (observation["target_close"] >= target_level if direction == "UP" else observation["target_close"] <= target_level)
-                else "NOT_REACHED_AT_CLOSE"
-            )
-        else:
-            observation["target_close_status"] = "NOT_SET"
+        observation["target_close_statuses"] = [
+            "REACHED_AT_CLOSE" if (
+                observation["target_close"] >= level if direction == "UP"
+                else observation["target_close"] <= level
+            ) else "NOT_REACHED_AT_CLOSE"
+            for level in observation["target_levels"]
+        ]
         if stop_level is not None:
             observation["stop_close_status"] = (
                 "REACHED_AT_CLOSE" if (observation["target_close"] <= stop_level if direction == "UP" else observation["target_close"] >= stop_level)
@@ -853,8 +851,9 @@ def render_scorecard_text(report: dict[str, Any], *, include_details: bool = Fal
             lines.extend(["", f"Запись: {label(observation['forecast_id'])}. Рынок: {label(observation['market'])}. Инструмент: {label(observation['secid'])}.",
                           f"Срок: {observation['horizon_sessions']} торговых сессий. Направление: {decisions[observation['decision']]}.",
                           f"Время прогноза: {label(observation['created_at_t0'])}. Исходная цена: {observation['reference_price']}."])
-            if observation["target_level"] is not None:
-                lines.append(f"Целевой уровень: {observation['target_level']}. Проверка по конечной цене: {LEVEL_STATUS_RU[observation['target_close_status']]}.")
+            for index, level in enumerate(observation["target_levels"], 1):
+                status = None if observation["target_close_statuses"] is None else observation["target_close_statuses"][index - 1]
+                lines.append(f"Целевой уровень {index}: {level}. Проверка по конечной цене: {LEVEL_STATUS_RU[status]}.")
             if observation["stop_level"] is not None:
                 lines.append(f"Защитный уровень: {observation['stop_level']}. Проверка по конечной цене: {LEVEL_STATUS_RU[observation['stop_close_status']]}.")
             if observation["expected_move_pct"] is not None:

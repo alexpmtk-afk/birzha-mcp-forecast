@@ -28,6 +28,8 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
 ) -> None:
     ledger = tmp_path / "atomic.duckdb"
     clock = [datetime(2026, 10, 12, 10, 1, tzinfo=timezone.utc)]
+    targets = (101., 102., 105.) if direction == "UP" else (99., 98., 95.) if direction == "DOWN" else ()
+    stop = 99. if direction == "UP" else 101. if direction == "DOWN" else None
     record = ForecastRecord(
         forecast_id=f"synthetic-scorecard-{market}", symbol=market, secid=secid,
         created_at_t0="2026-10-12T10:00:00Z", engine_version="SYNTHETIC_COMPATIBILITY_ONLY",
@@ -35,6 +37,7 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
         horizons=tuple(HorizonForecast(h, direction, .2, None, None) for h in (5, 10, 20)),
         reasons=("synthetic compatibility case",), warnings=("not authenticated source/calendar",),
         validation_status="UNVALIDATED_BASELINE", reference_price=100.,
+        target_levels=targets, stop_level=stop,
         snapshot_id=f"synthetic-snapshot-{market}", snapshot_contract_version="MARKET_SNAPSHOT_V2",
     )
     store = SingleDuckDBProspectiveStagingJournal(ledger, staging_root=tmp_path, clock=lambda: clock[0])
@@ -48,6 +51,8 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
         store.close()
     pending = build_scorecard(ledger)
     validate_scorecard(pending)
+    assert all(row["target_levels"] == list(targets) and row["stop_level"] == stop
+               and row["target_close_statuses"] is None for row in pending["observations"])
     assert pending["coverage_summary"]["rows_with_explicit_abstention_fields"] == 0
     assert pending["coverage_summary"]["numeric_move_rows"] == 0
     assert pending["coverage_summary"]["numeric_move_scored_rows"] == 0
@@ -75,6 +80,10 @@ def test_current_writer_forecast_and_outcome_are_readable_without_changes(
     report = build_scorecard(ledger)
     validate_scorecard(report)
     match_ledger(report, ledger)
+    mature = next(row for row in report["observations"] if row["horizon_sessions"] == 5)
+    assert mature["target_levels"] == list(targets)
+    assert mature["target_close_statuses"] == ([] if direction == "NEUTRAL" else
+        ["REACHED_AT_CLOSE", "REACHED_AT_CLOSE", "NOT_REACHED_AT_CLOSE"])
     csv_report = render_scorecard_csv(report)
     assert "Контрольная сумма отчёта" in csv_report
     assert report["report_sha256"] in csv_report
