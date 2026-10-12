@@ -110,11 +110,21 @@ class ProspectivePilotLedger:
         self._db = sqlite3.connect(str(p), isolation_level=None)
         self._db.execute("PRAGMA foreign_keys=ON")
         self._db.execute("PRAGMA busy_timeout=4000")
+        self._db.execute("PRAGMA synchronous=FULL")
+        if self._db.execute("PRAGMA synchronous").fetchone() != (2,):
+            self._db.close()
+            raise AdmissionRefused("durable pilot SQLite unavailable")
+        if self._db.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            self._db.close()
+            raise ImmutableCollision("pilot SQLite integrity check failed")
         tables = {r[0] for r in self._db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if tables and "pilot_meta" not in tables:
             self._db.close()
             raise AdmissionRefused("target already has unrelated tables")
+        # First schema, triggers AND schema-version must be one atomic
+        # transaction: hard-exit before COMMIT leaves no partial journal.
         self._db.executescript("""
+            BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS pilot_meta (version TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS captures (
                 forecast_id TEXT PRIMARY KEY, forecast_json TEXT NOT NULL,
@@ -137,8 +147,9 @@ class ProspectivePilotLedger:
               BEGIN SELECT RAISE(ABORT, 'append-only outcome'); END;
             CREATE TRIGGER IF NOT EXISTS outcomes_no_delete BEFORE DELETE ON outcomes
               BEGIN SELECT RAISE(ABORT, 'append-only outcome'); END;
+            INSERT OR IGNORE INTO pilot_meta(version) VALUES ('G2_PROSPECTIVE_CAPTURE_PILOT_V1');
+            COMMIT;
         """)
-        self._db.execute("INSERT OR IGNORE INTO pilot_meta(version) VALUES (?)", (VERSION,))
         versions = [x[0] for x in self._db.execute("SELECT version FROM pilot_meta")]
         if versions != [VERSION]:
             self._db.close()
@@ -221,6 +232,9 @@ class ProspectivePilotLedger:
 
     def observe(self, forecast_id: str, horizon: int, evidence: CompletedSessions) -> dict[str, Any]:
         """Append one validated future horizon, never update the prediction."""
+        from birzha.application.g2_future_d1_source_content import (
+            replay_native_d1_if_present, FutureD1ContentRefused,
+        )
         if horizon not in HORIZONS:
             raise AdmissionRefused("unrecognized horizon")
         if evidence.source_origin != "LIVE_COMPLETED_D1" or evidence.calendar_origin != "VERIFIED_EXCHANGE_SESSION_CALENDAR":
@@ -237,10 +251,22 @@ class ProspectivePilotLedger:
         observed = _when(evidence.source_observed_at)
         completed_times=tuple(_when(x) for x in evidence.candle_completed_at)
         for day,completed in zip(evidence.session_dates,completed_times):
-            if completed.astimezone(MOEX_TIMEZONE).date().isoformat() < day or completed>observed:
+            try:
+                session=date.fromisoformat(day)
+            except (ValueError,TypeError) as exc:
+                raise AdmissionRefused("noncanonical future exchange session") from exc
+            if (session.isoformat()!=day
+                or (completed.astimezone(MOEX_TIMEZONE).date()-session).days not in (0,1)
+                or completed>observed):
                 raise AdmissionRefused("uncompleted or not-yet-observed candle")
-        if tuple(sorted(completed_times))!=completed_times:
-            raise AdmissionRefused("completion timestamps not ordered")
+        if any(a>=b for a,b in zip(completed_times,completed_times[1:])):
+            raise AdmissionRefused("completion timestamps not strictly ordered")
+        try:
+            native_replayed = replay_native_d1_if_present(
+                evidence.source_payload,dates=evidence.session_dates,
+                completed_at=evidence.candle_completed_at,closes=evidence.candle_close)
+        except FutureD1ContentRefused as exc:
+            raise AdmissionRefused("native future D1 source contradicts claimed window") from exc
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
@@ -283,6 +309,9 @@ class ProspectivePilotLedger:
                         "candle_close":[float(x) for x in evidence.candle_close],
                     },
                     "direction_hit":hit,"future_source_sha256":_sha(evidence.source_payload),
+                    "native_d1_original_rows_match_claims":native_replayed,
+                    "source_transport_independently_authenticated":False,
+                    "calendar_independently_authenticated":False,
                     "calendar_sha256":_sha(_json(evidence.expected_calendar_dates).encode("utf8")),
                     "source_observed_at":_stamp(observed),"capture_at":receipt["captured_at"],
                     "outcome_written_at":_stamp(now),"pilot_only":True,
@@ -294,7 +323,7 @@ class ProspectivePilotLedger:
                 if old:
                     previous=json.loads(old[0])
                     if old[1]!=result["future_source_sha256"] or any(previous.get(k)!=result[k] for k in (
-                        "target_session","target_close","actual_return_pct","target_session_end","calendar_sha256","source_observed_at","original_future_window_sha256"
+                        "target_session","target_close","actual_return_pct","target_session_end","calendar_sha256","source_observed_at","original_future_window_sha256","native_d1_original_rows_match_claims","source_transport_independently_authenticated","calendar_independently_authenticated"
                     )):
                         raise ImmutableCollision("same horizon identity but changed source/price/calendar")
                     self._db.execute("COMMIT")
@@ -332,6 +361,9 @@ class ProspectivePilotLedger:
 
     def audit(self) -> dict[str, Any]:
         """Recalculate stored hashes; this is corruption detection, NOT external anchoring."""
+        from birzha.application.g2_future_d1_source_content import (
+            replay_native_d1_if_present, FutureD1ContentRefused,
+        )
         with self._lock:
             forecasts=self._db.execute("SELECT forecast_id,forecast_json,forecast_sha,input_blob,input_sha,receipt_json,receipt_sha FROM captures ORDER BY forecast_id").fetchall()
             outcomes=self._db.execute("SELECT forecast_id,horizon,payload_json,payload_sha,input_blob,input_sha FROM outcomes ORDER BY forecast_id,horizon").fetchall()
@@ -361,6 +393,18 @@ class ProspectivePilotLedger:
                 "original_future_window_sha256"
             ):
                 raise ImmutableCollision("pilot future window fingerprint changed")
+            if (result.get("source_transport_independently_authenticated") is not False
+                or result.get("calendar_independently_authenticated") is not False):
+                raise ImmutableCollision("pilot D1 source/calendar falsely certified")
+            try:
+                rechecked = replay_native_d1_if_present(
+                    src,dates=tuple(window["session_dates"]),
+                    completed_at=tuple(window["candle_completed_at"]),
+                    closes=tuple(window["candle_close"]))
+            except (FutureD1ContentRefused,TypeError,ValueError) as exc:
+                raise ImmutableCollision("pilot native D1 source bytes contradict stored window") from exc
+            if result.get("native_d1_original_rows_match_claims") is not rechecked:
+                raise ImmutableCollision("pilot D1 replay claim differs from actual original bytes")
             dates=window["session_dates"]
             expected=window["expected_calendar_dates"]
             ends=window["candle_completed_at"]

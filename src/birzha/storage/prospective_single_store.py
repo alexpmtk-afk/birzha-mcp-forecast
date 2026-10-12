@@ -17,6 +17,9 @@ from typing import Any, Callable
 import duckdb
 
 from birzha.application import prospective_capture as pilot
+from birzha.application.g2_future_d1_source_content import (
+    replay_native_d1_if_present, FutureD1ContentRefused,
+)
 from birzha.application.prospective_staging_bridge import _outcome_from_pilot
 from birzha.domain import forecast as fd
 from birzha.storage.forecast_journal import DuckDBForecastJournal
@@ -130,6 +133,12 @@ def _validate_future(data, captured_at, evidence, horizon, now):
     ).date().isoformat()
     if any(day <= forecast_moscow_day for day in evidence.session_dates):
         raise pilot.AdmissionRefused("future MOEX session not after forecast local date")
+    try:
+        native_replayed = replay_native_d1_if_present(
+            evidence.source_payload, dates=evidence.session_dates,
+            completed_at=evidence.candle_completed_at, closes=evidence.candle_close)
+    except FutureD1ContentRefused as exc:
+        raise pilot.AdmissionRefused("original native D1 data contradicts claimed window") from exc
     direction = next(x["direction"] for x in data["horizons"] if x["sessions"] == horizon)
     close = float(evidence.candle_close[-1])
     ref = float(data["reference_price"])
@@ -142,6 +151,9 @@ def _validate_future(data, captured_at, evidence, horizon, now):
         "source_sha256": _sha(evidence.source_payload),
         "source_origin": evidence.source_origin,
         "calendar_origin": evidence.calendar_origin,
+        "native_d1_original_rows_match_claims": native_replayed,
+        "source_transport_independently_authenticated": False,
+        "calendar_independently_authenticated": False,
         "source_observed_at": pilot._stamp(observed),
         "market": evidence.market, "secid": evidence.secid,
         "session_dates": list(evidence.session_dates),
@@ -311,6 +323,17 @@ class SingleDuckDBProspectiveStagingJournal:
                     "persisted future session not after MOEX forecast date")
             if _sha(_json(expected).encode("utf-8"))!=meta["calendar_sha256"]:
                 raise pilot.ImmutableCollision("future calendar no longer matches input evidence")
+            if (supplied.get("source_transport_independently_authenticated") is not False
+                or supplied.get("calendar_independently_authenticated") is not False):
+                raise pilot.ImmutableCollision("caller claimed independent D1 provenance")
+            try:
+                content_replayed = replay_native_d1_if_present(
+                    bytes(raw), dates=tuple(dates), completed_at=tuple(ends),
+                    closes=tuple(closes))
+            except (FutureD1ContentRefused, TypeError, ValueError) as exc:
+                raise pilot.ImmutableCollision("raw future D1 content no longer reproduces receipts") from exc
+            if supplied.get("native_d1_original_rows_match_claims") is not content_replayed:
+                raise pilot.ImmutableCollision("native D1 replay status differs from raw source")
             try:
                 _session_times(dates, ends, supplied["source_observed_at"])
             except (pilot.AdmissionRefused, ValueError, TypeError) as exc:

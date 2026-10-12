@@ -1,0 +1,69 @@
+"""Q-102: compare an original ISS-style D1 body with the entire claimed window.
+
+A match proves only self-consistency of submitted bytes. It NEVER proves
+that MOEX sent those bytes or that this is the authoritative calendar.
+A non-ISS synthetic development fixture is explicitly UNREPLAYED.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from math import isfinite
+
+from birzha.application.g2_m1_m15_source_replay import (
+    _strict_json, _table, _m1_time, SourceReplayRefused,
+)
+
+class FutureD1ContentRefused(ValueError):
+    """ISS candle contents and the claimed future session window differ."""
+
+
+def replay_native_d1_if_present(
+    raw: bytes, *, dates: tuple[str, ...],
+    completed_at: tuple[str, ...], closes: tuple[float, ...],
+) -> bool:
+    """Returns True iff all original native D1 rows reproduce all claims.
+
+    False means no native ISS data has been supplied (synthetic legacy
+    fixture): never count that as a verified provider or verified session.
+    """
+    if type(raw) is not bytes or len(raw) > 8_000_000 or not raw:
+        raise FutureD1ContentRefused("missing or unbounded original D1 bytes")
+    try:
+        payload = _strict_json(raw)
+    except SourceReplayRefused as exc:
+        # A malformed response pretending to contain an ISS candles table
+        # is never allowed to downgrade into a harmless opaque fixture.
+        if b'"candles"' in raw:
+            raise FutureD1ContentRefused("malformed native ISS candles source") from exc
+        # Legacy synthetic fixtures are explicitly UNREPLAYED.
+        return False
+    if "candles" not in payload:
+        return False
+    try:
+        columns, rows = _table(payload, "candles")
+        if (not all(n in columns for n in ("begin", "end", "close"))
+            or len(rows) != len(dates) or len(rows) != len(closes)
+            or len(rows) != len(completed_at)):
+            raise FutureD1ContentRefused("native D1 source has missing or extra rows")
+        indexed = {name: columns.index(name) for name in ("begin", "end", "close")}
+        from birzha.application.prospective_capture import MOEX_TIMEZONE, _when
+        previous = None
+        for row, claimed_day, claimed_end, claimed_close in zip(
+            rows, dates, completed_at, closes
+        ):
+            if type(row) is not list or len(row) != len(columns):
+                raise FutureD1ContentRefused("invalid native D1 source shape")
+            opening = _m1_time(row[indexed["begin"]])
+            ending = _m1_time(row[indexed["end"]])
+            value = row[indexed["close"]]
+            if (type(value) not in (float, int) or not isfinite(value)
+                or value <= 0 or opening >= ending
+                or opening.astimezone(MOEX_TIMEZONE).date().isoformat() != claimed_day
+                or ending != _when(claimed_end)
+                or float(value) != float(claimed_close)
+                or (previous is not None and opening <= previous)):
+                raise FutureD1ContentRefused("native D1 candle disagrees with supplied future window")
+            previous = ending
+    except (SourceReplayRefused, ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+        raise FutureD1ContentRefused("native D1 source failed exact content replay") from exc
+    return True
