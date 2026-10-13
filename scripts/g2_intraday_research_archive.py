@@ -72,6 +72,13 @@ def run(argv=None) -> int:
         for symbol in args.markets:
             try:
                 instrument = market_data.resolve(symbol, as_of=day)
+                if archive is not None and archive.is_captured(instrument, args.date):
+                    print(json.dumps({
+                        "market": symbol, "secid": instrument.secid, "date": args.date,
+                        "status": "SKIPPED_ALREADY_CAPTURED",
+                        "note": "checkpoint records received source, not independent calendar/PIT verification",
+                    }, sort_keys=True, ensure_ascii=False), flush=True)
+                    continue
                 capture = prepare_one_day(market_data, instrument, args.date)
                 item = {
                     "market": symbol, "secid": instrument.secid,
@@ -96,6 +103,13 @@ def run(argv=None) -> int:
                     for series in (capture.hourly, capture.quarter_hour):
                         if series.candles:
                             item["stored"].append(archive.ingest(series))
+                    if item["status"] == "SOURCE_SAMPLE_PASS":
+                        archive.mark_captured(
+                            instrument, args.date,
+                            h1_rows=capture.hourly.count,
+                            m15_rows=capture.quarter_hour.count,
+                            raw_m1_rows=capture.minute_rows_seen,
+                        )
                 print(json.dumps(item, sort_keys=True, ensure_ascii=False), flush=True)
             except Exception as exc:
                 failed = True
