@@ -1,5 +1,5 @@
 """Official 2025/26 MOEX stock-market notice rules; no live network."""
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -81,3 +81,17 @@ def test_report_distinguishes_published_closed_and_open_without_network(tmp_path
     ]
     assert report["unexpected_closed_captures"]==[]
     assert report["session_trade_date_mapping"]=="UNVERIFIED"
+
+
+def test_published_stock_market_schedule_partition_through_2026_oct12():
+    # A calendar CIVIL day is not a unique MOEX exchange trade-date.
+    current, last = date(2025, 1, 1), date(2026, 10, 12)
+    scheduled = closed = weekend_scheduled = 0
+    while current <= last:
+        item = published_stock_civil_day(current)
+        scheduled += int(item.is_market_scheduled)
+        closed += int(not item.is_market_scheduled)
+        weekend_scheduled += int(item.is_additional_weekend)
+        current += timedelta(days=1)
+    assert (scheduled, closed, weekend_scheduled) == (581, 69, 130)
+    assert scheduled + closed == 650
