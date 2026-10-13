@@ -168,6 +168,15 @@ def report(path: Path, start: date, end: date) -> dict:
                  AND trade_date BETWEEN ? AND ? GROUP BY timeframe""",
             [start.isoformat(), end.isoformat()],
         ).fetchall())
+        stored_civil_dates = {
+            r[0]: int(r[1]) for r in conn.execute(
+                """SELECT trade_date, count(*) FROM research_intraday_candles
+                   WHERE symbol='SBER' AND secid='SBER'
+                     AND trade_date BETWEEN ? AND ?
+                   GROUP BY trade_date""",
+                [start.isoformat(), end.isoformat()],
+            ).fetchall()
+        }
         duplicates = conn.execute(
             """SELECT count(*) FROM (
                  SELECT secid,timeframe,begin, count(*) AS n
@@ -194,10 +203,11 @@ def report(path: Path, start: date, end: date) -> dict:
                 status = evidence_status
             else:
                 closed_civil_days += 1
-                if entry or key in captured:
+                if entry or key in captured or stored_civil_dates.get(key, 0):
                     status = "CALENDAR_SOURCE_CONFLICT"
                     unexpected_closed_captures.append({
                         "date": key, "evidence_status": evidence_status,
+                        "stored_candles": stored_civil_dates.get(key, 0),
                         "source": schedule.source,
                     })
                 else:
