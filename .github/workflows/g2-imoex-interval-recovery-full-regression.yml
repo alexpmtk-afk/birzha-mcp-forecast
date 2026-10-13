@@ -19,6 +19,6 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install -e '.[dev]'
       - name: Unit tests for source authenticity and safety
-        run: python -m pytest -q tests/test_g2_imoex_source_interval_recovery.py tests/test_g2_imoex_enrich_research_archive.py
+        run: python -m pytest -q tests/test_g2_imoex_source_interval_recovery.py tests/test_g2_imoex_enrich_research_archive.py tests/test_research_intraday_source_compat.py
       - name: All project unit and regression tests
         run: python -m pytest -q
