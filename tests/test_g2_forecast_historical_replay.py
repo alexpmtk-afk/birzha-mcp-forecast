@@ -71,7 +71,7 @@ def test_future_candles_do_not_change_the_past_engine_result():
 @pytest.mark.parametrize("bad",["2023-01-01T00:00:00Z","2024-03-01T00:00:00Z","2027-01-01T00:00:00Z"])
 def test_reserved_period_is_refused_before_engine(bad):
     instrument,series=fixture()
-    with pytest.raises(ValueError,match="2025-22"):
+    with pytest.raises(ValueError,match="2025-26"):
         module.replay_existing_forecast(instrument,cutoff_at=bad,series=series,source_sha256=SHA)
 
 @pytest.mark.parametrize("kind",["boolean_price","wrong_secid","duplicate","partial_h1"])
