@@ -1,0 +1,37 @@
+name: G2 IMOEX four weekend D1 activity discrepancies
+on:
+  push:
+    branches: [chatgpt/g2-imoex-h1m15-coverage-probe-20261013]
+    paths:
+      - .github/workflows/g2-imoex-weekend-date-source-audit.yml
+permissions:
+  contents: read
+jobs:
+  imoex-weekend-intraday-read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e .
+      - name: Read-only H1 and M1 evidence for four D1-index weekend discrepancies
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          ambiguous = ("2026-09-26", "2026-09-27", "2026-10-03", "2026-10-04")
+          for day in ambiguous:
+              p = subprocess.run([
+                  sys.executable, "-m", "scripts.g2_intraday_research_archive",
+                  "--mode", "probe", "--date", day, "--markets", "IMOEX",
+              ], capture_output=True, text=True, timeout=120)
+              print(f"WEEKEND_DATE={day} EXIT={p.returncode}", flush=True)
+              print(p.stdout.strip(), flush=True)
+              if p.stderr.strip():
+                  print("SOURCE_ERROR:", p.stderr[-600:], flush=True)
+          print("WEEKEND SOURCE EVIDENCE COLLECTED; no calendar correction or storage change", flush=True)
+          PY
