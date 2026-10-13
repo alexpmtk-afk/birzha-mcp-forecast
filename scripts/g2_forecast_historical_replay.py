@@ -14,6 +14,7 @@ import re
 from zoneinfo import ZoneInfo
 
 from birzha.application.forecast import build_forecast_from_snapshot, ENGINE_VERSION
+from birzha.application.history_policy import require_historical_intraday_scope
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.domain.market import CandleSeries, Instrument
 
@@ -68,8 +69,8 @@ def replay_existing_forecast(
     if not isinstance(source_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None:
         raise ValueError("original archive SHA-256 required")
     cutoff = _when(cutoff_at)
-    if not "2021-01-01" <= cutoff.astimezone(MOSCOW).date().isoformat() <= "2022-12-31":
-        raise ValueError("only exposed 2021-22 Development is allowed")
+    if not "2025-01-01" <= cutoff.astimezone(MOSCOW).date().isoformat() <= "2026-12-31":
+        raise ValueError("full intraday Forecast V1 replay is limited to 2025-26")
     if set(series) != set(TIMEFRAMES):
         raise ValueError("all three timeframe series must be declared, including missing ones")
     if not isinstance(instrument, Instrument) or not instrument.symbol or not instrument.secid:
@@ -84,6 +85,12 @@ def replay_existing_forecast(
         previous_end = None
         for candle in item.candles:
             begin, end = _when(candle.begin), _when(candle.end)
+            if tf in ("H1", "M15"):
+                # Reject out-of-scope input, including rows outside the decision cutoff.
+                require_historical_intraday_scope(
+                    tf, begin.astimezone(MOSCOW).date().isoformat(),
+                    end.astimezone(MOSCOW).date().isoformat(),
+                )
             if end <= begin or (previous_begin is not None and begin <= previous_begin):
                 raise ValueError("duplicate or unsorted candle chronology")
             # Sorting begins alone does not prove the bars are disjoint.
@@ -172,7 +179,7 @@ def evaluate_replay_outcomes(report: dict, *, future: CandleSeries,
     origin = _when(payload["created_at_t0"]).astimezone(MOSCOW).date().isoformat()
     if any(not isinstance(day, str) or date.fromisoformat(day).isoformat() != day for day in expected_session_dates):
         raise ValueError("canonical ISO session dates required")
-    if any(not origin < day <= "2022-12-31" or day < "2021-01-01" for day in expected_session_dates):
+    if any(not origin < day <= "2026-12-31" or day < "2025-01-01" for day in expected_session_dates):
         raise ValueError("future must stay after origin and inside Development")
     if len(future.candles) > 20:
         raise ValueError("only the declared twenty-session future is assessed")
