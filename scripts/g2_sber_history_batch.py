@@ -189,6 +189,7 @@ def report(path: Path, start: date, end: date) -> dict:
         scheduled_civil_days = 0
         closed_civil_days = 0
         unexpected_closed_captures = []
+        reconciled_closed_source_empty = []
         outstanding = []
         for d in days_between(start, end):
             key = d.isoformat()
@@ -203,12 +204,28 @@ def report(path: Path, start: date, end: date) -> dict:
                 status = evidence_status
             else:
                 closed_civil_days += 1
-                if entry or key in captured or stored_civil_dates.get(key, 0):
+                # Preserve the immutable audit journal: an initial
+                # EMPTY_SOURCE response on a date later confirmed closed
+                # by a dated MOEX amendment is evidence of reconciliation,
+                # not a missing historical SBER trading session.
+                has_rows = bool(stored_civil_dates.get(key, 0))
+                has_capture_checkpoint = key in captured
+                if has_rows or has_capture_checkpoint or (
+                    entry and evidence_status != "EMPTY_SOURCE_CALENDAR_UNVERIFIED"
+                ):
                     status = "CALENDAR_SOURCE_CONFLICT"
                     unexpected_closed_captures.append({
                         "date": key, "evidence_status": evidence_status,
                         "stored_candles": stored_civil_dates.get(key, 0),
                         "source": schedule.source,
+                    })
+                elif entry:
+                    status = "MARKET_CLOSED_RECONCILED_EMPTY_SOURCE"
+                    reconciled_closed_source_empty.append({
+                        "date": key,
+                        "previous_journal_status": evidence_status,
+                        "source": schedule.source,
+                        "attempts": entry[6],
                     })
                 else:
                     status = "MARKET_CLOSED_PUBLISHED_NO_FETCH"
@@ -242,6 +259,7 @@ def report(path: Path, start: date, end: date) -> dict:
             "archive_bytes": path.stat().st_size,
             "unresolved_dates": outstanding,
             "unexpected_closed_captures": unexpected_closed_captures,
+            "reconciled_closed_source_empty": reconciled_closed_source_empty,
             "session_trade_date_mapping": "UNVERIFIED",
             "pit_first_receipt": "UNVERIFIED",
         }
