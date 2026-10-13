@@ -23,6 +23,7 @@ from birzha.application.history_policy import (
 from birzha.application.market_data import MarketDataService
 from birzha.application.research_intraday_archive import ResearchIntradayArchive
 from birzha.application.research_intraday_fetch import prepare_one_day
+from birzha.application.sber_stock_market_calendar import published_stock_civil_day
 from scripts.g2_intraday_research_archive import ARCHIVE_NAME
 
 FIRST = date(2025, 1, 1)
@@ -175,32 +176,62 @@ def report(path: Path, start: date, end: date) -> dict:
                )"""
         ).fetchone()[0]
         statuses: dict[str, int] = {}
+        market_schedule_counts: dict[str, int] = {}
+        scheduled_civil_days = 0
+        closed_civil_days = 0
+        unexpected_closed_captures = []
         outstanding = []
         for d in days_between(start, end):
             key = d.isoformat()
+            schedule = published_stock_civil_day(d)
+            market_schedule_counts[schedule.market_schedule] = (
+                market_schedule_counts.get(schedule.market_schedule, 0) + 1
+            )
             entry = journal.get(key)
-            status = entry[1] if entry else (captured[key][1] if key in captured else "UNVISITED")
+            evidence_status = entry[1] if entry else (captured[key][1] if key in captured else "UNVISITED")
+            if schedule.is_market_scheduled:
+                scheduled_civil_days += 1
+                status = evidence_status
+            else:
+                closed_civil_days += 1
+                if entry or key in captured:
+                    status = "CALENDAR_SOURCE_CONFLICT"
+                    unexpected_closed_captures.append({
+                        "date": key, "evidence_status": evidence_status,
+                        "source": schedule.source,
+                    })
+                else:
+                    status = "MARKET_CLOSED_PUBLISHED_NO_FETCH"
             statuses[status] = statuses.get(status, 0) + 1
-            if status != "CAPTURED_SOURCE_RESPONSE":
+            if schedule.is_market_scheduled and status != "CAPTURED_SOURCE_RESPONSE":
                 outstanding.append({
                     "date": key, "status": status,
+                    "market_schedule": schedule.market_schedule,
+                    "schedule_source": schedule.source,
+                    "session_trade_date": schedule.session_trade_date,
                     "h1": entry[2] if entry else 0,
                     "m15": entry[3] if entry else 0,
                     "incomplete_m15": entry[4] if entry else 0,
                     "invalid_h1": entry[5] if entry else 0,
                     "attempts": entry[6] if entry else 0,
-                    "detail": entry[7] if entry else "calendar / source unverified",
+                    "detail": entry[7] if entry else "scheduled market day not yet fetched",
                 })
         return {
             "status": "COVERAGE_UNCERTIFIED_NO_INDEPENDENT_MOEX_SESSION_CALENDAR",
             "from": start.isoformat(), "through": end.isoformat(),
             "civil_days": (end-start).days+1,
+            "scheduled_market_civil_days": scheduled_civil_days,
+            "published_market_closed_days": closed_civil_days,
+            "schedule_counts": market_schedule_counts,
+            "schedule_policy": "OFFICIAL_MOEX_BULLETINS_2025_2026_REVISION_NOT_VERIFIED",
+            "expected_sber_candle_presence": "UNKNOWN_UNTIL_INSTRUMENT_SESSION_AUDIT",
             "counts_by_status": statuses,
             "native_h1_stored": int(counts.get("H1", 0)),
             "strict_m15_stored": int(counts.get("M15", 0)),
             "duplicates": int(duplicates),
             "archive_bytes": path.stat().st_size,
             "unresolved_dates": outstanding,
+            "unexpected_closed_captures": unexpected_closed_captures,
             "session_trade_date_mapping": "UNVERIFIED",
             "pit_first_receipt": "UNVERIFIED",
         }
@@ -267,10 +298,15 @@ def run(argv=None) -> int:
         parser.error(str(exc))
 
     if args.mode == "plan":
+        schedule_counts = {}
+        for day in days_between(start, end):
+            label = published_stock_civil_day(day).market_schedule
+            schedule_counts[label] = schedule_counts.get(label, 0) + 1
         emit(status="PLAN_ONLY_NO_NETWORK_NO_DB", symbol="SBER",
              from_date=args.from_date, through_date=args.through_date,
              calendar_days=(end-start).days+1,
-             note="Includes weekends: exchange session validation still required",
+             published_stock_market_schedule=schedule_counts,
+             note="Includes published additional weekend sessions; historical SBER eligibility and exchange-date mapping still require confirmation",
              network_requests="ZERO", raw_m1_persisted=False,
              max_days=args.max_days, chunk_days=args.chunk_days)
         return 0
@@ -291,6 +327,27 @@ def run(argv=None) -> int:
             if tried >= args.max_days:
                 break
             key = d.isoformat()
+            schedule = published_stock_civil_day(d)
+            if not schedule.is_market_scheduled:
+                # Do not mislabel an exchange-wide closure as missing history.
+                # However, never silently discard candle evidence already
+                # stored against a date with a published closure.
+                if archive:
+                    prior_on_closed = archive.conn.execute(
+                        "SELECT count(*) FROM research_intraday_candles WHERE symbol='SBER' AND trade_date=?",
+                        [key],
+                    ).fetchone()[0]
+                    if prior_on_closed:
+                        failures += 1
+                        emit(date=key, status="CALENDAR_SOURCE_CONFLICT",
+                             existing_rows=int(prior_on_closed),
+                             market_schedule=schedule.market_schedule,
+                             calendar_source=schedule.source)
+                        continue
+                emit(date=key, status="SKIPPED_PUBLISHED_MARKET_CLOSED",
+                     calendar_source=schedule.source,
+                     market_schedule=schedule.market_schedule)
+                continue
             if archive:
                 past = archive.conn.execute(
                     "SELECT status FROM research_sber_batch_dates WHERE civil_date=?",
