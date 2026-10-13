@@ -240,3 +240,29 @@ Massive repeat historical capture still requires checking whether the
 intended automated archive/reuse is covered by user's market-data agreement:
 https://www.moex.com/ru/datapolicy/
 and https://www.moex.com/ru/products/personal
+
+
+### Official-calendar-only offline inventory through 2026-10-12
+
+For the period `2025-01-01..2026-10-12`, the checked-in MOEX
+2025/2026 published-notice rules classify **650 calendar dates** as:
+
+| Exchange-wide published schedule | Civil dates |
+| --- | ---: |
+| Regular stock weekdays | 437 |
+| Additional weekend sessions | 130 |
+| Open stock holiday sessions | 13 |
+| Regular working Saturday, 2025-11-01 | 1 |
+| Closed named exchange holidays | 20 |
+| Closed weekends before weekend sessions began in 2025 | 15 |
+| Explicitly excluded weekend sessions | 34 |
+| **Total scheduled market-open civil dates** | **581** |
+| **Total exchange-wide closed civil dates** | **69** |
+
+These figures count **civil dates**, *not* unique exchange trading dates
+or verified SBER sessions. The weekend sessions may be rolled into the
+next trade-date identifier and SBER instrument eligibility is not proven
+per historic day. The count is pinned in
+`tests/test_sber_stock_market_calendar.py`; changing calendar bulletins
+requires an explicit reason and a test update. The 581 market-open
+civil dates remain unfilled in permanent HOME storage here.
