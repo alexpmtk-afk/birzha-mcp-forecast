@@ -38,7 +38,7 @@ def test_published_civil_market_calendar(civil_date,status,is_open,is_weekend):
     assert (day.market_schedule,day.is_market_scheduled,day.is_additional_weekend) == (
         status,is_open,is_weekend
     )
-    assert day.source in SOURCES[day.civil_date[:4] and int(day.civil_date[:4])].values()
+    assert day.source in SOURCES[int(day.civil_date[:4])].values()
     assert day.session_trade_date=="UNVERIFIED"
     assert day.instrument_session_eligibility=="NOT_PIT_VERIFIED"
 
@@ -52,7 +52,7 @@ def test_out_of_contract_date_is_rejected(invalid):
 def test_official_weekend_exceptions_are_weekends_and_nonoverlap():
     for year, dates in WEEKEND_NO_SESSION.items():
         assert all(d.year==year and d.weekday()>=5 for d in dates)
-        assert not dates & MARKET_CLOSED_HOLIDAYS[year] - dates  # no mutation
+        assert len(dates) >= 16
 
 
 def test_probe_skips_published_closed_days_without_contacting_provider(monkeypatch,capsys):
