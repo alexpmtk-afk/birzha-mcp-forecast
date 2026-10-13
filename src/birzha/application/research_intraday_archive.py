@@ -135,6 +135,9 @@ class ResearchIntradayArchive:
                     h1_rows INTEGER NOT NULL,
                     m15_rows INTEGER NOT NULL,
                     raw_m1_rows INTEGER NOT NULL,
+                    quality VARCHAR NOT NULL,
+                    incomplete_m15_buckets INTEGER NOT NULL,
+                    skipped_h1_bars INTEGER NOT NULL,
                     captured_at VARCHAR NOT NULL,
                     PRIMARY KEY (symbol, secid, trade_date)
                 )
@@ -244,36 +247,57 @@ class ResearchIntradayArchive:
         counts = dict(rows)
         return int(counts.get("H1", 0)), int(counts.get("M15", 0))
 
-    def is_captured(self, instrument: Instrument, trade_date: str) -> bool:
-        """Only a previously completed source capture, not PIT/calendar proof."""
+    def capture_quality(self, instrument: Instrument, trade_date: str) -> str | None:
+        """CAPTURED_WITH_GAPS remains non-certified, even if bars exist."""
         require_historical_intraday_scope("H1", trade_date, trade_date)
         row = self.conn.execute("""
-            SELECT h1_rows, m15_rows FROM research_intraday_captured_days
+            SELECT h1_rows, m15_rows, quality FROM research_intraday_captured_days
             WHERE symbol=? AND secid=? AND trade_date=?
         """, [instrument.symbol, instrument.secid, trade_date]).fetchone()
         if row is None:
-            return False
-        if self._day_counts(instrument.secid, trade_date) != tuple(row):
+            return None
+        if self._day_counts(instrument.secid, trade_date) != tuple(row[:2]):
             raise ValueError("corrupt research day checkpoint: stored bars mismatch")
-        return True
+        return str(row[2])
+
+    def is_captured(self, instrument: Instrument, trade_date: str) -> bool:
+        return self.capture_quality(instrument, trade_date) is not None
 
     def mark_captured(self, instrument: Instrument, trade_date: str, *,
-                      h1_rows: int, m15_rows: int, raw_m1_rows: int) -> None:
-        """Mark source-captured, never independently calendar-verified."""
+                      h1_rows: int, m15_rows: int, raw_m1_rows: int,
+                      incomplete_m15_buckets: int = 0,
+                      skipped_h1_bars: int = 0) -> None:
+        """Store source response and gap counts; never claim independent full session."""
         require_historical_intraday_scope("M15", trade_date, trade_date)
         if (min(h1_rows, m15_rows, raw_m1_rows) <= 0 or
+                min(incomplete_m15_buckets, skipped_h1_bars) < 0 or
                 self._day_counts(instrument.secid, trade_date) != (h1_rows, m15_rows)):
             raise ValueError("capture checkpoint requires both stored H1 and M15 evidence")
-        if self.is_captured(instrument, trade_date):
+        quality = ("CAPTURED_WITH_GAPS" if incomplete_m15_buckets or skipped_h1_bars
+                   else "CAPTURED_SOURCE_RESPONSE")
+        old_quality = self.capture_quality(instrument, trade_date)
+        if old_quality == "CAPTURED_SOURCE_RESPONSE":
             return
-        # This is a post-fetch receipt, not the historical first receipt at T0.
-        self.conn.execute("""
-            INSERT INTO research_intraday_captured_days VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, [
-            instrument.symbol, instrument.secid, trade_date,
-            h1_rows, m15_rows, raw_m1_rows,
-            datetime.now(timezone.utc).isoformat(),
-        ])
+        if old_quality is not None:
+            if old_quality != "CAPTURED_WITH_GAPS":
+                raise ValueError("unknown research capture quality")
+            self.conn.execute("""
+                UPDATE research_intraday_captured_days SET
+                    h1_rows=?, m15_rows=?, raw_m1_rows=?, quality=?,
+                    incomplete_m15_buckets=?, skipped_h1_bars=?, captured_at=?
+                WHERE symbol=? AND secid=? AND trade_date=?
+            """, [h1_rows, m15_rows, raw_m1_rows, quality, incomplete_m15_buckets,
+                  skipped_h1_bars, datetime.now(timezone.utc).isoformat(),
+                  instrument.symbol, instrument.secid, trade_date])
+        else:
+            self.conn.execute("""
+                INSERT INTO research_intraday_captured_days VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                instrument.symbol, instrument.secid, trade_date,
+                h1_rows, m15_rows, raw_m1_rows, quality,
+                incomplete_m15_buckets, skipped_h1_bars,
+                datetime.now(timezone.utc).isoformat(),
+            ])
 
     def inventory(self) -> list[dict[str, object]]:
         rows = self.conn.execute("""
