@@ -266,3 +266,53 @@ per historic day. The count is pinned in
 `tests/test_sber_stock_market_calendar.py`; changing calendar bulletins
 requires an explicit reason and a test update. The 581 market-open
 civil dates remain unfilled in permanent HOME storage here.
+
+
+### 2026-10-13 REAL full-source archive and official amended calendar (post-backfill)
+
+Private, isolated GitHub runner completed 2025 and all conservative
+historically completed 2026 dates through **2026-10-12** in GitHub
+Actions **38446021926**; no HOME/production/D1 writes or merges.
+Final unmodified SBER DuckDB: **12,333,056 bytes**, **8,693** valid
+native H1, **33,486** strictly complete derived M15, **zero**
+duplicate keys. M1 was only used transiently, never persisted.
+GitHub Actions ZIP artifact: `SBER-DuckDB-2025-to-2026-10-12-PRIVATE`.
+Its initial archive was also copied to a restricted Google Drive folder.
+
+**Root cause of four apparent empty weekends found after actual
+download:** the opening schedule announcement was *superseded* by
+explicit MOEX bulletins, so these civil dates were **not missing data**:
+
+| Civil dates (Moscow) | Definitive MOEX bulletin | Meaning |
+| --- | --- | --- |
+| 2025-08-09, 2025-08-10 | https://www.moex.com/n92346 (28 July 2025) | exchange ran tests; real weekend sessions CANCELLED |
+| 2025-11-22, 2025-11-23 | https://www.moex.com/n95363 (17 November 2025) | production market technical maintenance; weekend sessions CANCELLED |
+
+The policy now records those closures, with *exact bulletin provenance*.
+The original row in `research_sber_batch_dates` remains intact as
+`EMPTY_SOURCE_CALENDAR_UNVERIFIED` (for audit and replay). A report
+against the corrected calendar labels each `MARKET_CLOSED_RECONCILED_EMPTY_SOURCE`,
+not a missing candle and NOT `CALENDAR_SOURCE_CONFLICT`, provided
+**no candles and no capture checkpoints** exist. Any contrary market
+data or an error/other existing journal status is explicitly flagged
+`CALENDAR_SOURCE_CONFLICT`, never silently accepted.
+
+2025-01-01..2026-10-12 revised published **civil date** partitions:
+650 total = **577 scheduled market-open** + **73 market-closed**,
+including **126 additional weekend-session dates**. The source archive
+had valid candles on all 577 scheduled civil dates; strictly incomplete
+session-edge M15 buckets and truncated published H1 intervals remain
+independently audited, therefore whole-session data integrity / exact
+trading date / PIT certification are **not claimed**. This is source
+coverage, not proof that every expected candle exists.
+
+A further official bulletin https://www.moex.com/n104837
+(5 October 2026) also changed the *future* November 2026 schedule:
+04 November was announced for a weekend-format trading session, and
+28-29 November were cancelled. This rule is encoded, but data for
+future dates are **not** captured or implied to exist.
+
+**Remains out of scope until an independent session spec exists:**
+certify the exact open/close/auction gaps and the weekends' following
+MOEX trade-date mapping. Do not assert these unresolved source-boundary
+gaps are automatically genuine missing liquid trading minutes.
