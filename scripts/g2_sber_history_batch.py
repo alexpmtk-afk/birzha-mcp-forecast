@@ -275,7 +275,10 @@ def run(argv=None) -> int:
              max_days=args.max_days, chunk_days=args.chunk_days)
         return 0
     if args.mode == "report":
-        emit(**report(args.archive, start, end))
+        try:
+            emit(**report(args.archive, start, end))
+        except ValueError as exc:
+            parser.error(str(exc))
         return 0
 
     archive = ResearchIntradayArchive(str(args.archive)) if args.mode == "ingest" else None
