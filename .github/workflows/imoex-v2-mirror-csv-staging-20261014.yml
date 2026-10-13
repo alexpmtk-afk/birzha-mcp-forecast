@@ -1,0 +1,75 @@
+name: IMOEX V2 historical mirror CSV staging
+on:
+  push:
+    branches: [chatgpt/imoex-mirror-transfer-staging-20261014]
+    paths: ['.github/workflows/imoex-v2-mirror-csv-staging-20261014.yml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code only
+        uses: actions/checkout@v4
+      - name: Python and DuckDB
+        run: python -m pip install duckdb==1.4.1
+      - name: Retrieve existing completed archive (no MOEX calls)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p input
+          gh run download 38457009349 -R ${{ github.repository }} -n imoex-all-observed-source-h1-m15-2025-2026-v2 -D input
+          find input -maxdepth 3 -type f
+      - name: Open verified archived DuckDB read-only and export CSV
+        shell: bash
+        run: |
+          python - <<'PY'
+          import zipfile,hashlib,json,csv,pathlib,duckdb,os,collections
+          root=pathlib.Path('input')
+          archives=list(root.rglob('*AUTHENTIC_SOURCE_H1_M15_V2.zip'))
+          if len(archives)!=1: raise ValueError('Expected one prior archived file: '+str(archives))
+          with zipfile.ZipFile(archives[0]) as z:
+              if z.testzip() is not None: raise ValueError('CRC')
+              db_name='birzha_intraday_research_2025_2026_source_compatible.duckdb'
+              metadata=json.loads(z.read('IMOEX_2025-2026_ACTUAL_SOURCE_INTERVALS_V2.json'))
+              sums=dict(reversed(line.split('  ',1)) for line in z.read('IMOEX_2025-2026_SOURCE_COMPAT_V2_SHA256SUMS.txt').decode().splitlines())
+              db_bytes=z.read(db_name)
+              h=hashlib.sha256(db_bytes).hexdigest()
+              if h!=sums[db_name] or h!=metadata['new_v2_db_sha256']: raise ValueError('SHA database mismatch')
+              pathlib.Path('db.duckdb').write_bytes(db_bytes)
+          con=duckdb.connect('db.duckdb',read_only=True)
+          out=pathlib.Path('output');out.mkdir()
+          counts={};unique=set();dates=set()
+          for tf,want in [('H1',(4199,541)),('M15',(16073,1296))]:
+              with (out/f'IMOEX_{tf}_RAW_SOURCE_2025-2026.csv').open('w',newline='',encoding='utf-8') as f:
+                  wr=csv.writer(f);wr.writerow(['secid','timeframe','begin','end_time','trade_date','open','high','low','close','volume','value','source_kind','quality','source_minute_rows','is_exception'])
+                  nums=[]
+                  for part,table in [(0,'research_intraday_candles'),(1,'research_intraday_source_observed_exceptions')]:
+                      cols='secid,timeframe,begin,end_time,trade_date,open,high,low,close,volume,value,source_kind'
+                      cols+=',quality,source_minute_rows' if part else ",'' AS quality,NULL AS source_minute_rows"
+                      rows=con.execute('SELECT '+cols+' FROM '+table+' WHERE secid=? AND timeframe=? ORDER BY begin',['IMOEX',tf]).fetchall()
+                      nums.append(len(rows))
+                      for row in rows:
+                          if row[0]!='IMOEX' or row[1]!=tf:raise ValueError('unexpected identity')
+                          key=(tf,str(row[2]))
+                          if key in unique:raise ValueError('duplicate interval '+str(key))
+                          unique.add(key);dates.add(str(row[4]))
+                          wr.writerow([*row,part])
+                  if tuple(nums)!=want: raise ValueError('count mismatch '+tf+str(nums))
+                  counts[tf]={'strict':nums[0],'exceptions':nums[1],'total':sum(nums)}
+          if len(dates)!=457:raise ValueError('source day mismatch '+str(len(dates)))
+          con.close()
+          for p in out.glob('*.csv'):
+              counts[p.name]={'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size}
+          (out/'EXPORT_RECEIPT.json').write_text(json.dumps({'source_db_sha256':h,'dates':len(dates),'counts':counts,'source':'IMOEX V2 existing completed GitHub Actions artifact; no new market data queried','home_unchanged':True,'sheets_unchanged':True},indent=2))
+          print(json.dumps(counts,indent=2))
+          PY
+      - name: Upload checked source CSV staging only
+        uses: actions/upload-artifact@v4
+        with:
+          name: imoex-raw-h1-m15-for-verified-mirror-transfer
+          path: output/
+          if-no-files-found: error
+          retention-days: 14
