@@ -114,3 +114,17 @@ def test_d1_empty_cannot_be_falsely_certified(monkeypatch, tmp_path):
         cli.run(["--year", "2025", "--month", "1", "--mode", "ingest",
                  "--archive", str(tmp_path/cli.ARCHIVE_NAME),
                  "--report", str(tmp_path/"manifest.json"), "--ack-research-write"])
+
+
+def test_explicit_partial_october_stops_at_last_published_day(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "latest_safe_d1_calendar_date", lambda: "2026-10-12")
+    monkeypatch.setattr(cli.MarketDataService, "default",
+                        lambda: pytest.fail("plan must remain offline"))
+    assert cli.run(["--year","2026","--month","10","--mode","plan",
+                    "--till-date","2026-10-12"]) == 0
+    assert '"till_date": "2026-10-12"' in capsys.readouterr().out
+    for forbidden in ("2026-10-13", "2026-10-31", "2026-11-01", "2025-10-12"):
+        with pytest.raises(SystemExit) as exc:
+            cli.run(["--year","2026","--month","10","--mode","plan",
+                     "--till-date",forbidden])
+        assert exc.value.code == 2
