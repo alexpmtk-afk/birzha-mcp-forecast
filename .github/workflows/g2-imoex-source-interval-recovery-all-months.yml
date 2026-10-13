@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install -e '.[dev]'
-      - name: Regression: source bar original identity and forbidden-year refusal
+      - name: "Regression: source bar original identity and forbidden-year refusal"
         run: python -m pytest -q tests/test_g2_imoex_source_interval_recovery.py
       - name: Reuse original immutable canonical archive (read only)
         env:
