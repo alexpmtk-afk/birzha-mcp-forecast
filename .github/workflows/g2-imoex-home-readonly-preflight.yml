@@ -1,0 +1,56 @@
+name: IMOEX HOME research pre-install read-only gate
+on:
+  push:
+    branches: [chatgpt/imoex-home-readonly-acceptance-20261014]
+    paths:
+      - 'scripts/g2_imoex_home_research_preflight.py'
+      - '.github/workflows/g2-imoex-home-readonly-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  read_only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin DB reader
+        run: python -m pip install duckdb==1.4.1
+      - name: Retrieve previously verified research ZIP members
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/imoex_input" "$RUNNER_TEMP/imoex_report"
+          gh run download 38457009349 -R "${{ github.repository }}"             -n imoex-all-observed-source-h1-m15-2025-2026-v2             -D "$RUNNER_TEMP/imoex_input"
+      - name: Independent read-only verification (never opens HOME)
+        run: |
+          python -m scripts.g2_imoex_home_research_preflight             --source-dir "$RUNNER_TEMP/imoex_input"             --receipt "$RUNNER_TEMP/imoex_report/IMOEX_HOME_RESEARCH_PREFLIGHT.json"
+      - name: Fail-closed tamper negative test in scratch
+        run: |
+          python - <<'PY'
+          import json,os,pathlib,shutil,tempfile
+          from scripts.g2_imoex_home_research_preflight import verify
+          src=pathlib.Path(os.environ['RUNNER_TEMP'])/'imoex_input'
+          with tempfile.TemporaryDirectory() as temp:
+              dst=pathlib.Path(temp)
+              for f in src.iterdir():
+                  shutil.copyfile(f,dst/f.name)
+              p=dst/'IMOEX_2025-2026_ACTUAL_SOURCE_INTERVALS_V2.json'
+              d=json.loads(p.read_text())
+              d['future_prediction_pit_attested']=True
+              p.write_text(json.dumps(d))
+              try:
+                  verify(dst)
+              except ValueError:
+                  print("TAMPER_REJECTION=PASS")
+              else:
+                  raise AssertionError('modified manifest was accepted')
+          PY
+      - name: Report only audit facts (no market data)
+        uses: actions/upload-artifact@v4
+        with:
+          name: imoex-home-research-preinstall-readonly-acceptance
+          path: ${{ runner.temp }}/imoex_report/IMOEX_HOME_RESEARCH_PREFLIGHT.json
+          if-no-files-found: error
+          retention-days: 30
