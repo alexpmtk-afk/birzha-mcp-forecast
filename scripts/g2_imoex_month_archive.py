@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from birzha.application.history_policy import require_historical_intraday_scope
+from birzha.application.history_policy import require_historical_intraday_scope, latest_safe_d1_calendar_date
 from birzha.application.market_data import MarketDataService
 from birzha.application.research_intraday_archive import ResearchIntradayArchive
 from birzha.application.research_intraday_fetch import prepare_one_day
@@ -54,9 +54,16 @@ def run(argv=None) -> int:
     parser.add_argument("--report", type=Path)
     parser.add_argument("--ack-research-write", action="store_true")
     parser.add_argument("--max-source-days", type=int, default=31)
+    parser.add_argument("--till-date", help="explicit safe published date within a not-yet-finished month")
     args = parser.parse_args(argv)
     try:
-        left, right = month_bounds(args.year, args.month)
+        left, month_end = month_bounds(args.year, args.month)
+        right = args.till_date or month_end
+        if args.till_date is not None:
+            if date.fromisoformat(right).isoformat() != right or not left <= right <= month_end:
+                raise ValueError("partial-month --till-date must be ISO within requested month")
+            if right > latest_safe_d1_calendar_date():
+                raise ValueError("partial month cannot include unpublished D1 session")
         if not 1 <= args.max_source_days <= 31:
             raise ValueError("max-source-days must be 1..31")
         today = datetime.now(MOSCOW).date().isoformat()
@@ -74,7 +81,9 @@ def run(argv=None) -> int:
             if args.report.exists():
                 raise ValueError("refusing to overwrite historical monthly report")
             if left >= today or right >= today:
-                raise ValueError("month must have fully concluded in Moscow")
+                raise ValueError("research interval must have fully concluded in Moscow")
+            if args.till_date is None and month_end >= today:
+                raise ValueError("current month requires explicit --till-date for published D1")
         elif args.ack_research_write or args.archive is not None or args.report is not None:
             raise ValueError("plan cannot accept archive/write arguments")
     except ValueError as exc:
