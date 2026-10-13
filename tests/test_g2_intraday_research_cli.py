@@ -1,9 +1,10 @@
 from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 
 import scripts.g2_intraday_research_archive as cli
-from test_research_intraday_archive import FakeMarket, instrument
+from test_research_intraday_archive import FakeMarket, instrument, hourly, minute_rows
 from birzha.application.research_intraday_fetch import prepare_one_day
 
 
@@ -100,7 +101,25 @@ def test_ingest_creates_only_the_named_research_archive(monkeypatch, tmp_path):
 
 
 def test_partial_source_is_not_checkpointed_and_can_be_retried(monkeypatch, tmp_path):
-    fake = FakeSource(gap=True)
+    class TwoQuarters(FakeSource):
+        def candles_for_instrument(self, instrument, *, timeframe, from_date,
+                                   till_date, completed_only):
+            self.calls.append((timeframe, from_date, till_date))
+            if timeframe == "H1":
+                return hourly()
+            assert timeframe == "M1"
+            source = minute_rows()
+            shifted = tuple(replace(
+                candle,
+                begin=(datetime.fromisoformat(candle.begin) +
+                       timedelta(minutes=15)).isoformat(),
+                end=(datetime.fromisoformat(candle.end) +
+                     timedelta(minutes=15)).isoformat(),
+            ) for candle in source.candles)
+            return replace(source, candles=source.candles +
+                           (shifted[:-1] if self.gap else shifted))
+
+    fake = TwoQuarters(gap=True)
     monkeypatch.setattr(cli.MarketDataService, "default", lambda: fake)
     archive = tmp_path/cli.ARCHIVE_NAME
     args = [
