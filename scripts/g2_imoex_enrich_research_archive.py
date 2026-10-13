@@ -165,6 +165,23 @@ def upgrade(original:Path,recovery_dir:Path,out:Path,summary_path:Path):
             """)
             cx.executemany("INSERT INTO research_intraday_source_observed_exceptions VALUES ("+
                            ",".join("?" for _ in allrows[0])+")",allrows)
+            overlapping=cx.execute("""
+                WITH source_ranges AS (
+                    SELECT timeframe, begin, end_time
+                    FROM research_intraday_candles WHERE secid='IMOEX'
+                    UNION ALL
+                    SELECT timeframe, begin, end_time
+                    FROM research_intraday_source_observed_exceptions WHERE secid='IMOEX'
+                ), bounds AS (
+                    SELECT timeframe, begin, end_time,
+                           lag(end_time) OVER (PARTITION BY timeframe ORDER BY begin) previous_end
+                    FROM source_ranges
+                )
+                SELECT count(*) FROM bounds
+                WHERE previous_end IS NOT NULL AND begin < previous_end
+            """).fetchone()[0]
+            if overlapping:
+                raise ValueError(f"reconstructed source timeline contains overlapping candles: {overlapping}")
             cx.execute("""
                 INSERT INTO research_intraday_meta VALUES
                 ('source_compatible_exception_extension','MOEX_SOURCE_OBSERVED_V1')
