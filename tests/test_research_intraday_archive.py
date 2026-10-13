@@ -52,6 +52,19 @@ def test_derived_15_minute_bar_uses_exact_15_complete_minutes():
     assert candle.available_at_confidence == "INFERRED"
 
 
+def test_gap_audit_lists_precise_missing_minutes_without_bars():
+    original = minute_rows()
+    audit = []
+    result, incomplete = aggregate_strict_m15(
+        replace(original, candles=original.candles[:-1]),
+        "2025-06-09", gap_events=audit,
+    )
+    assert result.count == 0 and incomplete == 1
+    assert audit[0]["bucket_start"].endswith("10:00:00+03:00")
+    assert audit[0]["missing_m1"] == ["2025-06-09T10:14:00+03:00"]
+    assert audit[0]["duplicate_m1"] == 0
+
+
 def test_missing_minute_or_duplicate_minute_never_yields_fake_complete_m15():
     original = minute_rows()
     for candles in (
