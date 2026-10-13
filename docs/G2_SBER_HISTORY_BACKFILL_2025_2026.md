@@ -123,3 +123,62 @@ From the designated independent research file, report at minimum:
 exchange session has a verified completed collection or a flagged issue.
 The present software provides civil-date inventory but does *not yet*
 independently certify the exchange trade-date mapping; this remains a blocker.
+
+
+## Actual completed CI / hosted pilot, 2026-10-13
+
+Branch workflow: https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38440053470
+Tested implementation SHA: `67c266a2f85725d1671dcb89175bb130cc9afa58`.
+Workflow **COMPLETED SUCCESS**: 30 targeted tests PASS, 1314 full offline
+tests PASS, five live MOEX source/date jobs PASS as connectivity/source probes,
+and disposable single-day DuckDB pilot PASS.
+
+| Moscow civil date | Native accepted H1 | Source M1 transient | Strict M15 stored/eligible | Incomplete M15 buckets | Rejected H1 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2025-06-09 | 16 | 992 | 64 | 5 | 2 |
+| 2025-12-15 | 17 | 996 | 65 | 4 | 1 |
+| 2026-06-15 | 17 | 1009 | 66 | 3 | 1 |
+| 2026-07-18 (Saturday) | 10 | 540 | 35 | 2 | 0 |
+| 2026-10-09 | 18 | 1009 | 66 | 3 | 0 |
+
+All five samples are **PARTIAL_NOT_FULLY_VERIFIED** under strict completeness,
+not absence of MOEX data. The Saturday evidence proves that a weekday-only
+filter would silently omit valid prices.
+
+The **ephemeral** test archive for only 2025-06-09 stored
+H1=16 and M15=64, M1=0, duplicate keys=0, file size=2,371,584 bytes
+(DuckDB includes fixed overhead). The source/day journal status was
+CAPTURED_WITH_GAPS, and a repeat command skipped the date with no second
+H1/M1 fetch and without an extra journal attempt. This temporary file was
+not uploaded/persisted to HOME.
+
+The actual stored gap audit for 2025-06-09 identifies five M15 buckets
+starting **06:45, 18:30, 18:45, 19:00 and 23:45 Moscow**. Their incomplete
+minute sets correspond in time to possible opening, main-session close,
+evening opening or final auction boundaries. This is a *hypothesis* based
+on the hours, **not independent certification that missing minutes were
+non-trading**. Rejected H1 source intervals were
+18:00:00–18:51:10 and 23:00:00–23:59:56 Moscow, both preserved in
+the audit with their actual begin/end. No short or incomplete interval
+was converted into a false complete bar.
+
+As at the conservative cutoff 2026-10-12, the range beginning
+2025-01-01 consists of **650 civil dates**, not 650 certified MOEX
+trading sessions. Bulk planning has at least two logical candle-family
+fetches (H1 and M1) per date that requires collection, plus instrument
+resolution and possible paginated calls. Full HTTP call counts, latency,
+memory use and final disk bytes are **not** extrapolated as proved from
+a one-day file.
+
+### Final remaining blockers
+
+- No user HOME research/SBER DuckDB has been written: **permanent coverage
+  zero confirmed**, all other days not persistently captured here.
+- Formal per-session calendar and weekend-to-next-trading-day reconciliation
+  remains missing; observed timestamps alone cannot prove completeness.
+- MOEX historical bulk-storage / usage rights remain to be checked for
+  the intended use; public ISS access does not settle this.
+- Forecast V1 partial-group M15 behavior differs from strict research
+  sampling, so identical V1 replay is not yet certified.
+- Extrapolated two-year archive completeness is **NOT PASS**. Stop before
+  a full 650-civil-date transfer without the above acceptance gates.
