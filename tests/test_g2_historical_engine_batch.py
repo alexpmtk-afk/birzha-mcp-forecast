@@ -245,3 +245,18 @@ def test_batch_rejects_2027_future_calendar_without_changing_frozen_predictions(
         assess(tmp_path, predictions, pred_sha, futures)
     assert predictions.read_bytes() == before
     assert not (tmp_path/"results.json").exists()
+
+
+def test_assessment_rejects_legacy_2021_frozen_prediction_even_with_rehashed_seal(tmp_path):
+    inputs, futures = bundles(("SBER",))
+    _, predictions, frozen, _ = freeze(tmp_path, inputs)
+    # A historic frozen file produced by the old 2021-22 workflow cannot be
+    # admitted merely because its outer SHA and inner SHA are self-consistent.
+    legacy = deepcopy(frozen)
+    replay = legacy["predictions"][0]["replay"]
+    replay["requested_cutoff_at"] = "2021-10-10T23:59:59+03:00"
+    replay["replay_sha256"] = batch._report_sha(replay)
+    sha = store(predictions, legacy)
+    with pytest.raises(ValueError, match="inside 2025-26"):
+        assess(tmp_path, predictions, sha, futures)
+    assert not (tmp_path/"results.json").exists()
