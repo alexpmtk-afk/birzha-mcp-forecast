@@ -71,8 +71,8 @@ def validate_archive_path(path: Path) -> None:
 
 
 def record(db, day: str, status: str, counts: dict, detail: str) -> None:
-    if len(detail) > 2000:
-        detail = detail[:2000] + " [TRUNCATED]"
+    if len(detail) > 200000:
+        raise ValueError("audit detail unexpectedly large; no truncated gap report allowed")
     previous = db.execute(
         "SELECT attempts FROM research_sber_batch_dates WHERE civil_date=?", [day]
     ).fetchone()
@@ -260,6 +260,9 @@ def run(argv=None) -> int:
                 if past_status in ("EMPTY_SOURCE_CALENDAR_UNVERIFIED", "MISSING_INPUTS") and not args.retry_missing:
                     emit(date=key, status="SKIPPED_KNOWN_UNRESOLVED", prior_status=past_status)
                     continue
+                if past_status == "CAPTURED_SOURCE_RESPONSE":
+                    emit(date=key, status="SKIPPED_ALREADY_CAPTURED_NO_NETWORK")
+                    continue
                 if past_status == "CAPTURED_WITH_GAPS" and not args.retry_partial:
                     emit(date=key, status="SKIPPED_PARTIAL_NOT_CERTIFIED")
                     continue
@@ -301,7 +304,10 @@ def run(argv=None) -> int:
                             skipped_h1_bars=counts["short_h1"],
                         )
                     record(archive.conn, key, status, counts,
-                           "ISS civil date; independently assigned trading session UNVERIFIED")
+                           json.dumps({"trade_session": "UNVERIFIED",
+                                       "m15_gap_events": capture.m15_gap_events,
+                                       "h1_gap_events": capture.h1_gap_events},
+                                      sort_keys=True, ensure_ascii=False))
                 if status != "CAPTURED_SOURCE_RESPONSE":
                     failures += 1
                 emit(date=key, status=status, **counts,
