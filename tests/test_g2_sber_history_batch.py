@@ -1,5 +1,6 @@
 """SBER research batch invariants. No external network and no production DB."""
 from datetime import date
+from dataclasses import replace
 import json
 
 import duckdb
@@ -7,6 +8,7 @@ import pytest
 
 import scripts.g2_sber_history_batch as batch
 from test_g2_intraday_research_cli import FakeSource
+from test_research_intraday_archive import hourly
 from birzha.application.research_intraday_archive import ResearchIntradayArchive
 
 
@@ -150,3 +152,34 @@ def test_report_is_read_only_and_does_not_create_missing_archive(tmp_path):
     with pytest.raises(ValueError, match="no existing SBER archive"):
         batch.run(args(path, mode="report"))
     assert not path.exists()
+
+
+def test_reject_marked_but_mixed_market_archive_before_any_write(monkeypatch, tmp_path):
+    path = directory(tmp_path)
+    store = ResearchIntradayArchive(str(path))
+    try:
+        sample = hourly()
+        other = replace(sample, instrument=replace(
+            sample.instrument, symbol="IMOEX", secid="IMOEX",
+            engine="stock", market="index", board="SNDX",
+        ))
+        assert store.ingest(other)["inserted"] == 1
+    finally:
+        store.close()
+    monkeypatch.setattr(batch.MarketDataService, "default",
+                        lambda: pytest.fail("mixed archive reached provider"))
+    with pytest.raises(ValueError, match="other-market"):
+        batch.run(args(path))
+    with pytest.raises(ValueError, match="other-market"):
+        batch.run(args(path, mode="report"))
+    reopened = duckdb.connect(str(path), read_only=True)
+    try:
+        assert reopened.execute(
+            "SELECT symbol,secid FROM research_intraday_candles"
+        ).fetchall() == [("IMOEX", "IMOEX")]
+        assert reopened.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_name='research_sber_batch_dates'"
+        ).fetchone()[0] == 0
+    finally:
+        reopened.close()
