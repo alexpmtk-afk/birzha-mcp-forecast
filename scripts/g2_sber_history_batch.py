@@ -106,13 +106,42 @@ def ensure_research_marker(conn) -> None:
         raise ValueError("archive research marker missing or incorrect")
 
 
+def ensure_sber_only(conn) -> None:
+    """Reject mixed-market research databases BEFORE a write connection opens."""
+    ensure_research_marker(conn)
+    tables = {r[0] for r in conn.execute(
+        "SELECT table_name FROM information_schema.tables"
+    ).fetchall()}
+    if "research_intraday_candles" in tables:
+        mixed = conn.execute(
+            """SELECT count(*) FROM research_intraday_candles
+               WHERE symbol!='SBER' OR secid!='SBER'
+                  OR engine!='stock' OR market!='shares' OR board!='TQBR'"""
+        ).fetchone()[0]
+        if mixed:
+            raise ValueError("SBER research path contains other-market or non-TQBR candles")
+    if "research_intraday_captured_days" in tables:
+        mixed = conn.execute(
+            """SELECT count(*) FROM research_intraday_captured_days
+               WHERE symbol!='SBER' OR secid!='SBER'"""
+        ).fetchone()[0]
+        if mixed:
+            raise ValueError("SBER research path contains non-SBER capture checkpoints")
+    if "research_sber_batch_dates" in tables:
+        mixed = conn.execute(
+            """SELECT count(*) FROM research_sber_batch_dates WHERE secid!='SBER'"""
+        ).fetchone()[0]
+        if mixed:
+            raise ValueError("SBER research path contains non-SBER journal entries")
+
+
 def report(path: Path, start: date, end: date) -> dict:
     validate_archive_path(path)
     if not path.exists():
         raise ValueError("no existing SBER archive for reporting")
     conn = duckdb.connect(str(path), read_only=True)
     try:
-        ensure_research_marker(conn)
+        ensure_sber_only(conn)
         journal_exists = conn.execute(
             "SELECT count(*) FROM information_schema.tables "
             "WHERE table_name='research_sber_batch_dates'"
@@ -217,6 +246,14 @@ def run(argv=None) -> int:
             if args.archive is None:
                 raise ValueError("ingest requires dedicated --archive path")
             validate_archive_path(args.archive)
+            # Fail closed on a marked but mixed-market archive without even
+            # opening a writable DuckDB connection.
+            if args.archive.exists():
+                inspection = duckdb.connect(str(args.archive), read_only=True)
+                try:
+                    ensure_sber_only(inspection)
+                finally:
+                    inspection.close()
         if args.mode == "report":
             if args.archive is None:
                 raise ValueError("report needs dedicated --archive")
