@@ -10,7 +10,7 @@ from scripts.g2_imoex_source_interval_recovery import SOURCE_SHA
 def fixture(tmp_path, count=8):
     month="2025-06"
     folder=tmp_path/"imoex-source-exceptions-2025-06"
-    folder.mkdir()
+    folder.mkdir(parents=True)
     row={
        "symbol":"IMOEX","secid":"IMOEX","timeframe":"M15",
        "begin":"2025-06-09T10:00:00+03:00",
