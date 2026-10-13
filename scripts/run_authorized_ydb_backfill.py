@@ -8,6 +8,7 @@ import time
 import ydb
 
 from birzha.application.historical_data import HistoricalDataService
+from birzha.application.history_policy import require_historical_intraday_scope
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
 from birzha.application.upstream_control import ProcessUpstreamControlPlane
 from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
@@ -40,6 +41,15 @@ def main() -> int:
     parser.add_argument("--symbols", type=_csv, default=CORE_SYMBOLS)
     parser.add_argument("--timeframes", type=_csv, default=("D1", "H1", "M15"))
     args = parser.parse_args()
+    # Reject a forbidden historical interval before acquiring credentials,
+    # instantiating a YDB driver, or downloading any candles.
+    try:
+        for timeframe in args.timeframes:
+            require_historical_intraday_scope(
+                timeframe, args.from_date, args.till_date
+            )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     driver = ydb.Driver(
         connection_string=args.connection_string,

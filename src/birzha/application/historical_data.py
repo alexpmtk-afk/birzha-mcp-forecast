@@ -240,6 +240,9 @@ class HistoricalDataService:
     ) -> dict[str, object]:
         if not symbols or not timeframes:
             raise ValueError("symbols and timeframes must be non-empty")
+        # Fail the entire mixed D1/H1/M15 request before any partial writes.
+        for timeframe in timeframes:
+            require_historical_intraday_scope(timeframe, from_date, till_date)
         items: list[dict[str, object]] = []
         for symbol in symbols:
             for timeframe in timeframes:

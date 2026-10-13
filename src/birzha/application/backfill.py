@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from birzha.application.historical_data import HistoricalDataService
+from birzha.application.history_policy import require_historical_intraday_scope
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,10 @@ class HistoricalBackfillService:
     ) -> BackfillRunResult:
         if max_windows <= 0 or max_windows > 24:
             raise ValueError("max_windows must be between 1 and 24")
+        # Validate the entire requested range, not merely the first selected
+        # monthly chunk. Prevent partial backfills before a forbidden month.
+        for timeframe in timeframes:
+            require_historical_intraday_scope(timeframe, from_date, till_date)
         windows = monthly_windows(from_date, till_date)
         selected = windows[:max_windows]
         items: list[dict[str, object]] = []

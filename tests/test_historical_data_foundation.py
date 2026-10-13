@@ -282,3 +282,20 @@ def test_historical_intraday_sync_rejects_outside_fixed_years_before_any_io(
     service = HistoricalDataService(market_data=object(), store=object())  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="2025-01-01..2026-12-31"):
         service.sync("SBER", timeframe=tf, from_date=from_date, till_date=till_date)
+
+
+@pytest.mark.parametrize("timeframes,from_date,till_date", [
+    (["D1", "H1"], "2021-01-01", "2022-12-31"),
+    (["M15", "D1"], "2024-12-31", "2025-01-01"),
+    (["D1", "h1", "m15"], "2026-12-31", "2027-01-01"),
+])
+def test_sync_many_forbidden_intraday_does_not_partially_write_d1(
+    timeframes, from_date, till_date,
+) -> None:
+    # A failed preflight must not consult either collaborator.
+    service = HistoricalDataService(market_data=object(), store=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="2025-01-01..2026-12-31"):
+        service.sync_many(
+            ["SBER", "Si"], timeframes,
+            from_date=from_date, till_date=till_date,
+        )
