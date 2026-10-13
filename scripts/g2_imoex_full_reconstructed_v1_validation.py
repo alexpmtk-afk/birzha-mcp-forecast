@@ -61,10 +61,14 @@ def replay_all(db: Path, *, d1_provider, expected_hash: str = DB_SHA) -> dict:
                 continue
             # Price-only snapshot cannot ever see a future candle; these
             # copies contain only candles whose BEGIN is <= decision date.
-            d1past=CandleSeries(instrument,"D1",ds[:pos+1],source="MOEX_D1_RECONSTRUCTED")
+            d1start=(date.fromisoformat(cutoff)-timedelta(days=260)).isoformat()
+            d1past=CandleSeries(instrument,"D1",
+                                tuple(c for c in ds[:pos+1] if c.begin[:10]>=d1start),
+                                source="MOEX_D1_RECONSTRUCTED")
             historical={"D1":d1past}
-            for tf,rows in (("H1",h1),("M15",m15)):
-                before=tuple(c for c in rows if c.begin[:10]<=cutoff)
+            for tf,rows,lookback in (("H1",h1,60),("M15",m15,20)):
+                earliest=(date.fromisoformat(cutoff)-timedelta(days=lookback)).isoformat()
+                before=tuple(c for c in rows if earliest<=c.begin[:10]<=cutoff)
                 historical[tf]=CandleSeries(instrument,tf,before,source="RESEARCH_DUCKDB")
             replay=replay_existing_forecast(
                 instrument,cutoff_at=cutoff+"T23:59:59+03:00",
