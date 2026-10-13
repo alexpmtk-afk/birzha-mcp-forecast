@@ -7,6 +7,8 @@ on:
       - scripts/g2_sber_history_batch.py
       - src/birzha/application/research_intraday_fetch.py
       - tests/test_g2_sber_history_batch.py
+      - tests/test_sber_stock_market_calendar.py
+      - src/birzha/application/sber_stock_market_calendar.py
       - tests/test_research_intraday_archive.py
   workflow_dispatch:
 permissions:
@@ -24,7 +26,7 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install -e '.[dev]'
       - name: SBER synthetic invariants (strict M15, audit, resume, conflicts)
-        run: python -m pytest -q tests/test_g2_sber_history_batch.py tests/test_g2_intraday_research_cli.py tests/test_research_intraday_archive.py
+        run: python -m pytest -q tests/test_sber_stock_market_calendar.py tests/test_g2_sber_history_batch.py tests/test_g2_intraday_research_cli.py tests/test_research_intraday_archive.py
       - name: Whole existing repository regression (offline)
         run: python -m pytest -q
   source-read-only:
