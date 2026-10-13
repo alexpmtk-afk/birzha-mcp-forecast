@@ -110,9 +110,12 @@ def test_partial_source_is_not_checkpointed_and_can_be_retried(monkeypatch, tmp_
     ]
     assert cli.run(args) == 1
     assert [x[0] for x in fake.calls] == ["H1", "M1"]
-    # Later availability can fill the missing minute and complete the day.
-    fake.gap = False
+    # Persist the source quality even if missing minutes may be legitimate.
     assert cli.run(args) == 0
+    assert len(fake.calls) == 2, "ordinary retry must not re-download known partial source"
+    # Only explicit repair is allowed to re-fetch and upgrade the checkpoint.
+    fake.gap = False
+    assert cli.run(args + ["--retry-partial"]) == 0
     assert len(fake.calls) == 4
     assert cli.run(args) == 0
     assert len(fake.calls) == 4
