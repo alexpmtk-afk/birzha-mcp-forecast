@@ -21,6 +21,10 @@ from test_research_intraday_archive import hourly
     ("2025-03-08", "MARKET_CLOSED_HOLIDAY_NOTICE", False, False),
     ("2025-03-22", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
     ("2025-06-07", "MARKET_OPEN_ADDITIONAL_WEEKEND", True, True),
+    ("2025-08-09", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
+    ("2025-08-10", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
+    ("2025-11-22", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
+    ("2025-11-23", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
     ("2025-11-01", "MARKET_OPEN_REGULAR_SATURDAY", True, False),
     ("2025-11-02", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
     ("2025-11-03", "MARKET_OPEN_HOLIDAY_NOTICE", True, False),
@@ -33,6 +37,9 @@ from test_research_intraday_archive import hourly
     ("2026-07-18", "MARKET_OPEN_ADDITIONAL_WEEKEND", True, True),
     ("2026-10-11", "MARKET_OPEN_ADDITIONAL_WEEKEND", True, True),
     ("2026-10-24", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
+    ("2026-11-04", "MARKET_OPEN_HOLIDAY_NOTICE", True, False),
+    ("2026-11-28", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
+    ("2026-11-29", "MARKET_CLOSED_WEEKEND_NOTICE", False, False),
     ("2026-12-31", "MARKET_CLOSED_HOLIDAY_NOTICE", False, False),
 ])
 def test_published_civil_market_calendar(civil_date,status,is_open,is_weekend):
@@ -95,7 +102,7 @@ def test_published_stock_market_schedule_partition_through_2026_oct12():
         closed += int(not item.is_market_scheduled)
         weekend_scheduled += int(item.is_additional_weekend)
         current += timedelta(days=1)
-    assert (scheduled, closed, weekend_scheduled) == (581, 69, 130)
+    assert (scheduled, closed, weekend_scheduled) == (577, 73, 126)
     assert scheduled + closed == 650
 
 
@@ -120,3 +127,67 @@ def test_report_flags_closed_day_stored_candles_even_without_checkpoint(tmp_path
     assert len(outcome["unexpected_closed_captures"]) == 1
     assert outcome["unexpected_closed_captures"][0]["stored_candles"] == 1
     assert outcome["unexpected_closed_captures"][0]["date"] == "2025-06-12"
+
+
+@pytest.mark.parametrize("date_string,bulletin", [
+    ("2025-08-09", "https://www.moex.com/n92346"),
+    ("2025-08-10", "https://www.moex.com/n92346"),
+    ("2025-11-22", "https://www.moex.com/n95363"),
+    ("2025-11-23", "https://www.moex.com/n95363"),
+    ("2026-11-04", "https://www.moex.com/n104837"),
+    ("2026-11-28", "https://www.moex.com/n104837"),
+    ("2026-11-29", "https://www.moex.com/n104837"),
+])
+def test_updated_publication_precedence(date_string,bulletin):
+    entry=published_stock_civil_day(date.fromisoformat(date_string))
+    assert entry.source == bulletin
+
+
+@pytest.mark.parametrize("day", ["2025-08-09","2025-08-10","2025-11-22","2025-11-23"])
+def test_reconcile_empty_journal_to_published_exchange_closure(day,tmp_path):
+    path=tmp_path/"research"/"SBER"/batch.ARCHIVE_NAME
+    path.parent.mkdir(parents=True)
+    store=ResearchIntradayArchive(str(path))
+    try:
+        store.conn.execute(batch.SCHEMA)
+        batch.record(store.conn,day,"EMPTY_SOURCE_CALENDAR_UNVERIFIED",{},
+                     '{"note":"historical source returned empty"}')
+    finally:
+        store.close()
+    result=batch.report(path,date.fromisoformat(day),date.fromisoformat(day))
+    assert result["published_market_closed_days"]==1
+    assert result["scheduled_market_civil_days"]==0
+    assert result["counts_by_status"]=={"MARKET_CLOSED_RECONCILED_EMPTY_SOURCE":1}
+    assert result["unresolved_dates"]==[]
+    assert result["unexpected_closed_captures"]==[]
+    assert result["reconciled_closed_source_empty"]==[{
+        "date":day,
+        "previous_journal_status":"EMPTY_SOURCE_CALENDAR_UNVERIFIED",
+        "source":published_stock_civil_day(date.fromisoformat(day)).source,
+        "attempts":1,
+    }]
+
+
+@pytest.mark.parametrize("status", ["MISSING_INPUTS","ERROR"])
+def test_closed_day_nonempty_error_journal_not_hidden(status,tmp_path):
+    path=tmp_path/"research"/"SBER"/batch.ARCHIVE_NAME
+    path.parent.mkdir(parents=True)
+    store=ResearchIntradayArchive(str(path))
+    try:
+        store.conn.execute(batch.SCHEMA)
+        batch.record(store.conn,"2025-08-09",status,{},'original audit evidence')
+    finally:
+        store.close()
+    result=batch.report(path,date(2025,8,9),date(2025,8,9))
+    assert result["counts_by_status"]=={"CALENDAR_SOURCE_CONFLICT":1}
+    assert result["reconciled_closed_source_empty"]==[]
+    assert result["unexpected_closed_captures"][0]["evidence_status"]==status
+
+
+@pytest.mark.parametrize("day", ["2025-08-09","2025-11-22"])
+def test_revised_cancelled_session_never_calls_source(monkeypatch,day,capsys):
+    monkeypatch.setattr(batch.MarketDataService,"default",
+                        lambda: pytest.fail("source called for revised exchange closure"))
+    assert batch.run(["--mode","probe","--from-date",day,
+                      "--through-date",day])==0
+    assert "SKIPPED_PUBLISHED_MARKET_CLOSED" in capsys.readouterr().out
