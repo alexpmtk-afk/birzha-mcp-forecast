@@ -5,7 +5,7 @@ import scripts.g2_forecast_historical_replay as module
 from birzha.domain.market import Candle, CandleSeries, Instrument
 
 SHA = "a" * 64
-CUTOFF = "2021-10-10T23:59:59+03:00"
+CUTOFF = "2025-10-10T23:59:59+03:00"
 
 def fixture(symbol="SBER"):
     future = symbol in ("Si","BR","GOLD")
@@ -15,9 +15,9 @@ def fixture(symbol="SBER"):
         "futures" if future else "stock", "forts" if future else "index" if index else "shares",
         "future" if future else "index" if index else "equity",
         data_capabilities=("CANDLES",) if index else ("CANDLES","VOLUME"))
-    starts = {"D1":datetime.fromisoformat("2021-08-10T00:00:00+03:00"),
-        "H1":datetime.fromisoformat("2021-10-07T00:00:00+03:00"),
-        "M15":datetime.fromisoformat("2021-10-10T00:00:00+03:00")}
+    starts = {"D1":datetime.fromisoformat("2025-08-10T00:00:00+03:00"),
+        "H1":datetime.fromisoformat("2025-10-07T00:00:00+03:00"),
+        "M15":datetime.fromisoformat("2025-10-10T00:00:00+03:00")}
     steps={"D1":timedelta(days=1),"H1":timedelta(hours=1),"M15":timedelta(minutes=15)}
     series={}
     for tf in module.TIMEFRAMES:
@@ -62,16 +62,16 @@ def test_missing_context_never_calls_forecast_or_invents_neutral(tf,monkeypatch)
 def test_future_candles_do_not_change_the_past_engine_result():
     instrument,series=fixture()
     before=module.replay_existing_forecast(instrument,cutoff_at=CUTOFF,series=series,source_sha256=SHA)
-    candle=replace(series["M15"].candles[-1],begin="2021-10-11T00:00:00+03:00",
-        end="2021-10-11T00:14:59+03:00",open=900.,close=999.,high=1000.,low=850.)
+    candle=replace(series["M15"].candles[-1],begin="2025-10-11T00:00:00+03:00",
+        end="2025-10-11T00:14:59+03:00",open=900.,close=999.,high=1000.,low=850.)
     series["M15"]=replace(series["M15"],candles=series["M15"].candles+(candle,))
     after=module.replay_existing_forecast(instrument,cutoff_at=CUTOFF,series=series,source_sha256=SHA)
     assert before==after
 
-@pytest.mark.parametrize("bad",["2023-01-01T00:00:00Z","2024-03-01T00:00:00Z"])
+@pytest.mark.parametrize("bad",["2023-01-01T00:00:00Z","2024-03-01T00:00:00Z","2027-01-01T00:00:00Z"])
 def test_reserved_period_is_refused_before_engine(bad):
     instrument,series=fixture()
-    with pytest.raises(ValueError,match="2021-22"):
+    with pytest.raises(ValueError,match="2025-22"):
         module.replay_existing_forecast(instrument,cutoff_at=bad,series=series,source_sha256=SHA)
 
 @pytest.mark.parametrize("kind",["boolean_price","wrong_secid","duplicate","partial_h1"])
@@ -83,14 +83,14 @@ def test_invalid_raw_context_is_refused(kind):
         series["H1"]=replace(series["H1"],candles=series["H1"].candles+(series["H1"].candles[-1],))
     else:
         first=series["H1"].candles[0]
-        changed=replace(first,close=True) if kind=="boolean_price" else replace(first,end="2021-10-07T00:29:59+03:00")
+        changed=replace(first,close=True) if kind=="boolean_price" else replace(first,end="2025-10-07T00:29:59+03:00")
         series["H1"]=replace(series["H1"],candles=(changed,)+series["H1"].candles[1:])
     with pytest.raises(ValueError):
         module.replay_existing_forecast(instrument,cutoff_at=CUTOFF,series=series,source_sha256=SHA)
 
 
 def future_fixture(instrument):
-    dates=tuple((datetime(2021,10,11)+timedelta(days=i)).date().isoformat() for i in range(20))
+    dates=tuple((datetime(2025,10,11)+timedelta(days=i)).date().isoformat() for i in range(20))
     candles=tuple(Candle(160+i,160.5+i,162+i,159+i,None,100.,
         day+"T00:00:00+03:00",day+"T23:59:59+03:00") for i,day in enumerate(dates))
     return CandleSeries(instrument,"D1",candles),dates
@@ -138,7 +138,7 @@ def test_fake_calendar_dates_are_rejected_even_when_outcomes_are_pending():
     replay=module.replay_existing_forecast(instrument,cutoff_at=CUTOFF,series=series,source_sha256=SHA)
     future,dates=future_fixture(instrument)
     future=replace(future,candles=())
-    invalid=tuple("2021-15-"+str(i).zfill(2) for i in range(1,21))
+    invalid=tuple("2025-15-"+str(i).zfill(2) for i in range(1,21))
     with pytest.raises(ValueError):
         module.evaluate_replay_outcomes(replay,future=future,expected_session_dates=invalid)
 
@@ -186,6 +186,23 @@ def test_forty_eight_hour_d1_candle_is_not_one_completed_session():
             replace(last, end=changed_end.isoformat()),),
     )
     with pytest.raises(ValueError, match="D1 candle longer"):
+        module.replay_existing_forecast(
+            instrument, cutoff_at=CUTOFF, series=series, source_sha256=SHA
+        )
+
+
+@pytest.mark.parametrize("tf", ["H1", "M15"])
+@pytest.mark.parametrize("bad_day", ["2024-12-31", "2027-01-01"])
+def test_replay_refuses_old_or_later_intraday_bars_before_engine(tf, bad_day, monkeypatch):
+    instrument, series = fixture()
+    original = series[tf].candles[0]
+    # One out-of-scope bar must reject the whole input, not get filtered.
+    illegal = replace(original, begin=bad_day + "T00:00:00+03:00",
+                      end=bad_day + ("T00:59:59+03:00" if tf == "H1" else "T00:14:59+03:00"))
+    series[tf] = replace(series[tf], candles=(illegal,) + series[tf].candles[1:])
+    monkeypatch.setattr(module, "build_forecast_from_snapshot",
+                        lambda snapshot: pytest.fail("forbidden context reached Forecast V1"))
+    with pytest.raises(ValueError, match="2025-01-01..2026-12-31"):
         module.replay_existing_forecast(
             instrument, cutoff_at=CUTOFF, series=series, source_sha256=SHA
         )
