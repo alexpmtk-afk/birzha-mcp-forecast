@@ -28,6 +28,9 @@ jobs:
       - name: Whole existing repository regression (offline)
         run: python -m pytest -q
   source-read-only:
+    # Avoid new MOEX downloads on every test-only code push.
+    # The initial approved bounded five-date pilot was already completed.
+    if: github.event_name == 'workflow_dispatch'
     needs: offline
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -68,6 +71,7 @@ jobs:
               print('WEEKEND_SESSION_ASSOCIATION_UNVERIFIED')
           PY
   ephemeral-pilot:
+    if: github.event_name == 'workflow_dispatch'
     needs: [offline, source-read-only]
     runs-on: ubuntu-latest
     timeout-minutes: 10
