@@ -138,8 +138,9 @@ def test_existing_non_research_db_is_untouched(monkeypatch, tmp_path):
     conn.close()
     monkeypatch.setattr(batch.MarketDataService, "default",
                         lambda: pytest.fail("unmarked archive reached MOEX"))
-    with pytest.raises(ValueError, match="without research archive marker"):
+    with pytest.raises(SystemExit) as exc:
         batch.run(args(path))
+    assert exc.value.code == 2
     conn = duckdb.connect(str(path), read_only=True)
     try:
         assert conn.execute("SELECT * FROM working_prices").fetchall() == [(42,)]
@@ -168,10 +169,12 @@ def test_reject_marked_but_mixed_market_archive_before_any_write(monkeypatch, tm
         store.close()
     monkeypatch.setattr(batch.MarketDataService, "default",
                         lambda: pytest.fail("mixed archive reached provider"))
-    with pytest.raises(ValueError, match="other-market"):
+    with pytest.raises(SystemExit) as exc:
         batch.run(args(path))
-    with pytest.raises(ValueError, match="other-market"):
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit) as exc:
         batch.run(args(path, mode="report"))
+    assert exc.value.code == 2
     reopened = duckdb.connect(str(path), read_only=True)
     try:
         assert reopened.execute(
