@@ -28,17 +28,16 @@ jobs:
           python - <<'PY'
           import zipfile,hashlib,json,csv,pathlib,duckdb,os,collections
           root=pathlib.Path('input')
-          archives=list(root.rglob('*AUTHENTIC_SOURCE_H1_M15_V2.zip'))
-          if len(archives)!=1: raise ValueError('Expected one prior archived file: '+str(archives))
-          with zipfile.ZipFile(archives[0]) as z:
-              if z.testzip() is not None: raise ValueError('CRC')
-              db_name='birzha_intraday_research_2025_2026_source_compatible.duckdb'
-              metadata=json.loads(z.read('IMOEX_2025-2026_ACTUAL_SOURCE_INTERVALS_V2.json'))
-              sums=dict(reversed(line.split('  ',1)) for line in z.read('IMOEX_2025-2026_SOURCE_COMPAT_V2_SHA256SUMS.txt').decode().splitlines())
-              db_bytes=z.read(db_name)
-              h=hashlib.sha256(db_bytes).hexdigest()
-              if h!=sums[db_name] or h!=metadata['new_v2_db_sha256']: raise ValueError('SHA database mismatch')
-              pathlib.Path('db.duckdb').write_bytes(db_bytes)
+          db_path=root/'birzha_intraday_research_2025_2026_source_compatible.duckdb'
+          metadata_path=root/'IMOEX_2025-2026_ACTUAL_SOURCE_INTERVALS_V2.json'
+          sums_path=root/'IMOEX_2025-2026_SOURCE_COMPAT_V2_SHA256SUMS.txt'
+          if not all(x.is_file() for x in [db_path,metadata_path,sums_path]): raise ValueError('Expected extracted files from existing artifact')
+          metadata=json.loads(metadata_path.read_text())
+          sums=dict(reversed(line.split('  ',1)) for line in sums_path.read_text().splitlines())
+          db_bytes=db_path.read_bytes()
+          h=hashlib.sha256(db_bytes).hexdigest()
+          if h!=sums[db_path.name] or h!=metadata['new_v2_db_sha256']: raise ValueError('SHA database mismatch')
+          pathlib.Path('db.duckdb').write_bytes(db_bytes)
           con=duckdb.connect('db.duckdb',read_only=True)
           out=pathlib.Path('output');out.mkdir()
           counts={};unique=set();dates=set()
