@@ -15,10 +15,13 @@ SOURCES = {
     2025: {
         "holiday": "https://www.moex.com/n73701",
         "weekend": "https://www.moex.com/n77967",
+        "august_amendment": "https://www.moex.com/n92346",
+        "november_amendment": "https://www.moex.com/n95363",
     },
     2026: {
         "holiday": "https://www.moex.com/n94172",
         "weekend": "https://www.moex.com/n95564",
+        "november_amendment": "https://www.moex.com/n104837",
     },
 }
 
@@ -29,25 +32,25 @@ def _dates(year: int, mmdd: str) -> frozenset[date]:
 # trading occurs on some designated civil holidays.
 MARKET_CLOSED_HOLIDAYS = {
     2025: _dates(2025, "01-01 01-02 01-07 02-23 03-08 05-01 05-09 06-12 11-04 12-31"),
-    2026: _dates(2026, "01-01 01-02 01-03 01-04 01-07 02-23 03-08 05-01 05-09 06-12 11-04 12-31"),
+    2026: _dates(2026, "01-01 01-02 01-03 01-04 01-07 02-23 03-08 05-01 05-09 06-12 12-31"),
 }
 HOLIDAY_TRADING_DAYS = {
     2025: _dates(2025, "01-03 01-06 01-08 05-02 05-08 06-13 11-03"),
-    2026: _dates(2026, "01-05 01-06 01-08 01-09 03-09 05-11"),
+    2026: _dates(2026, "01-05 01-06 01-08 01-09 03-09 05-11 11-04"),
 }
 # 2025 weekend sessions from 2025-03-01, except these dates.
 WEEKEND_NO_SESSION = {
     2025: _dates(
         2025,
         "03-08 03-09 03-22 03-23 04-19 04-20 05-24 05-25 "
-        "06-21 06-22 08-02 08-03 09-20 09-21 10-25 10-26 "
-        "11-02 12-06 12-07"
+        "06-21 06-22 08-02 08-03 08-09 08-10 09-20 09-21 10-25 10-26 "
+        "11-02 11-22 11-23 12-06 12-07"
     ),
     2026: _dates(
         2026,
         "01-03 01-04 01-10 01-11 02-14 02-15 03-07 03-08 "
         "03-21 03-22 05-09 05-10 06-20 06-21 08-01 08-02 "
-        "08-15 08-16 09-12 09-13 10-24 10-25 12-05 12-06"
+        "08-15 08-16 09-12 09-13 10-24 10-25 11-28 11-29 12-05 12-06"
     ),
 }
 REGULAR_WORKING_SATURDAY = frozenset({date(2025, 11, 1)})
@@ -70,6 +73,12 @@ def published_stock_civil_day(day: date) -> PublishedStockCivilDay:
     year = day.year
     holiday_source = SOURCES[year]["holiday"]
     weekend_source = SOURCES[year]["weekend"]
+    if day in {date(2025, 8, 9), date(2025, 8, 10)}:
+        weekend_source = SOURCES[2025]["august_amendment"]
+    elif day in {date(2025, 11, 22), date(2025, 11, 23)}:
+        weekend_source = SOURCES[2025]["november_amendment"]
+    elif day in {date(2026, 11, 28), date(2026, 11, 29)}:
+        weekend_source = SOURCES[2026]["november_amendment"]
     if day in MARKET_CLOSED_HOLIDAYS[year]:
         return PublishedStockCivilDay(day.isoformat(), "MARKET_CLOSED_HOLIDAY_NOTICE",
                                       holiday_source, False, False)
@@ -77,6 +86,8 @@ def published_stock_civil_day(day: date) -> PublishedStockCivilDay:
         return PublishedStockCivilDay(day.isoformat(), "MARKET_OPEN_REGULAR_SATURDAY",
                                       holiday_source, True, False)
     if day in HOLIDAY_TRADING_DAYS[year]:
+        if day == date(2026, 11, 4):
+            holiday_source = SOURCES[2026]["november_amendment"]
         return PublishedStockCivilDay(day.isoformat(), "MARKET_OPEN_HOLIDAY_NOTICE",
                                       holiday_source, True, False)
     if day.weekday() >= 5:
