@@ -275,7 +275,13 @@ class ResearchIntradayArchive:
             raise ValueError("capture checkpoint requires both stored H1 and M15 evidence")
         quality = ("CAPTURED_WITH_GAPS" if incomplete_m15_buckets or skipped_h1_bars
                    else "CAPTURED_SOURCE_RESPONSE")
-        old_quality = self.capture_quality(instrument, trade_date)
+        # A retry can legitimately add new bars before upgrading its old
+        # partial checkpoint, so read its status without stale-count rejection.
+        prior = self.conn.execute("""
+            SELECT quality FROM research_intraday_captured_days
+            WHERE symbol=? AND secid=? AND trade_date=?
+        """, [instrument.symbol, instrument.secid, trade_date]).fetchone()
+        old_quality = prior[0] if prior else None
         if old_quality == "CAPTURED_SOURCE_RESPONSE":
             return
         if old_quality is not None:
