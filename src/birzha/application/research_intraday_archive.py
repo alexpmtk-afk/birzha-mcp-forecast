@@ -78,20 +78,26 @@ class ResearchIntradayArchive:
         else:
             existed = False
         self.path = path
-        self.conn = duckdb.connect(path)
-        try:
-            if existed:
-                present = self.conn.execute(
+        # Inspect any existing file strictly READ-ONLY before opening a
+        # write connection; never touch production or an unmarked database.
+        if existed:
+            inspection = duckdb.connect(path, read_only=True)
+            try:
+                present = inspection.execute(
                     "SELECT count(*) FROM information_schema.tables "
                     "WHERE table_name='research_intraday_meta'"
                 ).fetchone()[0]
                 if not present:
                     raise ValueError("refusing existing database without research archive marker")
-                marker = self.conn.execute(
+                marker = inspection.execute(
                     "SELECT value FROM research_intraday_meta WHERE key='archive_id'"
                 ).fetchone()
                 if marker != (_ARCHIVE_ID,):
                     raise ValueError("research archive marker mismatch")
+            finally:
+                inspection.close()
+        self.conn = duckdb.connect(path)
+        try:
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS research_intraday_meta (key VARCHAR PRIMARY KEY, value VARCHAR NOT NULL)"
             )
