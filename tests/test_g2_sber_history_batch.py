@@ -150,8 +150,9 @@ def test_existing_non_research_db_is_untouched(monkeypatch, tmp_path):
 
 def test_report_is_read_only_and_does_not_create_missing_archive(tmp_path):
     path = directory(tmp_path)
-    with pytest.raises(ValueError, match="no existing SBER archive"):
+    with pytest.raises(SystemExit) as exc:
         batch.run(args(path, mode="report"))
+    assert exc.value.code == 2
     assert not path.exists()
 
 
