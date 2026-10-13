@@ -182,3 +182,61 @@ a one-day file.
   sampling, so identical V1 replay is not yet certified.
 - Extrapolated two-year archive completeness is **NOT PASS**. Stop before
   a full 650-civil-date transfer without the above acceptance gates.
+
+
+## Official MOEX 2025/2026 stock-market civil-date schedule (added)
+
+The independent market-schedule **policy** is encoded in
+`src/birzha/application/sber_stock_market_calendar.py` using only
+published MOEX notices for 2025 and 2026, not a general-purpose Russian
+workweek. Every date is assigned provenance and one market-level class:
+open regular weekday, open named holiday, open regular working Saturday,
+open additional-weekend session, or closed for a specifically published
+market holiday/weekend exception.
+
+Original notices and applicability:
+- 2025 holiday/working-Saturday bulletin (2024-10-02):
+  https://www.moex.com/n73701 ;
+  2025 official weekend-exception schedule starting 2025-03-01:
+  https://www.moex.com/n77967
+- 2026 holiday/open-holiday bulletin (2025-10-06):
+  https://www.moex.com/n94172 ;
+  2026 official weekend-exception schedule (2025-11-25):
+  https://www.moex.com/n95564
+- MOEX says weekend sessions are integrated into the NEXT trading day
+  https://www.moex.com/n91637 ;
+  the current permitted weekend-session indicator on the SBER/TQBR
+  instrument page is separate from an audit of historic daily entitlement:
+  https://www.moex.com/ru/issue.aspx?board=tqbr&code=sber
+
+Representative official-calendar cases:
+- 2025-03-01 and 2025-06-07: additional Saturday sessions scheduled;
+  2025-03-22: explicitly closed; 2025-06-12: exchange closed holiday;
+  2025-11-01: ordinary working Saturday; 2025-11-03: open holiday.
+- 2026-01-03: closed; 2026-01-05: open official holiday;
+  2026-06-20: weekend exception/no session; 2026-07-18: scheduled
+  weekend session corroborated by real H1/M1 probe; 2026-10-24: closed.
+
+**Important limitation:** these are exchange STOCK MARKET schedule rules,
+not a certification of individual historic SBER/TQBR availability or
+historical amendments. Both the trading-date assignment of Saturday and
+Sunday candles and precise intraday auction windows remain separate
+contract checks. Published closed dates are not incorrectly filed as
+missing candles; evidence of candles on such a date produces
+`CALENDAR_SOURCE_CONFLICT` instead of being hidden. On published market
+open dates the absence of candles remains `UNVISITED` or
+`MISSING_INPUTS` until verified.
+
+The market schedule can now be audited in fully offline `--mode plan`
+output, and `--mode report` distinguishes scheduled civil dates from
+exchange-wide announced closures, with source URLs and reasons for every
+unresolved scheduled date. The live backfill skips announced closure dates
+without querying MOEX. **This reduces unnecessary requests, but does not
+authorize full backfill.** Official paid machine-readable trading-calendar
+API is a separate MOEX information product:
+https://www.moex.com/n89023
+
+Massive repeat historical capture still requires checking whether the
+intended automated archive/reuse is covered by user's market-data agreement:
+https://www.moex.com/ru/datapolicy/
+and https://www.moex.com/ru/products/personal
