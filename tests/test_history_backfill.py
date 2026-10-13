@@ -1,3 +1,5 @@
+import pytest
+
 from birzha.application.backfill import HistoricalBackfillService, monthly_windows
 
 
@@ -45,3 +47,30 @@ def test_backfill_stops_on_partial_and_retries_same_month():
     assert report.processed_windows == 2
     assert report.next_from_date == "2026-02-01"
     assert [call[2] for call in history.calls] == ["2026-01-01", "2026-02-01"]
+
+
+@pytest.mark.parametrize("timeframes,from_date,till_date", [
+    (["D1", "H1"], "2026-11-01", "2027-01-15"),
+    (["M15", "D1"], "2024-12-20", "2025-02-20"),
+    (["D1", "h1", "m15"], "2021-01-01", "2022-12-31"),
+])
+def test_bulk_backfill_checks_full_range_before_any_partial_month(
+    timeframes, from_date, till_date,
+):
+    history = FakeHistory()
+    with pytest.raises(ValueError, match="2025-01-01..2026-12-31"):
+        HistoricalBackfillService(history).run(  # type: ignore[arg-type]
+            ["SBER", "Si"], timeframes,
+            from_date=from_date, till_date=till_date, max_windows=1,
+        )
+    assert history.calls == []
+
+
+def test_bulk_d1_only_2021_2022_still_allowed():
+    history = FakeHistory()
+    result = HistoricalBackfillService(history).run(  # type: ignore[arg-type]
+        ["SBER"], ["D1"], from_date="2021-01-01",
+        till_date="2022-12-31", max_windows=1,
+    )
+    assert result.status == "PASS"
+    assert history.calls == [(("SBER",), ("D1",), "2021-01-01", "2021-01-31")]
