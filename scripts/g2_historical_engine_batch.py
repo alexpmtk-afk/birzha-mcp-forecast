@@ -248,6 +248,9 @@ def assess_batch(predictions_path, *, predictions_sha256, future_path, future_sh
                 or replay.get("assessment_status") not in ("MISSING_INPUTS", "ENGINE_REPLAYED")
                 or replay.get("release_allowed") is not False or replay.get("journal_written") is not False):
             raise ValueError("original sealed replay required")
+        replay_day = _when(replay.get("requested_cutoff_at")).astimezone(MOSCOW).date().isoformat()
+        if not "2025-01-01" <= replay_day <= "2026-12-31":
+            raise ValueError("frozen Forecast V1 replay T0 must be inside 2025-26")
         outcomes = _unknown_rows()
         status = replay["assessment_status"]
         if status == "MISSING_INPUTS":
