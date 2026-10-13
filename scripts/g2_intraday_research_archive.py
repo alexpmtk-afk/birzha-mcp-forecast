@@ -30,6 +30,7 @@ def run(argv=None) -> int:
     parser.add_argument("--markets", nargs="+", choices=MARKETS, default=list(MARKETS))
     parser.add_argument("--archive", type=Path, help="separate dedicated DuckDB file")
     parser.add_argument("--ack-research-write", action="store_true")
+    parser.add_argument("--retry-partial", action="store_true", help="re-fetch source days previously marked with gaps")
     args = parser.parse_args(argv)
 
     try:
@@ -50,6 +51,8 @@ def run(argv=None) -> int:
                 raise ValueError("existing regular archive parent and no symlinks required")
         if args.mode != "ingest" and args.ack_research_write:
             raise ValueError("write acknowledgement is meaningful only with ingest")
+        if args.mode != "ingest" and args.retry_partial:
+            raise ValueError("--retry-partial only applies to isolated research ingest")
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -72,11 +75,12 @@ def run(argv=None) -> int:
         for symbol in args.markets:
             try:
                 instrument = market_data.resolve(symbol, as_of=day)
-                if archive is not None and archive.is_captured(instrument, args.date):
+                quality = archive.capture_quality(instrument, args.date) if archive is not None else None
+                if quality is not None and not (quality == "CAPTURED_WITH_GAPS" and args.retry_partial):
                     print(json.dumps({
                         "market": symbol, "secid": instrument.secid, "date": args.date,
-                        "status": "SKIPPED_ALREADY_CAPTURED",
-                        "note": "checkpoint records received source, not independent calendar/PIT verification",
+                        "status": "SKIPPED_ALREADY_CAPTURED", "source_quality": quality,
+                        "note": "checkpoint records source receipt; not independent calendar/PIT verification",
                     }, sort_keys=True, ensure_ascii=False), flush=True)
                     continue
                 capture = prepare_one_day(market_data, instrument, args.date)
@@ -103,12 +107,14 @@ def run(argv=None) -> int:
                     for series in (capture.hourly, capture.quarter_hour):
                         if series.candles:
                             item["stored"].append(archive.ingest(series))
-                    if item["status"] == "SOURCE_SAMPLE_PASS":
+                    if capture.hourly.count and capture.quarter_hour.count:
                         archive.mark_captured(
                             instrument, args.date,
                             h1_rows=capture.hourly.count,
                             m15_rows=capture.quarter_hour.count,
                             raw_m1_rows=capture.minute_rows_seen,
+                            incomplete_m15_buckets=capture.incomplete_m15_buckets,
+                            skipped_h1_bars=capture.skipped_h1_bars,
                         )
                 print(json.dumps(item, sort_keys=True, ensure_ascii=False), flush=True)
             except Exception as exc:
