@@ -111,8 +111,8 @@ def _series(instrument, timeframe, rows):
             raise ValueError("explicit normalized OHLC and completion required")
         for key in ("begin", "end"):
             day = _when(row[key]).astimezone(MOSCOW).date().isoformat()
-            if not "2021-01-01" <= day <= "2022-12-31":
-                raise ValueError("all candle prices must remain inside Development 2021-22")
+            if not "2025-01-01" <= day <= "2026-12-31":
+                raise ValueError("all candle prices must remain inside fixed research 2025-26")
         # Do not propagate caller-provided EXACT claims into reconstructed data.
         clean = dict(row, available_at=None, available_at_confidence="UNKNOWN",
                      observed_at=None, source="NORMALIZED_RECONSTRUCTED_BUNDLE")
@@ -195,6 +195,7 @@ def _summary(rows):
                 "requested": len(selected),
                 "input_refused": sum(r["assessment_status"] == "MISSING_INPUTS" for r in selected),
                 "observed": len(observed), "pending": sum(o["status"] == "PENDING" for o in outcomes),
+                "future_not_supplied": sum(o["status"] == "NOT_SUPPLIED" for o in outcomes),
                 "directional": len(directional), "neutral_observed": len(observed)-len(directional),
                 "direction_hits": hits if directional else None,
                 "always_up_hits": up if directional else None,
@@ -231,7 +232,7 @@ def assess_batch(predictions_path, *, predictions_sha256, future_path, future_sh
         if not isinstance(dates, list) or any(not isinstance(d, str) for d in dates):
             raise ValueError("explicit future session list required")
         if (len(dates) != 20 or sorted(set(dates)) != dates
-                or any(date.fromisoformat(d).isoformat() != d or not "2021-01-01" <= d <= "2022-12-31" for d in dates)):
+                or any(date.fromisoformat(d).isoformat() != d or not "2025-01-01" <= d <= "2026-12-31" for d in dates)):
             raise ValueError("twenty ordered canonical Development session dates required")
         future_by_id[case["case_id"]] = (series, tuple(dates))
     rows, ids = [], set()
@@ -263,6 +264,8 @@ def assess_batch(predictions_path, *, predictions_sha256, future_path, future_sh
             status = "ASSESSED" if all(o["status"] == "OBSERVED" for o in outcomes) else "PARTIAL"
         elif status == "ENGINE_REPLAYED":
             status = "FUTURE_NOT_SUPPLIED"
+            for outcome in outcomes:
+                outcome["status"] = "NOT_SUPPLIED"
         rows.append({"case_id": cid, "market": replay["market"], "secid": replay["secid"],
                      "cutoff_at": replay["requested_cutoff_at"], "replay_sha256": replay["replay_sha256"],
                      "assessment_status": status, "blockers": replay["blockers"], "outcomes": outcomes})
@@ -286,6 +289,7 @@ def russian_summary(result):
         accuracy = "не определена" if row["direction_accuracy_pct"] is None else f'{row["direction_accuracy_pct"]:.2f}%'
         lines.append(f'{row["market"]}, {row["horizon_sessions"]} сессий: исходов {row["observed"]}, '
                      f'ожидается {row["pending"]}, отказов из-за данных {row["input_refused"]}, '
+                     f'будущие данные не переданы {row["future_not_supplied"]}, '
                      f'проверенных направлений {row["directional"]}, точность {accuracy}.')
     return "\n".join(lines)
 

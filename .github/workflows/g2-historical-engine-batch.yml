@@ -3,7 +3,7 @@ on:
   push:
     branches: [codex/g2-historical-engine-batch-20261013]
   pull_request:
-    branches: [chatgpt/g2-historical-replay-time-interval-integrity-20261013]
+    branches: [chatgpt/g2-intraday-2025-26-hard-scope-20261013]
     paths:
       - scripts/g2_historical_engine_batch.py
       - tests/test_g2_historical_engine_batch.py

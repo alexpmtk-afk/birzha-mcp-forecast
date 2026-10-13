@@ -85,7 +85,8 @@ def test_missing_inputs_and_absent_future_never_become_zero_accuracy(tmp_path):
     assert all(r["direction_accuracy_pct"] is None for r in result["summary"])
     assert result["summary"][0]["input_refused"] == 1
     assert result["summary"][0]["pending"] == 0
-    assert result["summary"][3]["pending"] == 1
+    assert result["summary"][3]["pending"] == 0
+    assert result["summary"][3]["future_not_supplied"] == 1
     assert "точность не определена" in batch.russian_summary(result)
 
 
@@ -132,10 +133,10 @@ def test_bad_inputs_produce_no_output(tmp_path, defect):
     elif defect == "boolean_price":
         case["series"]["D1"][0]["close"] = True
     elif defect == "overlap":
-        case["series"]["H1"][1]["begin"] = "2021-10-07T00:30:00+03:00"
-        case["series"]["H1"][1]["end"] = "2021-10-07T01:29:59+03:00"
+        case["series"]["H1"][1]["begin"] = "2025-10-07T00:30:00+03:00"
+        case["series"]["H1"][1]["end"] = "2025-10-07T01:29:59+03:00"
     elif defect == "multiday":
-        case["series"]["D1"][0]["end"] = "2021-08-12T00:00:00+03:00"
+        case["series"]["D1"][0]["end"] = "2025-08-12T00:00:00+03:00"
     else:
         inputs["scope"] = "STRICT_PIT"
     source = tmp_path/"inputs.json"
@@ -168,7 +169,7 @@ def test_future_bundle_integrity_before_any_result_write(tmp_path, defect):
     elif defect == "reserved_dates":
         case["expected_session_dates"][0] = "2023-01-01"
     elif defect == "bad_calendar":
-        case["expected_session_dates"][0] = "2021-15-01"
+        case["expected_session_dates"][0] = "2025-15-01"
     else:
         case["candles"][0]["completed"] = False
     with pytest.raises(ValueError):
@@ -221,3 +222,16 @@ def test_no_caller_exact_availability_claim_survives_normalization(tmp_path):
     instrument = batch._instrument(json.loads(json.dumps(case["instrument"])))
     series = batch._series(instrument, "D1", case["series"]["D1"])
     assert all(c.available_at is None and c.available_at_confidence == "UNKNOWN" for c in series.candles)
+
+
+@pytest.mark.parametrize("day", ["2021-10-10", "2024-12-31", "2027-01-01"])
+def test_fixed_period_rejects_cutoffs_before_engine_and_output(tmp_path, day, monkeypatch):
+    inputs, _ = bundles(("SBER",))
+    inputs["cases"][0]["cutoff_at"] = day+"T23:59:59+03:00"
+    source = tmp_path/"input.json"
+    sha = store(source, inputs)
+    import scripts.g2_forecast_historical_replay as replay
+    monkeypatch.setattr(replay, "build_forecast_from_snapshot", lambda *a: pytest.fail("forbidden date reached engine"))
+    with pytest.raises(ValueError, match="2025-26"):
+        batch.freeze_batch(source, bundle_sha256=sha, output=tmp_path/"bad.json")
+    assert not (tmp_path/"bad.json").exists()
