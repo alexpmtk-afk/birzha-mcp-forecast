@@ -102,6 +102,9 @@ def test_missing_input_journal_is_durable_and_retry_is_explicit(monkeypatch, tmp
     assert report["unresolved_dates"][0]["date"] == "2025-06-09"
     assert report["unresolved_dates"][0]["incomplete_m15"] == 1
     assert report["unresolved_dates"][0]["attempts"] == 1
+    gaps = json.loads(report["unresolved_dates"][0]["detail"])["m15_gap_events"]
+    assert len(gaps) == 1 and gaps[0]["kind"] == "INCOMPLETE_M15"
+    assert len(gaps[0]["missing_m1"]) == 1
     fake.gap = False
     assert batch.run(args(path) + ["--retry-missing"]) == 0
     assert len(fake.calls) == 4
