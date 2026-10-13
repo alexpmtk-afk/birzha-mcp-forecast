@@ -1,5 +1,6 @@
 """Official 2025/26 MOEX stock-market notice rules; no live network."""
 from datetime import date, timedelta
+from dataclasses import replace
 
 import pytest
 
@@ -9,6 +10,7 @@ from birzha.application.sber_stock_market_calendar import (
 )
 import scripts.g2_sber_history_batch as batch
 from birzha.application.research_intraday_archive import ResearchIntradayArchive
+from test_research_intraday_archive import hourly
 
 
 @pytest.mark.parametrize("civil_date,status,is_open,is_weekend", [
@@ -95,3 +97,26 @@ def test_published_stock_market_schedule_partition_through_2026_oct12():
         current += timedelta(days=1)
     assert (scheduled, closed, weekend_scheduled) == (581, 69, 130)
     assert scheduled + closed == 650
+
+
+def test_report_flags_closed_day_stored_candles_even_without_checkpoint(tmp_path):
+    path = tmp_path / "research" / "SBER" / batch.ARCHIVE_NAME
+    path.parent.mkdir(parents=True)
+    store = ResearchIntradayArchive(str(path))
+    try:
+        original = hourly()
+        candle = replace(original.candles[0],
+                         begin="2025-06-12T10:00:00+03:00",
+                         end="2025-06-12T10:59:59+03:00")
+        store.ingest(replace(original, candles=(candle,)))
+        # Deliberately NO capture checkpoint, to expose orphan rows.
+    finally:
+        store.close()
+    outcome = batch.report(path, date(2025, 6, 12), date(2025, 6, 12))
+    assert outcome["counts_by_status"] == {"CALENDAR_SOURCE_CONFLICT": 1}
+    assert outcome["published_market_closed_days"] == 1
+    assert outcome["native_h1_stored"] == 1
+    assert outcome["unresolved_dates"] == []
+    assert len(outcome["unexpected_closed_captures"]) == 1
+    assert outcome["unexpected_closed_captures"][0]["stored_candles"] == 1
+    assert outcome["unexpected_closed_captures"][0]["date"] == "2025-06-12"
