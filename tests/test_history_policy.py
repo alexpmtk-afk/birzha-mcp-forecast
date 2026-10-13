@@ -6,6 +6,9 @@ import pytest
 
 from birzha.application.history_policy import (
     D1_ARCHIVE_START,
+    INTRADAY_RESEARCH_FIRST_DATE,
+    INTRADAY_RESEARCH_LAST_DATE,
+    require_historical_intraday_scope,
     D1_SAFE_PUBLICATION_TIME,
     IntradayPersistenceForbiddenError,
     latest_safe_d1_calendar_date,
@@ -46,3 +49,21 @@ def test_archive_waits_for_next_morning_publication_buffer() -> None:
     assert latest_safe_d1_calendar_date(
         datetime(2026, 9, 16, 7, 0, tzinfo=UTC)
     ) == "2026-09-15"
+
+
+@pytest.mark.parametrize("timeframe", ["H1", "M15", "h1", "m15"])
+def test_intraday_research_is_fixed_2025_2026_not_rolling(timeframe: str) -> None:
+    assert INTRADAY_RESEARCH_FIRST_DATE.isoformat() == "2025-01-01"
+    assert INTRADAY_RESEARCH_LAST_DATE.isoformat() == "2026-12-31"
+    assert require_historical_intraday_scope(timeframe, "2025-01-01", "2026-12-31") is None
+    for left, right in (
+        ("2024-12-31", "2025-01-01"),
+        ("2021-01-01", "2022-12-31"),
+        ("2025-01-01", "2027-01-01"),
+    ):
+        with pytest.raises(ValueError, match="2025-01-01..2026-12-31"):
+            require_historical_intraday_scope(timeframe, left, right)
+
+
+def test_d1_2021_2022_research_is_unaffected() -> None:
+    assert require_historical_intraday_scope("D1", "2021-01-01", "2022-12-31") is None

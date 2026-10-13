@@ -266,3 +266,19 @@ def test_root_future_does_not_trust_stale_verified_range_and_fails_closed() -> N
     assert store.is_verified(
         current_key, "D1", "2025-01-01", "2026-09-08"
     ) is False
+
+
+@pytest.mark.parametrize("tf", ["H1", "M15"])
+@pytest.mark.parametrize("from_date,till_date", [
+    ("2024-12-31", "2025-01-02"),
+    ("2021-01-01", "2022-12-31"),
+    ("2026-12-31", "2027-01-01"),
+])
+def test_historical_intraday_sync_rejects_outside_fixed_years_before_any_io(
+    tf: str, from_date: str, till_date: str,
+) -> None:
+    # If we accidentally touch these deliberately unusable dependencies, this
+    # test fails with AttributeError rather than the expected window error.
+    service = HistoricalDataService(market_data=object(), store=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="2025-01-01..2026-12-31"):
+        service.sync("SBER", timeframe=tf, from_date=from_date, till_date=till_date)

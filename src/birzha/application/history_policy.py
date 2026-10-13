@@ -7,13 +7,16 @@ and must not be persisted in the shared/distributed historical database.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 
 PERSISTENT_PRICE_TIMEFRAMES = ("D1",)
 ON_DEMAND_PRICE_TIMEFRAMES = ("H1", "M15")
 D1_ARCHIVE_START = "2021-01-01"
+# Fixed research/backfill window for H1 and M15; not a rolling two-year window.
+INTRADAY_RESEARCH_FIRST_DATE = date(2025, 1, 1)
+INTRADAY_RESEARCH_LAST_DATE = date(2026, 12, 31)
 MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
 # A completed exchange session is not the same thing as a safely published
 # historical ISS day.  Never certify the current Moscow calendar day.  The
@@ -49,6 +52,26 @@ def require_persistent_price_timeframes(
     if not timeframes:
         raise ValueError("at least one timeframe is required")
     return tuple(require_persistent_price_timeframe(item) for item in timeframes)
+
+
+def require_historical_intraday_scope(
+    timeframe: str, from_date: str, till_date: str,
+) -> None:
+    """Fail before archival H1/M15 collection outside the fixed 2025–2026 window.
+
+    This does not limit D1 research, nor the short-lived on-demand live
+    snapshot path. Never silently clamp a requested interval and attest it
+    as complete.
+    """
+    normalized = normalize_timeframe(timeframe)
+    if normalized not in ON_DEMAND_PRICE_TIMEFRAMES:
+        return
+    start, finish = date.fromisoformat(from_date[:10]), date.fromisoformat(till_date[:10])
+    if start < INTRADAY_RESEARCH_FIRST_DATE or finish > INTRADAY_RESEARCH_LAST_DATE:
+        raise ValueError(
+            f"{normalized} historical collection limited to "
+            f"{INTRADAY_RESEARCH_FIRST_DATE}..{INTRADAY_RESEARCH_LAST_DATE}"
+        )
 
 
 def latest_safe_d1_calendar_date(now: datetime | None = None) -> str:

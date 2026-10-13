@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
+from birzha.application.history_policy import (
+    INTRADAY_RESEARCH_FIRST_DATE,
+    require_historical_intraday_scope,
+)
 from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
 from birzha.domain.market import CandleSeries, Instrument
 from birzha.providers.moex_calendar import MoexTradingCalendar
@@ -97,6 +101,8 @@ class HistoricalDataService:
         finish = date.fromisoformat(till_date[:10])
         if finish < start:
             raise ValueError("till_date must be on or after from_date")
+        # Reject forbidden H1/M15 periods before accessing provider or store.
+        require_historical_intraday_scope(timeframe, from_date, till_date)
 
         resolver_known = hasattr(self.market_data, "direct_resolver")
         is_root = is_futures_root_symbol(symbol)
@@ -349,6 +355,9 @@ class HistoricalDataService:
             return 0
         finish = active_start - timedelta(days=1)
         start = active_start - timedelta(days=days)
+        if timeframe in FULL_SESSION_TIMEFRAMES:
+            # Rollover prewarm must never reach back into 2024 or earlier.
+            start = max(start, INTRADAY_RESEARCH_FIRST_DATE)
         if finish < start:
             return 0
         calendar = MoexTradingCalendar(self.market_data.provider)

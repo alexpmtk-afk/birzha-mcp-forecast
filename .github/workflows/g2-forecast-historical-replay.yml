@@ -1,7 +1,7 @@
 name: G2 existing forecast historical replay
 on:
   push:
-    branches: [codex/g2-forecast-historical-replay-20261013, chatgpt/g2-historical-replay-time-interval-integrity-20261013]
+    branches: [codex/g2-forecast-historical-replay-20261013, chatgpt/g2-historical-replay-time-interval-integrity-20261013, chatgpt/g2-intraday-2025-26-hard-scope-20261013]
   pull_request:
     branches: [chatgpt/g2-q124-128-historical-evidence-review-20261013]
     paths:
