@@ -74,3 +74,27 @@ def test_bulk_d1_only_2021_2022_still_allowed():
     )
     assert result.status == "PASS"
     assert history.calls == [(("SBER",), ("D1",), "2021-01-01", "2021-01-31")]
+
+
+@pytest.mark.parametrize("timeframes", ["D1,H1", "M15,D1"])
+def test_legacy_ydb_cli_rejects_old_intraday_before_credentials(
+    monkeypatch, capsys, timeframes,
+):
+    import sys
+    import scripts.run_authorized_ydb_backfill as cli
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("out-of-scope CLI reached YDB/token or storage")
+    monkeypatch.setattr(cli, "_token", forbidden)
+    monkeypatch.setattr(cli.ydb, "Driver", forbidden)
+    monkeypatch.setattr(sys, "argv", [
+        "run_authorized_ydb_backfill.py",
+        "--connection-string", "unused",
+        "--from-date", "2021-01-01",
+        "--till-date", "2022-12-31",
+        "--timeframes", timeframes,
+    ])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+    assert "2025-01-01..2026-12-31" in capsys.readouterr().err
