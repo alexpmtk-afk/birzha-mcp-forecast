@@ -127,6 +127,18 @@ class ResearchIntradayArchive:
                     PRIMARY KEY (secid, timeframe, begin)
                 )
             """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS research_intraday_captured_days (
+                    symbol VARCHAR NOT NULL,
+                    secid VARCHAR NOT NULL,
+                    trade_date VARCHAR NOT NULL,
+                    h1_rows INTEGER NOT NULL,
+                    m15_rows INTEGER NOT NULL,
+                    raw_m1_rows INTEGER NOT NULL,
+                    captured_at VARCHAR NOT NULL,
+                    PRIMARY KEY (symbol, secid, trade_date)
+                )
+            """)
         except Exception:
             self.conn.close()
             raise
@@ -222,6 +234,46 @@ class ResearchIntradayArchive:
             ))
         return CandleSeries(instrument, timeframe, tuple(candles),
                             source="RESEARCH_INTRADAY_ARCHIVE")
+
+    def _day_counts(self, secid: str, trade_date: str) -> tuple[int, int]:
+        rows = self.conn.execute("""
+            SELECT timeframe, count(*) FROM research_intraday_candles
+            WHERE secid=? AND trade_date=?
+            GROUP BY timeframe
+        """, [secid, trade_date]).fetchall()
+        counts = dict(rows)
+        return int(counts.get("H1", 0)), int(counts.get("M15", 0))
+
+    def is_captured(self, instrument: Instrument, trade_date: str) -> bool:
+        """Only a previously completed source capture, not PIT/calendar proof."""
+        require_historical_intraday_scope("H1", trade_date, trade_date)
+        row = self.conn.execute("""
+            SELECT h1_rows, m15_rows FROM research_intraday_captured_days
+            WHERE symbol=? AND secid=? AND trade_date=?
+        """, [instrument.symbol, instrument.secid, trade_date]).fetchone()
+        if row is None:
+            return False
+        if self._day_counts(instrument.secid, trade_date) != tuple(row):
+            raise ValueError("corrupt research day checkpoint: stored bars mismatch")
+        return True
+
+    def mark_captured(self, instrument: Instrument, trade_date: str, *,
+                      h1_rows: int, m15_rows: int, raw_m1_rows: int) -> None:
+        """Mark source-captured, never independently calendar-verified."""
+        require_historical_intraday_scope("M15", trade_date, trade_date)
+        if (min(h1_rows, m15_rows, raw_m1_rows) <= 0 or
+                self._day_counts(instrument.secid, trade_date) != (h1_rows, m15_rows)):
+            raise ValueError("capture checkpoint requires both stored H1 and M15 evidence")
+        if self.is_captured(instrument, trade_date):
+            return
+        # This is a post-fetch receipt, not the historical first receipt at T0.
+        self.conn.execute("""
+            INSERT INTO research_intraday_captured_days VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, [
+            instrument.symbol, instrument.secid, trade_date,
+            h1_rows, m15_rows, raw_m1_rows,
+            datetime.now(timezone.utc).isoformat(),
+        ])
 
     def inventory(self) -> list[dict[str, object]]:
         rows = self.conn.execute("""
