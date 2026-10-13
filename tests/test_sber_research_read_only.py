@@ -145,7 +145,7 @@ def test_invalid_scopes_fail_closed(scope, tmp_path):
 
 
 def test_read_bounded_no_silent_limit_or_empty_scope(tmp_path):
-    db = make_archive(tmp_path)
+    db = make_archive(tmp_path, gap=True)
     with SberResearchReadOnly(db, expected_sha256=digest(db)) as reader:
         with pytest.raises(ValueError, match="max_bars"):
             reader.read(timeframe="H1", from_civil_date="2025-06-09",
