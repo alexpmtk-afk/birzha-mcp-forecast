@@ -149,8 +149,8 @@ def test_conflicting_immutable_batch_rolls_back_all_insertions(tmp_path):
         initial = hourly()
         store.ingest(initial)
         first = initial.candles[0]
-        new = replace(first, begin="2025-06-09T11:00:00+03:00",
-                      end="2025-06-09T11:59:59+03:00")
+        new = replace(first, begin="2025-06-09T09:00:00+03:00",
+                      end="2025-06-09T09:59:59+03:00")
         changed = replace(first, close=100.5)
         with pytest.raises(ValueError, match="conflicting"):
             store.ingest(replace(initial, candles=(new, changed)))
