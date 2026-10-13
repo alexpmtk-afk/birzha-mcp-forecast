@@ -75,6 +75,8 @@ def test_ingest_creates_only_the_named_research_archive(monkeypatch, tmp_path):
         "--ack-research-write",
     ])
     assert code == 0 and archive.exists()
+    first_fetches = list(fake.calls)
+    assert len(first_fetches) == 2
     assert list(tmp_path.glob("*.duckdb")) == [archive]
     from birzha.application.research_intraday_archive import ResearchIntradayArchive
     stored = ResearchIntradayArchive(str(archive))
@@ -89,8 +91,28 @@ def test_ingest_creates_only_the_named_research_archive(monkeypatch, tmp_path):
         "--markets", "SBER", "--archive", str(archive),
         "--ack-research-write",
     ]) == 0
+    assert fake.calls == first_fetches, "checkpoint must prevent second M1/H1 download"
     stored = ResearchIntradayArchive(str(archive))
     try:
         assert sum(x["rows"] for x in stored.inventory()) == 2
     finally:
         stored.close()
+
+
+def test_partial_source_is_not_checkpointed_and_can_be_retried(monkeypatch, tmp_path):
+    fake = FakeSource(gap=True)
+    monkeypatch.setattr(cli.MarketDataService, "default", lambda: fake)
+    archive = tmp_path/cli.ARCHIVE_NAME
+    args = [
+        "--mode", "ingest", "--date", "2025-06-09",
+        "--markets", "SBER", "--archive", str(archive),
+        "--ack-research-write",
+    ]
+    assert cli.run(args) == 1
+    assert [x[0] for x in fake.calls] == ["H1", "M1"]
+    # Later availability can fill the missing minute and complete the day.
+    fake.gap = False
+    assert cli.run(args) == 0
+    assert len(fake.calls) == 4
+    assert cli.run(args) == 0
+    assert len(fake.calls) == 4
