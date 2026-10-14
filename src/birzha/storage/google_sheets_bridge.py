@@ -42,19 +42,24 @@ class InstrumentArchiveTarget:
     spreadsheet_name: str | None = None
 
 
+# Existing files pinned after the 2026-10-14 archive revision. Names are labels;
+# no fallback to path search or implicit file creation is allowed.
 INSTRUMENT_TARGETS: dict[str, InstrumentArchiveTarget] = {
-    "SI": InstrumentArchiveTarget("Si — Доллар-рубль", "Si"),
-    "BR": InstrumentArchiveTarget(
-        "BR — Brent",
-        "BR",
-        spreadsheet_id="1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ",
-        spreadsheet_name="BIRZHA — BR — Market Data Mirror",
-    ),
-    "GOLD": InstrumentArchiveTarget("GOLD — Золото", "GOLD"),
-    "IMOEX": InstrumentArchiveTarget("MIX_MX — Индекс МосБиржи", "MIX_MX"),
-    "RTSI": InstrumentArchiveTarget("RTS — Индекс РТС", "RTS"),
-    "SBER": InstrumentArchiveTarget("SBER — Сбербанк", "SBER"),
-    "TATN": InstrumentArchiveTarget("TATN — Татнефть", "TATN"),
+    "SI": InstrumentArchiveTarget("Si - Доллар-рубль", "Si", "1gqYoZ04887U6btTyj0diHPGq3oZVrk9QNKT9PJ6W0ss", "MOEX_HISTDATA_Si_MCP_CANONICAL"),
+    "BR": InstrumentArchiveTarget("BR - Brent", "BR", "1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ", "MOEX_HISTDATA_BR_MCP_CANONICAL"),
+    "GOLD": InstrumentArchiveTarget("GOLD - Золото", "GOLD", "1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g", "MOEX_HISTDATA_GOLD_MCP_CANONICAL"),
+    "IMOEX": InstrumentArchiveTarget("MIX_MX - Индекс МосБиржи", "IMOEX", "1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg", "MOEX_HISTDATA_IMOEX_MCP_CANONICAL"),
+    "RTSI": InstrumentArchiveTarget("RTS - Индекс РТС", "RTSI", "1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY", "MOEX_HISTDATA_RTSI_MCP_CANONICAL"),
+    "SBER": InstrumentArchiveTarget("SBER - Сбербанк", "SBER", "1DQojm2mzeXC41mHX1oH8xMv0d43TSz7U7o-ciK9lgoQ", "MOEX_HISTDATA_SBER_MCP_CANONICAL"),
+}
+
+INSTRUMENT_FOLDER_IDS = {
+    "SI": "1c_WRQl2pPfsDSnwcR1l2dGyr0jwQVoNF",
+    "BR": "1X9BbkWE-OeISlXKuPQ1SW6uT593pHwot",
+    "GOLD": "1mpXF423F5Y7oiSKSSGf5YmmbFZMcXohx",
+    "IMOEX": "1gDvLdbPe1vdrpP5hFUTNNetmxhkzIJYF",
+    "RTSI": "1v0ZYWbxp5vuH8WIuQtTcg6qBfX1b69Ez",
+    "SBER": "14WYHet60gDRUtxlLAJ-BX_8_dyKiPjh0",
 }
 
 
@@ -292,6 +297,8 @@ class GoogleSheetsBridge:
             raise GoogleSheetsBridgeError("canonical spreadsheet id mismatch", code="SPREADSHEET_ID_MISMATCH")
         if target.spreadsheet_name and str(meta.get("name") or "") != target.spreadsheet_name:
             raise GoogleSheetsBridgeError("canonical spreadsheet name mismatch", code="SPREADSHEET_NAME_MISMATCH")
+        if result.get("created") is not False:
+            raise GoogleSheetsBridgeError("existing archive required", code="ARCHIVE_CREATION_FORBIDDEN")
         return {
             "symbol": key,
             "archive_code": target.archive_code,
@@ -341,6 +348,11 @@ class GoogleSheetsBridge:
         spreadsheet_id = str(spreadsheet_id or "").strip()
         if not spreadsheet_id:
             raise ValueError("spreadsheet_id is required")
+        if spreadsheet_id in {target.spreadsheet_id for target in INSTRUMENT_TARGETS.values()}:
+            raise GoogleSheetsBridgeError(
+                "Canonical archives require append-only reconciliation; legacy replacement is disabled",
+                code="CANONICAL_REPLACEMENT_FORBIDDEN",
+            )
         normalized = self._validated_sheets(sheets)
         summaries: dict[str, dict[str, Any]] = {}
 
