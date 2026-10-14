@@ -208,3 +208,36 @@ triggered by updating this PR is separately reported in the PR's acceptance log.
 Incremental scheduling optimisation: source rows are reconciled once. Only missing
 keys enter write batches; a no-change frame uses one verification pass, rather than
 replaying every already mirrored 120-day source slice. Full final readback remains.
+
+
+## Service account continuation — 2026-10-14
+
+The owner created the Birzha Market Mirror project, enabled Sheets and Drive APIs,
+and created a service account after the personal OAuth publication path was blocked
+by missing homepage/privacy URLs. No website is required for the selected service
+account path. The downloaded desktop OAuth client is not the active credential.
+
+GoogleRefreshToken now accepts explicitly configured service_account JSON as well
+as the earlier refresh-token format. The service account grant uses Google's
+library, a fixed Google token endpoint, only Sheets and Drive metadata read scopes,
+no delegated user subject, and a signed one-hour assertion. No remote endpoint
+from an untrusted credential file can receive the grant. Credentials remain lazy
+loaded, token cached, errors redacted, redirects and automatic retries disabled.
+The official google-auth dependency is pinned to 2.62.0.
+
+25 auth and HOME mirror regression tests passed (15.75 seconds); seven new cases
+use generated synthetic keys only, including signature/scopes/expiry/cache and
+rejection before network for foreign endpoint, universe, delegation, bad identity,
+bad private key and external_account input.
+
+An owner-authorised real token exchange succeeded. Read-only checks of all six
+canonical file identities returned HTTP 404 to the new service account. This does
+not prove missing files; existing canonical IDs remain unchanged. File access has
+not yet been granted/verified for this identity. No workbook, source database,
+Forecast or Outcome changed during this check; HOME not installed/restarted.
+
+Next: grant editor access to each of the six canonical books only; verify identity,
+parents and tab schemas through the actual service account; grant folder viewer
+access only if required to expose parent metadata. Then run the existing dry-run
+and separately controlled HOME installation/activation procedure. No production
+readiness or forecast quality claim follows from token exchange.
