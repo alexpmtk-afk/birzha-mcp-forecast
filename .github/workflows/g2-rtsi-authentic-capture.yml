@@ -1,0 +1,138 @@
+name: RTSI isolated authentic MOEX archive
+on:
+  push:
+    branches: [chatgpt/rtsi-authentic-capture-20261014]
+    paths:
+      - .github/workflows/g2-rtsi-authentic-capture.yml
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: rtsi-isolated-source-capture
+  cancel-in-progress: false
+jobs:
+  pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - name: Compile isolated RTSI collector
+        run: python -m compileall -q scripts/g2_rtsi_authentic_capture.py
+      - name: Capture real D1 native H1 and M1 and aggregate M15 for 2025-06-09
+        run: |
+          mkdir -p rtsi
+          python -m scripts.g2_rtsi_authentic_capture --day 2025-06-09 --output rtsi/pilot
+      - name: Check hashes and observed OHLC examples
+        if: always()
+        run: |
+          if test -d rtsi/pilot; then
+            cd rtsi/pilot
+            sha256sum -c SHA256SUMS.txt
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          q=json.loads(Path("quality.json").read_text())
+          n=q["source_candles"]
+          assert n["D1"]>=1 and n["H1"]>=9 and n["M1"]>=500 and n["M15"]>=34, n
+          assert q["instrument"]["secid"]=="RTSI" and q["instrument"]["asset_class"]=="index"
+          assert not q["errors"], q["errors"]
+          for tf in ("D1","H1","M15"):
+              rows=[json.loads(s) for s in Path(f"candles_{tf}.jsonl").read_text().splitlines()]
+              assert len(rows)==n[tf] and len(set(x["record_key"] for x in rows))==n[tf]
+              assert all(x["open"]>0 and x["high"]>=max(x["open"],x["close"]) and x["low"]<=min(x["open"],x["close"]) for x in rows)
+              print("OBSERVED_PRICE",tf,rows[0]["record_key"],rows[0]["open"],rows[0]["high"],rows[0]["low"],rows[0]["close"])
+          print("PILOT_REAL_OHLC_SHA256_VERIFIED",n)
+          PY
+          fi
+      - name: Preserve captured original source evidence outside Git history
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rtsi-authentic-source-pilot-2025-06-09
+          path: rtsi/pilot/
+          if-no-files-found: error
+          retention-days: 7
+  pilot-artifact-readback:
+    needs: pilot
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: rtsi-authentic-source-pilot-2025-06-09
+          path: returned/
+      - name: Verify downloaded artifact bytes and source identity
+        run: |
+          cd returned
+          sha256sum -c SHA256SUMS.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          m=json.loads(Path("manifest.json").read_text())
+          q=json.loads(Path("quality.json").read_text())
+          assert m["schema"]=="RTSI_MOEX_RESEARCH_MANIFEST_V1"
+          assert not q["errors"]
+          assert m["rows"]["M1"]>=500 and m["rows"]["M15"]>=34
+          print("PILOT_ARTIFACT_READBACK_PASS",m["rows"])
+          PY
+  monthly:
+    needs: pilot-artifact-readback
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - {month: "2025-01"}
+          - {month: "2025-02"}
+          - {month: "2025-03"}
+          - {month: "2025-04"}
+          - {month: "2025-05"}
+          - {month: "2025-06"}
+          - {month: "2025-07"}
+          - {month: "2025-08"}
+          - {month: "2025-09"}
+          - {month: "2025-10"}
+          - {month: "2025-11"}
+          - {month: "2025-12"}
+          - {month: "2026-01"}
+          - {month: "2026-02"}
+          - {month: "2026-03"}
+          - {month: "2026-04"}
+          - {month: "2026-05"}
+          - {month: "2026-06"}
+          - {month: "2026-07"}
+          - {month: "2026-08"}
+          - {month: "2026-09"}
+          - {month: "2026-10"}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e '.[dev]'
+      - name: Collect one month of RTSI, no HOME or Sheets writes
+        run: |
+          mkdir -p rtsi
+          python -m scripts.g2_rtsi_authentic_capture --month ${{ matrix.month }} --till-date 2026-10-13 --output rtsi/part
+      - name: Check every source file SHA after month
+        if: always()
+        run: |
+          if test -f rtsi/part/SHA256SUMS.txt; then cd rtsi/part && sha256sum -c SHA256SUMS.txt; fi
+      - name: Preserve resumable month checkpoint; no Git price commits
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rtsi-observed-month-${{ matrix.month }}
+          path: rtsi/part/
+          if-no-files-found: error
+          retention-days: 7
