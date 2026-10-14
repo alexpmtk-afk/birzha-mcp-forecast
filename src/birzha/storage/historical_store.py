@@ -386,6 +386,47 @@ class DuckDBHistoricalCandleStore:
                 [symbol, from_date[:10], till_date[:10]],
             )
 
+    def export_mirror_bundle(self, symbol: str, from_date: str, till_date: str) -> dict[str, object]:
+        """One store-locked read transaction; no resolver, MOEX, DDL or data write."""
+        from datetime import date
+        from birzha.storage.google_sheets_bridge import GoogleSheetsBridge
+        key, _ = GoogleSheetsBridge.target_for_symbol(symbol)
+        start, finish = date.fromisoformat(from_date), date.fromisoformat(till_date)
+        if finish < start or (finish - start).days > 366:
+            raise ValueError("mirror export range must be within 367 civil dates")
+        columns = ["secid", "timeframe", "begin", "end_time", "open", "high", "low", "close", "volume", "value", "completed", "source", "available_at", "available_at_confidence", "observed_at", "revision"]
+        with self._lock:
+            self._connection.execute("BEGIN TRANSACTION")
+            try:
+                rows = self._connection.execute(
+                    "SELECT " + ",".join(columns) + " FROM historical_candles WHERE "
+                    "(upper(root_symbol)=? OR upper(symbol)=? OR upper(secid)=?) "
+                    "AND timeframe IN ('D1','H1','M15') AND substr(begin,1,10) BETWEEN ? AND ? "
+                    "ORDER BY timeframe,begin,secid LIMIT 100001",
+                    [key, key, key, from_date, till_date],
+                ).fetchall()
+                sessions = self._connection.execute(
+                    "SELECT DISTINCT secid,trade_date FROM historical_sessions WHERE "
+                    "(upper(symbol)=? OR upper(symbol) LIKE ?) AND trade_date BETWEEN ? AND ? ORDER BY trade_date,secid",
+                    [key, key + "#%", from_date, till_date],
+                ).fetchall()
+                ranges = self._connection.execute(
+                    "SELECT symbol,timeframe,from_date,till_date FROM historical_verified_ranges WHERE "
+                    "(upper(symbol)=? OR upper(symbol) LIKE ?) AND from_date<=? AND till_date>=? ORDER BY timeframe,from_date,till_date",
+                    [key, key + "#%", till_date, from_date],
+                ).fetchall()
+                self._connection.execute("COMMIT")
+            except Exception:
+                self._connection.execute("ROLLBACK")
+                raise
+        if len(rows) > 100000:
+            raise ValueError("mirror export exceeds 100000 source rows; narrow range")
+        return {"symbol": key, "backend": "DuckDB", "from_date": from_date, "till_date": till_date,
+                "candles": [dict(zip(columns, row)) for row in rows],
+                "sessions": [[key, secid, day] for secid, day in sessions],
+                "verified_ranges": [list(row) for row in ranges],
+                "calendar_attestation": "UNVERIFIED", "historical_pit": "UNVERIFIED"}
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()

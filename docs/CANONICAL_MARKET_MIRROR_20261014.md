@@ -108,3 +108,100 @@ canonical Google instruction remains at its existing Drive URL, not copied into 
   paths instead of default /tmp; no production path was used.
 - No live native API write, scheduler activation, HOME install, MOEX download,
   merge or clock operation. Offline transport tests use httpx.MockTransport only.
+
+## Integrated continuation — 2026-10-14
+
+This section supersedes the earlier statement that the publisher is not wired to
+MCP or a HOME refresh scenario. The code is now integrated; runtime activation
+is still separate and has not been performed.
+
+Observed actual HOME runtime:
+- MCP runs from C:/MCP-HOME/projects/birzha-mcp-forecast at the old main SHA.
+- start-birzha-home.ps1 sets DuckDB and source/history paths.
+- Its bridge-config.json does not exist; Google mirroring is not configured.
+- Active hourly run-history-refresh.ps1 updates D1 (120d), H1 (95d), M15 (35d)
+  through existing authenticated history.sync_batch. Its 14 Oct 18:44 cycle passed
+  all six markets/timeframes, but it does NOT export them to Google.
+- The active refresh script is in the user's existing BirzhaControl directory;
+  it is distinct from the legacy YDB cloud worker. Neither process was stopped.
+
+Implemented continuation:
+- DuckDBHistoricalCandleStore.export_mirror_bundle takes a store mutex and one
+  read transaction on the existing process connection. No second DuckDB writer,
+  database copy, source request, DDL, calendar inference, or source-price update.
+- HomeCanonicalMirror preflights all three candle sheets and all service schemas
+  before mutation, projects stored data to actual destination columns and preserves
+  accepted rows when core prices/volumes/intervals/source-completion match.
+- Semantic timestamp aliases (naive provider clock vs explicit Moscow offset)
+  match by exact SECID and instant; older record keys/provenance remain untouched.
+  The provider timezone interpretation is explicit and is NOT a PIT attestation.
+  Different source provenance is reported separately, not called a full payload match.
+- Source missing values, conflicting prices/intervals, duplicate semantic identities
+  or unknown column projection block the operation before price writes.
+- SESSIONS and VERIFIED_RANGES append existing stored evidence; range scope
+  retains original marker identity and explicitly denies independent attestation.
+- SYNC_STATUS receives an in-progress marker before data writes, failure marker
+  on partial failure, and PASS only after final candle and service readbacks.
+  Old configuration values are preserved under legacy_pre_mirror_v3 keys.
+- mirror.status reads activation settings without secrets/network. mirror.sync
+  updates one workbook and mirror.sync_core optionally sequences the six. Dry-run
+  is default; disabled/missing configuration returns BLOCKED, not false PASS.
+- GoogleRefreshToken uses only the explicit credential file configured by an
+  authorised owner. OAuth refresh and safe token caching implemented, no discovery.
+- Settings require explicit native activation, DuckDB, authenticated MCP, source
+  SHA, credential path and sole-writer declaration; simultaneous legacy/native
+  writer configuration refused.
+- scripts/run_home_history_and_mirror.ps1 is based on the real refresh scenario:
+  source success and mirror success are logged separately. Each mirror is called
+  only after source refresh; whole-cycle PASS needs all six mirrored books.
+- scripts/start_home_with_native_mirror.ps1 keeps the existing startup/security
+  scheme and adds explicit native configuration. Source SHA is read from the
+  installed Git revision rather than the former hardcoded old main SHA.
+- scripts/authorize_home_google_mirror.py prepares desktop OAuth with PKCE/state,
+  loopback callback and explicit browser consent; no password entry or token output.
+  Credential output is exclusive and must be in an owner-restricted LOCAL folder,
+  never in the shared Drive workspace. Existing secret files were not read.
+
+Checks:
+102 focused/regression tests passed (16.61s), including exact Si/BR/GD contracts,
+versioned futures session keys, read-only source, all candle/service sheets,
+partial failure/resume, alias provenance preservation, status updates and MCP.
+Full local continuation suite before the final 5 tests: 417 passed and same known
+baseline queue-order test failed (107.12s). Full local PASS is not claimed.
+PowerShell startup and refresh scenarios parse successfully; Python compiles.
+Native Google appendCells/updateCells shapes exercised through connected Google
+in a separate copied test book, not any canonical destination:
+https://docs.google.com/spreadsheets/d/11eJhW7UnGRNUV9xlIss4wPadxohBqHfzjkP1ygImJu4/edit
+QA_CANDLES preserves 100.25, false, UNKNOWN, then appends 101.5, true, UNKNOWN.
+QA_STATUS preserves legacy_evidence=PRESERVE while updating status in place.
+This live API shape acceptance is NOT live HOME OAuth/connection acceptance.
+
+Activation procedure (concrete remaining gate):
+1. Create desktop application credentials in the owner's Google Cloud project;
+   enable Sheets and Drive APIs. Owner must accept Google consent once. Google
+   OAuth scopes are spreadsheets and drive.metadata.readonly; the program further
+   restricts writes to the six pinned books. Google account passwords are never
+   requested by the program. A testing-mode OAuth consent setup may expire its
+   refresh token; stable unattended use needs an appropriate consent configuration.
+2. Run authorize_home_google_mirror.py with the downloaded desktop client file and
+   an access-restricted local credential destination. No credentials in chat/Git/Drive.
+3. After independent code acceptance and an explicit installation decision, install
+   from main through the existing HOME control. Do not deploy a Draft head directly.
+4. Set C:/MCP-HOME/runtime/birzha/native-mirror-config.json with enabled=true,
+   sole_writer=true and the authorised credentials_path. Confirm other writers
+   have stopped for these books; the flag is not a distributed lock.
+5. Back up and replace only the two Birzha startup/refresh scripts with the reviewed
+   versions. Restart only the Birzha runtime and its refresh loop via existing control;
+   no computer restart and no unrelated process operation. Separate approval applies.
+6. Verify mirror.status revision/settings, then mirror.sync dry_run=true for each
+   market. Any conflict remains a blocker; it is not resolved by overwriting history.
+7. Perform one explicitly approved real mirror cycle, prove full readbacks and
+   final status, and observe a later scheduled cycle. Only then claim automatic
+   mirroring accepted. On failure restore previous scripts/config/revision; source
+   history and Forecast/Outcome are not rewritten by rollback.
+
+Official desktop OAuth reference:
+https://developers.google.com/identity/protocols/oauth2/native-app
+
+No source download was manually started. Any standard MOEX workflow automatically
+triggered by updating this PR is separately reported in the PR's acceptance log.

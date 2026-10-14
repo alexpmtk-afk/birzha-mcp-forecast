@@ -58,6 +58,12 @@ class NativeCanonicalSheets:
         symbol, target = GoogleSheetsBridge.target_for_symbol(symbol)
         if timeframe not in TIMEFRAMES:
             raise MirrorConflict("unsupported timeframe")
+        self._validate_named_target(symbol, timeframe)
+
+    def _validate_named_target(self, symbol: str, timeframe: str) -> None:
+        symbol, target = GoogleSheetsBridge.target_for_symbol(symbol)
+        if timeframe not in TIMEFRAMES | {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
+            raise MirrorConflict("unsupported canonical sheet")
         meta = self._request("GET", f"https://www.googleapis.com/drive/v3/files/{target.spreadsheet_id}",
                              params={"fields": "id,name,mimeType,parents,trashed"})
         if (meta.get("id") != target.spreadsheet_id or meta.get("name") != target.spreadsheet_name
@@ -127,3 +133,67 @@ class NativeCanonicalSheets:
         self._request("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}:batchUpdate", json=body)
         # Refresh grid bounds: appendCells may expand the allocated sheet.
         self.validate_target(symbol, timeframe)
+
+    def validate_service_target(self, symbol: str, sheet: str) -> None:
+        if sheet not in {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
+            raise MirrorConflict("unsupported service sheet")
+        self._validate_named_target(symbol, sheet)
+
+    def read_service_rows(self, symbol: str, sheet: str) -> list[list[object]]:
+        rows = self.read_rows(symbol, sheet)
+        if not rows:
+            return []
+        width = len(rows[0])
+        if any(len(row) > width for row in rows):
+            raise MirrorConflict("service sheet data exceeds header")
+        return [row + [""] * (width - len(row)) for row in rows]
+
+    def append_service_rows(self, symbol: str, sheet: str, rows: list[list[object]]) -> None:
+        self.validate_service_target(symbol, sheet)
+        self.append_rows(symbol, sheet, rows)
+
+    def read_status(self, symbol: str) -> list[list[object]]:
+        rows = self.read_service_rows(symbol,"SYNC_STATUS")
+        if rows and (rows[0] != ["key","value"] or any(not isinstance(r[0],str) or not r[0] for r in rows[1:]) or len({r[0] for r in rows[1:]}) != len(rows)-1):
+            raise MirrorConflict("invalid or duplicate status keys")
+        return rows
+
+    def update_status(self, symbol: str, updates: dict[str,object]) -> None:
+        from birzha.application.canonical_market_mirror import digest
+        symbol,target = GoogleSheetsBridge.target_for_symbol(symbol)
+        self.validate_service_target(symbol,"SYNC_STATUS")
+        old=self.read_status(symbol)
+        rows=[list(r) for r in old] if old else [["key","value"]]
+        positions={row[0]:index for index,row in enumerate(rows[1:],1)}
+        # Preserve superseded configuration as dated evidence before correcting it.
+        for key in ("primary_store","persistent_timeframe","intraday_mode","sync_direction"):
+            if key in updates and key in positions and rows[positions[key]][1] != updates[key]:
+                legacy="legacy_pre_mirror_v3_"+key
+                if legacy not in positions:
+                    positions[legacy]=len(rows);rows.append([legacy,rows[positions[key]][1]])
+        for key,value in updates.items():
+            if not isinstance(key,str) or not key or not isinstance(value,(str,int,float,bool)):
+                raise MirrorConflict("invalid status value")
+            if key in positions: rows[positions[key]][1]=value
+            else: positions[key]=len(rows);rows.append([key,value])
+        if digest(self.read_status(symbol)) != digest(old):
+            raise MirrorConflict("status changed after preflight")
+        sheet_id=self._sheets[(symbol,"SYNC_STATUS")]["sheetId"]
+        def cell(x):
+            if isinstance(x,bool): return {"userEnteredValue":{"boolValue":x}}
+            if isinstance(x,(float,int)):
+                if not math.isfinite(x): raise MirrorConflict("invalid numeric status")
+                return {"userEnteredValue":{"numberValue":x}}
+            if isinstance(x,str) and not x.startswith("="): return {"userEnteredValue":{"stringValue":x}}
+            raise MirrorConflict("invalid status literal")
+        requests=[]
+        for index,row in enumerate(rows[:len(old)]):
+            if row != old[index]:
+                requests.append({"updateCells":{"start":{"sheetId":sheet_id,"rowIndex":index,"columnIndex":0},"rows":[{"values":[cell(x) for x in row]}],"fields":"userEnteredValue"}})
+        added=rows[len(old):]
+        if added: requests.append({"appendCells":{"sheetId":sheet_id,"rows":[{"values":[cell(x) for x in row]} for row in added],"fields":"userEnteredValue"}})
+        if requests:
+            self._request("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}:batchUpdate",json={"requests":requests})
+            self.validate_service_target(symbol,"SYNC_STATUS")
+        if digest(self.read_status(symbol)) != digest(rows):
+            raise MirrorConflict("status post-write readback mismatch")

@@ -99,6 +99,57 @@ _model_lab = ModelAcceptanceService(validator=_validator)
 _calibration = ModelCalibrationService(validator=_validator)
 
 
+_native_mirror = None
+if settings.native_mirror_enabled:
+    from birzha.application.home_market_mirror import HomeCanonicalMirror
+    from birzha.storage.native_canonical_sheets import NativeCanonicalSheets
+    from birzha.storage.google_mirror_auth import GoogleRefreshToken
+    _native_mirror = HomeCanonicalMirror(
+        _historical_store,
+        NativeCanonicalSheets(GoogleRefreshToken(settings.native_mirror_credentials_path)),
+        settings.source_sha,
+    )
+
+
+@mcp.tool(name="mirror.status", description="Read local mirror activation settings without reading credentials or calling Google/MOEX.")
+def mirror_status() -> dict[str, object]:
+    from pathlib import Path
+    return {"enabled":settings.native_mirror_enabled,"configured_in_process":_native_mirror is not None,
+            "credentials_file_present":bool(settings.native_mirror_credentials_path and Path(settings.native_mirror_credentials_path).is_file()),
+            "source_sha":settings.source_sha,"source_backend":settings.state_backend,
+            "single_writer_required":True,"single_writer_declared":settings.native_mirror_sole_writer,
+            "google_access_verified":False,"note":"Local settings are not a live Google authorisation check"}
+
+
+@mcp.tool(name="mirror.sync", description="Read already stored data and reconcile one fixed canonical Google workbook. Dry-run by default; no MOEX requests or source database writes.")
+def mirror_sync(symbol: str, from_date: str, till_date: str, dry_run: bool = True) -> dict[str, object]:
+    if _native_mirror is None:
+        return {"status":"BLOCKED","reason":"background Google mirror is not configured","written":False}
+    try:
+        return _native_mirror.sync(symbol=symbol,from_date=from_date,till_date=till_date,dry_run=dry_run,exclusive_workbook_owner=settings.native_mirror_sole_writer)
+    except Exception as exc:
+        from birzha.application.canonical_market_mirror import MirrorConflict
+        return {"status":"ERROR","symbol":symbol,"error_type":type(exc).__name__,
+                "reason":str(exc)[:200] if isinstance(exc,MirrorConflict) else "SOURCE_OR_RUNTIME_FAILURE",
+                "written":"UNKNOWN_RECONCILE_BEFORE_RETRY" if not dry_run else False}
+
+
+@mcp.tool(name="mirror.sync_core", description="Mirror already stored HOME candles and service evidence into fixed canonical Google books. Dry-run by default; never contacts MOEX or changes source history, Forecast or Outcome.")
+def mirror_sync_core(from_date: str, till_date: str, dry_run: bool = True) -> dict[str, object]:
+    if _native_mirror is None:
+        return {"status":"BLOCKED","reason":"background Google mirror is not configured","written":False}
+    results=[]
+    for symbol in CORE_HISTORY_SYMBOLS:
+        try:
+            result=_native_mirror.sync(symbol=symbol,from_date=from_date,till_date=till_date,dry_run=dry_run,exclusive_workbook_owner=settings.native_mirror_sole_writer)
+            results.append(result)
+        except Exception as exc:
+            results.append({"symbol":symbol,"status":"ERROR","error_type":type(exc).__name__})
+    success="MIRROR_DRY_RUN_READY" if dry_run else "MIRROR_SYNC_PASS"
+    passed=sum(x.get("status")==success for x in results)
+    return {"status":"PASS" if passed==len(results) else "PARTIAL","dry_run":dry_run,"requested":len(results),"passed":passed,"failed":len(results)-passed,"results":results}
+
+
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
 def system_version() -> dict[str, str]:
     return {"service": SERVICE_NAME, "version": VERSION, "architecture": ARCHITECTURE_VERSION}
