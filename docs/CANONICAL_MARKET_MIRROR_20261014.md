@@ -205,3 +205,6 @@ https://developers.google.com/identity/protocols/oauth2/native-app
 
 No source download was manually started. Any standard MOEX workflow automatically
 triggered by updating this PR is separately reported in the PR's acceptance log.
+Incremental scheduling optimisation: source rows are reconciled once. Only missing
+keys enter write batches; a no-change frame uses one verification pass, rather than
+replaying every already mirrored 120-day source slice. Full final readback remains.

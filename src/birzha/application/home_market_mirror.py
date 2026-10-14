@@ -147,7 +147,7 @@ class HomeCanonicalMirror:
                 if len(incoming) == 1:
                     raise MirrorConflict(f"source has no {timeframe} candles in requested range")
                 plan=plan_append(symbol=symbol,timeframe=timeframe,existing=current,incoming=incoming)
-                prepared[timeframe]=(incoming,evidence,len(plan.additions)-int(plan.initialise_header))
+                prepared[timeframe]=(incoming,evidence,len(plan.additions)-int(plan.initialise_header),plan.additions[1:] if plan.initialise_header else plan.additions,plan.before_sha256)
             # Preflight service headers before data writes as well.
             services = {"SESSIONS": (["symbol","secid","trade_date"], bundle["sessions"]),
                         "VERIFIED_RANGES": (["scope","symbol","timeframe","from_date","till_date"],
@@ -165,11 +165,17 @@ class HomeCanonicalMirror:
             self.transport.update_status(symbol,{"status":"MIRROR_SYNC_IN_PROGRESS","mirror_v3_status":"IN_PROGRESS","mirror_v3_source_sha":self.source_sha})
             result={}
             publisher=CanonicalMirrorPublisher(self.transport)
-            for tf,(incoming,evidence,_) in prepared.items():
+            for tf,(incoming,evidence,_,missing,preflight_sha) in prepared.items():
+                self.transport.validate_target(symbol,tf)
+                current = self.transport.read_rows(symbol,tf)
+                if digest(rectangular(current) if current else []) != preflight_sha:
+                    raise MirrorConflict("candle sheet changed since whole-workbook preflight")
                 # Process bounded subsets; existing rows are never removed by range batching.
                 added_total = 0
-                for offset in range(1,len(incoming),1500):
-                    result[tf]=publisher.sync(symbol=symbol,timeframe=tf,incoming=[incoming[0],*incoming[offset:offset+1500]],exclusive_workbook_owner=True)
+                if not missing:
+                    result[tf]=publisher.sync(symbol=symbol,timeframe=tf,incoming=[incoming[0]],exclusive_workbook_owner=True)
+                for offset in range(0,len(missing),1500):
+                    result[tf]=publisher.sync(symbol=symbol,timeframe=tf,incoming=[incoming[0],*missing[offset:offset+1500]],exclusive_workbook_owner=True)
                     added_total += result[tf]["added_rows"]
                 result[tf]["added_rows"] = added_total
                 result[tf]["evidence"]=evidence
