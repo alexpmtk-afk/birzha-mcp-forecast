@@ -55,12 +55,33 @@ Memo 09 designates user folder:
 My Drive / Биржа / Архив рыночных данных / SBER - Сбербанк
 and existing spreadsheet MOEX_HISTDATA_SBER_MCP_CANONICAL.
 
-Current live readback (after consultant audit): H1 49 valid *pilot* records
-in A2:Z50, M15 192 pilot records in A2:Z193, 9–11 June 2025.
-Do NOT treat those 241 records as a completed mirror generation.
-D1, SESSIONS, TRADESTATS, VERIFIED_RANGES and old SYNC_STATUS remain
-untouched. The existing mirror code uses a D1-only contract and hardcodes
-YDB/ON_DEMAND. Manual SYNC_STATUS edits are not a migration.
+Drive/readback update 2026-10-14 (Memo 09 revision 1.1):
+- Canonical spreadsheet **remains the same ID**:
+  `1DQojm2mzeXC41mHX1oH8xMv0d43TSz7U7o-ciK9lgoQ`
+  in `Биржа / Архив рыночных данных / SBER - Сбербанк`.
+  No renamed or new SBER book is required.
+- Previous 49 H1 + 192 M15 pilot rows were superseded by a **one-time,
+  user-authorized research-only copy** of the complete captured range
+  2025-01-03..2026-10-12: **8,693 H1 + 33,486 M15 (42,179 candles)**,
+  in the existing `H1`/`M15` tabs (A:Z), not a second source of prices.
+- Separate read-only verification of the present exported spreadsheet
+  found unique deterministic keys (0 duplicates), valid SBER source and
+  OHLCV/duration constraints, pinned archive SHA consistent for every
+  record, and **577/577 daily count matches for both H1 and M15** against
+  `sber_2025_2026_coverage_RECONCILED.json` from the archived source ZIP.
+  This is **not** an independent SQL OHLCV comparison against every
+  source DuckDB row, nor a session or PIT attestation.
+- `SYNC_STATUS` already includes `H1_*` and `M15_*` research
+  readback entries with `HOME_SYNC_NOT_INSTALLED`; the top-level
+  `YDB / D1-only` descriptors still reflect the pre-integration exporter.
+  `D1`, `SESSIONS`, `TRADESTATS` and `VERIFIED_RANGES` were not
+  migrated by this copy. No HOME installation or automatic export exists.
+- The private ZIP copy and the native Google Sheet coexist in the
+  canonical SBER folder. Original research capture remains preserved.
+- **Do not write another 42,179 records or treat the one-off copy as
+  an automated HOME->Sheets synchronization generation.**
+  The existing mirror code hardcodes YDB/D1-only descriptors;
+  manually changing `SYNC_STATUS` does not change that exporter.
 
 Future versioned one-way exporter should:
 - Read from one accepted dedicated HOME SBER research archive (read_only)
