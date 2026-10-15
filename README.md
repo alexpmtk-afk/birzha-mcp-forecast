@@ -2,6 +2,15 @@
 
 Universal MCP backend for causal MOEX market analysis, forecasting, immutable forecast journaling, outcome evaluation and historical walk-forward validation.
 
+## Для чатов, собирающих данные — начать здесь
+
+[Единый порядок работы](docs/CHAT_DATA_OPERATING_RUNBOOK.md): выбор доступной
+среды, сбор D1/H1/M15, соединение сессий, места хранения, проверки и передача
+точного задания через GitHub при отсутствии прямого доступа к HOME.
+GitHub хранит инструкции и задания; публикация issue сама не запускает сервер.
+[Форма задания исполнения](.github/ISSUE_TEMPLATE/market-data-execution.md).
+Прямое подключение сервера не является обязательным для каждого веб-чата.
+
 ## Current implemented scope
 
 The current `main` line contains working application code for:
@@ -44,7 +53,7 @@ MCP remains a thin adapter. Domain, provider, forecast, persistence, outcome and
 
 ## Stored bars across sessions and agent operating rules
 
-Start with [AGENTS.md](AGENTS.md) and `history.session_rules` for mandatory rules,
+Start with [AGENTS.md](AGENTS.md) and the [execution route](docs/CHAT_DATA_OPERATING_RUNBOOK.md). With connected MCP, use `history.session_rules` for mandatory rules,
 canonical storage IDs and installed source SHA. Ordinary authorised batches should
 continue autonomously; escalate only material blockers.
 
