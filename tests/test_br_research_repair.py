@@ -121,6 +121,18 @@ def test_research_conflict_and_future_native_loading():
     finally:s.close()
 
 
+def test_research_reader_rejects_stored_payload_corruption():
+    s=DuckDBHistoricalCandleStore(':memory:');p=dataset()
+    try:
+        reconcile(s,p,digest(p),apply=True)
+        altered=deepcopy(p['records'][0]);altered['sheet_row']['close']=10.5
+        from birzha.application.br_research_repair import canonical
+        s._connection.execute('UPDATE br_research_quarantine SET payload_json=?',[canonical(altered)])
+        with pytest.raises(RepairError,match='STORED_RESEARCH_SHA_MISMATCH'):
+            research_series(s,'BRZ5','H1','2025-11-01','2025-11-01')
+    finally:s.close()
+
+
 def test_file_backup_precedes_quarantine_and_can_restore(tmp_path):
     s=DuckDBHistoricalCandleStore(str(tmp_path/'history.duckdb'));p=dataset()
     try:

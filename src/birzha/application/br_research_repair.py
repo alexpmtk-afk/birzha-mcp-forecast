@@ -52,7 +52,13 @@ def table_exists(con):
 
 def fingerprint(con):
     # Logical before/after preservation, in the same transaction/snapshot.
-    return digest(con.execute('SELECT * FROM historical_candles ORDER BY secid,timeframe,begin').fetchall())
+    sha = hashlib.sha256()
+    cursor = con.execute('SELECT * FROM historical_candles ORDER BY secid,timeframe,begin')
+    while rows := cursor.fetchmany(1000):
+        for row in rows:
+            sha.update(canonical(row).encode('utf-8'))
+            sha.update(b'\n')
+    return sha.hexdigest()
 
 
 def validate(payload, expected_sha256):
@@ -181,13 +187,16 @@ def research_series(store, secid, timeframe, from_date, till_date):
         if not table_exists(store._connection):
             rows = []
         else:
-            rows = store._connection.execute('''SELECT payload_json,dataset_sha256,imported_at
+            rows = store._connection.execute('''SELECT payload_json,dataset_sha256,imported_at,payload_sha256
                 FROM br_research_quarantine WHERE secid=? AND timeframe=? AND begin>=? AND begin<?
                 ORDER BY begin LIMIT 5001''', [secid, timeframe, from_date, (finish+timedelta(days=1)).isoformat()]).fetchall()
     if len(rows) > MAX_ROWS:
         raise RepairError('ROW_BOUND_EXCEEDED')
+    for payload, _, _, expected in rows:
+        if digest(json.loads(payload)) != expected:
+            raise RepairError('STORED_RESEARCH_SHA_MISMATCH')
     return {'status': 'RESEARCH_ONLY', 'version': VERSION, 'secid': secid,
             'timeframe': timeframe, 'count': len(rows), 'forecast_admission': 'NOT_GRANTED',
             'calendar_status': 'UNVERIFIED', 'historical_availability_status': 'UNVERIFIED',
             'records': [{'source_record': json.loads(p), 'dataset_sha256': ds,
-                         'imported_at': t, 'imported_at_is_historical_first_seen': False} for p, ds, t in rows]}
+                         'imported_at': t, 'imported_at_is_historical_first_seen': False} for p, ds, t, _ in rows]}
