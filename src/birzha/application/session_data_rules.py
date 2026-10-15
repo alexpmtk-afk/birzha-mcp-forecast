@@ -1,0 +1,57 @@
+"""Published operating rules; no network, credentials or mutable global result."""
+from birzha.application.stored_session_series import VERSION, MAX_DAYS, MAX_ROWS
+
+
+def session_data_rules() -> dict:
+    return {
+        "rules_version": "SESSION_DATA_OPERATING_RULES_V1",
+        "series_contract_version": VERSION,
+        "purpose": "Read before authorised candle download/storage/session concatenation",
+        "supported_timeframes": ["D1", "H1", "M15"],
+        "storage_key": ["exact_SECID", "timeframe", "begin"],
+        "price_adjustment": "NONE",
+        "inter_session_gaps": "PRESERVE",
+        "synthetic_gap_bars": "FORBIDDEN",
+        "incomplete_cross_session_merge": "FORBIDDEN",
+        "cross_contract_price_merge": "FORBIDDEN",
+        "missing_values": "NULL_OR_EXPLICIT_UNKNOWN_NEVER_ZERO",
+        "series_read_limits": {"calendar_dates_inclusive": MAX_DAYS, "rows": MAX_ROWS},
+        "series_read_date_basis": "SOURCE_BEGIN_LITERAL_DATE_NOT_ATTESTED_TRADE_DATE",
+        "source_version_read_policy": "EXISTING_STORE_READ_NOT_A_NEW_LATEST_OR_AS_OF_POLICY",
+        "separate_admission_checks": ["expected exchange calendar", "completed interval",
+            "feature window length", "availability at decision time", "source version/provenance"],
+        "workflow": [
+            "Read these rules and installed tools/list; distinguish installed SHA from GitHub/Draft",
+            "Resolve instrument/contract for requested dates; retain exact SECID identity",
+            "Inspect history.coverage; endpoints/counts alone do not prove no internal missing bars",
+            "Use existing history.sync for authorised missing bounded source batches and governor retries",
+            "Use history.stored_series to inspect one exact SECID and timeframe without network or writes",
+            "Verify chronology, duplicates/conflicts, NULL/completion and independent calendar/admission separately",
+            "For requested Google export use existing canonical IDs and the authorised writer only; verify installed export capability/access",
+            "Read back written data, preserve accepted prices, update real quality/provenance evidence and project map",
+        ],
+        "autonomy": {
+            "routine_batches_and_checks": "CONTINUE_WITHIN_OWNER_AUTHORISED_SCOPE_WITHOUT_REPEAT_APPROVAL",
+            "before_escalation": "Inspect code/rules/reports; do not send routine work to another chat",
+            "repeated_failure": "After 2-3 failed attempts report a concrete blocker and exact required action",
+            "escalate_only": ["missing access", "material unresolved evidence conflict", "scope decision",
+                               "separately controlled merge/deploy/restart/production-data/secrets/paid action"],
+            "existing_owner_authorisation": "PERSISTS_WITHIN_CURRENT_TASK",
+        },
+        "source_history": "INSTALLED_BACKEND; isolated research archives are not automatically installed",
+        "google_export_installation": "NOT_ASSERTED_BY_THIS_RULE_TOOL; inspect actual capabilities/configuration",
+        "google_book_registry_date": "2026-10-15",
+        "canonical_google_books": {'SBER': {'spreadsheet_id': '1DQojm2mzeXC41mHX1oH8xMv0d43TSz7U7o-ciK9lgoQ', 'name': 'MOEX_HISTDATA_SBER_MCP_CANONICAL'}, 'Si': {'spreadsheet_id': '1gqYoZ04887U6btTyj0diHPGq3oZVrk9QNKT9PJ6W0ss', 'name': 'MOEX_HISTDATA_Si_MCP_CANONICAL'}, 'BR': {'spreadsheet_id': '1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ', 'name': 'MOEX_HISTDATA_BR_MCP_CANONICAL'}, 'GOLD': {'spreadsheet_id': '1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g', 'name': 'MOEX_HISTDATA_GOLD_MCP_CANONICAL'}, 'IMOEX': {'spreadsheet_id': '1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg', 'name': 'MOEX_HISTDATA_IMOEX_MCP_CANONICAL'}, 'RTSI': {'spreadsheet_id': '1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY', 'name': 'MOEX_HISTDATA_RTSI_MCP_CANONICAL'}},
+        "canonical_tabs": {
+            "D1": "daily candles", "H1": "hourly candles", "M15": "15-minute candles",
+            "SESSIONS": "calendar evidence, not inferred weekdays",
+            "VERIFIED_RANGES": "ranges actually proven under stated policy",
+            "SYNC_STATUS": "actual sync evidence, not readiness by assumption",
+        },
+        "prohibited_destination_actions": ["create competing canonical book", "clear accepted rows",
+            "overwrite historical OHLC merely to match a report", "claim absent export is installed"],
+        "github_rules": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/blob/main/AGENTS.md",
+        "github_runbook": "https://github.com/alexpmtk-afk/birzha-mcp-forecast/blob/main/docs/STORED_SESSION_SERIES_20261015.md",
+        "drive_instruction": "https://drive.google.com/file/d/1s60HWpmFm5NHcVhwenhwINQ2c41yLF81/view",
+        "project_map": "https://docs.google.com/spreadsheets/d/1_NGm6oiBF7rUV7TVNjP13huYyK4u8b21oKDOAQThEvQ/edit",
+    }

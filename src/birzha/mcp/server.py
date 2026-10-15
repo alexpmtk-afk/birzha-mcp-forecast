@@ -183,6 +183,12 @@ def history_flow_capture_public_trades(symbol: str) -> dict[str, object]:
         }
 
 
+@mcp.tool(name="history.session_rules", description="Read mandatory operating rules before downloading or concatenating D1/H1/M15 session data: raw prices, exact contracts, source loading, storage/Google book IDs, missing-data policy and autonomous execution. Reports installed source SHA; does not grant access or forecast admission.", annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
+def history_session_rules() -> dict[str, object]:
+    from birzha.application.session_data_rules import session_data_rules
+    return {**session_data_rules(), "installed_source_sha": settings.source_sha}
+
+
 @mcp.tool(name="history.stored_series", description="Read existing D1/H1/M15 bars for one exact SECID across session boundaries without network or source writes. Prices, gaps, NULLs and completion flags are preserved. This is inspection only, not calendar/PIT attestation or Forecast admission. Futures require an exact contract, not a root.", annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
 def history_stored_series(secid: str, timeframe: str, from_date: str, till_date: str) -> dict[str, object]:
     from birzha.application.stored_session_series import stored_session_series, StoredSessionSeriesError

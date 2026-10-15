@@ -138,7 +138,7 @@ httpx.AsyncClient.request=no_network
 server.mcp.run(transport='stdio')
 """,encoding="utf-8")
     env={**os.environ,"PYTHONPATH":str(Path(__file__).resolve().parents[1]/"src"),
-         "BIRZHA_STATE_BACKEND":"duckdb","BIRZHA_FORECAST_JOURNAL_PATH":":memory:",
+         "BIRZHA_STATE_BACKEND":"duckdb","BIRZHA_SOURCE_SHA":"a"*40,"BIRZHA_FORECAST_JOURNAL_PATH":":memory:",
          "BIRZHA_HISTORICAL_STORE_PATH":":memory:","BIRZHA_REQUIRE_MCP_AUTH":"false",
          "BIRZHA_MARKET_MIRROR_REQUIRED":"false","PYTHONIOENCODING":"utf-8"}
     env.pop("BIRZHA_MCP_BEARER_TOKEN",None)
@@ -148,6 +148,11 @@ server.mcp.run(transport='stdio')
             async with ClientSession(read,write) as client:
                 await client.initialize()
                 tools=await client.list_tools()
+                rules_reply=await client.call_tool("history.session_rules",arguments={})
+                rules=rules_reply.structured_content
+                if rules is None:rules=json.loads(rules_reply.content[0].text)
+                assert rules["installed_source_sha"]=="a"*40
+                assert rules["price_adjustment"]=="NONE" and len(rules["canonical_google_books"])==6
                 tool=next(t for t in tools.tools if t.name=="history.stored_series")
                 assert tool.annotations.read_only_hint is True
                 assert tool.annotations.open_world_hint is False
@@ -163,3 +168,15 @@ server.mcp.run(transport='stdio')
                 if got is None:got=json.loads(response.content[0].text)
                 assert got=={"status":"ERROR","reason":"EXACT_CONTRACT_REQUIRED"}
     asyncio.run(asyncio.wait_for(check(),timeout=45))
+
+
+def test_operating_rules_are_fresh_complete_and_do_not_claim_export_installation():
+    from birzha.application.session_data_rules import session_data_rules
+    first=session_data_rules(); second=session_data_rules()
+    assert first==second
+    first["canonical_google_books"]["SBER"]["spreadsheet_id"]="changed locally"
+    assert second["canonical_google_books"]["SBER"]["spreadsheet_id"]=="1DQojm2mzeXC41mHX1oH8xMv0d43TSz7U7o-ciK9lgoQ"
+    assert second["supported_timeframes"]==["D1","H1","M15"]
+    assert second["cross_contract_price_merge"]==second["synthetic_gap_bars"]=="FORBIDDEN"
+    assert "NOT_ASSERTED" in second["google_export_installation"]
+    assert second["autonomy"]["existing_owner_authorisation"]=="PERSISTS_WITHIN_CURRENT_TASK"
