@@ -35,9 +35,9 @@ def run():
   rows.append(row)
   receipts.append({"secid":inst.secid,"date":day,"start":c.begin,"end":c.end,"source":"MOEX_ISS","calendar_attested":False,"pit_attested":False})
  with (dest/"verified_d1_rows.csv").open("w",newline="",encoding="utf-8") as fh:csv.writer(fh).writerows(rows)
- (dest/"source_manifest.json").write_text(json.dumps({"instrument":"BR","timeframe":"D1","range":["2026-09-28","2026-10-14"],"expected_rows":len(TARGET),"actual_rows":len(rows),"records":receipts,"calendar":"NOT_ATTESTED","first_receipt":"UNKNOWN","production_changes":"NONE"},indent=2,ensure_ascii=False)+"\\n")
+ (dest/"source_manifest.json").write_text(json.dumps({"instrument":"BR","timeframe":"D1","range":["2026-09-28","2026-10-14"],"expected_rows":len(TARGET),"actual_rows":len(rows),"records":receipts,"calendar":"NOT_ATTESTED","first_receipt":"UNKNOWN","production_changes":"NONE"},indent=2,ensure_ascii=False)+"\n")
  with (dest/"SHA256SUMS.txt").open("w") as fh:
   for name in ["verified_d1_rows.csv","source_manifest.json"]:
-   sha=hashlib.sha256((dest/name).read_bytes()).hexdigest();fh.write(f"{sha}  {name}\\n")
+   sha=hashlib.sha256((dest/name).read_bytes()).hexdigest();fh.write(f"{sha}  {name}\n")
  print(json.dumps({"status":"D1_SOURCE_COLLECTED","rows":len(rows),"contracts":sorted({r[8] for r in rows}),"first":rows[0][0],"last":rows[-1][0]}))
 if __name__=="__main__":run()
