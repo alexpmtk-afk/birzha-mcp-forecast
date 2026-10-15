@@ -23,11 +23,11 @@ jobs:
         run: |
           mkdir -p research/BR/2025-01-15
           set +e
-          python -m scripts.g2_intraday_research_archive --mode ingest --date 2025-01-15 --markets BR --archive research/BR/2025-01-15/research_intraday_20250115.duckdb --ack-research-write 2>&1 | tee research/BR/2025-01-15/source.log
+          python -m scripts.g2_intraday_research_archive --mode ingest --date 2025-01-15 --markets BR --archive research/BR/2025-01-15/birzha_intraday_research_2025_2026.duckdb --ack-research-write 2>&1 | tee research/BR/2025-01-15/source.log
           code=${PIPESTATUS[0]}
           echo "collector_exit_code=$code" | tee research/BR/2025-01-15/collector_status.txt
-          if test -f research/BR/2025-01-15/research_intraday_20250115.duckdb; then
-            sha256sum research/BR/2025-01-15/research_intraday_20250115.duckdb > research/BR/2025-01-15/SHA256SUMS.txt
+          if test -f research/BR/2025-01-15/birzha_intraday_research_2025_2026.duckdb; then
+            sha256sum research/BR/2025-01-15/birzha_intraday_research_2025_2026.duckdb > research/BR/2025-01-15/SHA256SUMS.txt
           fi
           exit 0
       - name: Save isolated source and exact error log
