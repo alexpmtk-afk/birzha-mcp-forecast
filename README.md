@@ -42,6 +42,19 @@ Current MCP surface includes:
 
 MCP remains a thin adapter. Domain, provider, forecast, persistence, outcome and validation logic lives outside the MCP package.
 
+## Stored bars across sessions and agent operating rules
+
+Start with [AGENTS.md](AGENTS.md) and `history.session_rules` for mandatory rules,
+canonical storage IDs and installed source SHA. Ordinary authorised batches should
+continue autonomously; escalate only material blockers.
+
+`history.stored_series(secid, timeframe, from_date, till_date)` exposes the existing
+exact-instrument stored D1/H1/M15 series without network or writes. Raw prices,
+missing values, incomplete flags and inter-session gaps are preserved. It does
+not attest calendar completeness or historical availability and grants no Forecast
+admission. Futures require an exact SECID. See
+[session series rules and acceptance](docs/STORED_SESSION_SERIES_20261015.md).
+
 ## Causality rules
 
 - Forecast input is limited to information available at its T0.
