@@ -74,9 +74,17 @@ def run(argv=None):
                 print(json.dumps(record,sort_keys=True),flush=True)
             except Exception as e:
                 failures+=1
-                record={"day":daystr,"status":"ERROR","error_type":type(e).__name__,"error":str(e)[:280]}
+                rate_limited=(type(e).__name__=="UpstreamRateLimited" or
+                              "last_status=503" in str(e) or "last_status=429" in str(e))
+                record={"day":daystr,
+                        "status":"UPSTREAM_TEMPORARILY_UNAVAILABLE" if rate_limited else "ERROR",
+                        "error_type":type(e).__name__,"error":str(e)[:280]}
                 report.append(record)
                 print(json.dumps(record,sort_keys=True),flush=True)
+                # Stop this month on an upstream rate-limit; never retry every
+                # remaining calendar day against the same failing endpoint.
+                if rate_limited:
+                    break
             day+=timedelta(days=1)
     finally:archive.close()
     con=duckdb.connect(str(db),read_only=True)
