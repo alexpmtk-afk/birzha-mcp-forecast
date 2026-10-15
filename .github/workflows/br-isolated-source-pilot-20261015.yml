@@ -1,0 +1,59 @@
+name: BR isolated verified source pilot 2025-06-09
+on:
+  push:
+    branches: [chatgpt/br-source-capture-20261015]
+    paths:
+      - .github/workflows/br-isolated-source-pilot-20261015.yml
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Install isolated research collector
+        run: python -m pip install -e '.[dev]'
+      - name: Capture BR exact historical contract with existing governed collector
+        shell: bash
+        run: |
+          mkdir -p research/BR
+          set +e
+          python -m scripts.g2_intraday_research_archive --mode ingest --date 2025-06-09 --markets BR --archive research/BR/birzha_intraday_research_2025_2026.duckdb --ack-research-write 2>&1 | tee research/BR/source_capture.log
+          printf 'collector_exit_code=%s\n' "${PIPESTATUS[0]}" | tee research/BR/collector_status.txt
+          exit 0
+      - name: Audit real captured rows, source gaps, sha and exact instrument identity
+        shell: bash
+        run: |
+          python - <<'PY'
+          import duckdb,json,hashlib,pathlib
+          root=pathlib.Path('research/BR')
+          db=root/'birzha_intraday_research_2025_2026.duckdb'
+          cx=duckdb.connect(str(db),read_only=True)
+          try:
+              rows=cx.execute("select secid,timeframe,count(*) from research_intraday_candles where symbol='BR' group by secid,timeframe order by secid,timeframe").fetchall()
+              days=cx.execute("select secid,trade_date,h1_rows,m15_rows,raw_m1_rows,quality,incomplete_m15_buckets,skipped_h1_bars from research_intraday_captured_days where symbol='BR'").fetchall()
+              assert rows and {x[1] for x in rows}=={'H1','M15'}
+              assert all(x[0]=='BRN5' for x in rows)
+              assert len(days)==1 and days[0][0]=='BRN5' and days[0][1]=='2025-06-09'
+              sha=hashlib.sha256(db.read_bytes()).hexdigest()
+              evidence={'status':'CAPTURED_RESEARCH_SOURCE_WITH_POSSIBLE_GAPS','rows':rows,'days':days,'db_sha256':sha,'source':'MOEX_ISS','first_seen_pit':'NOT_ATTESTED','calendar':'UNVERIFIED'}
+              (root/'source_evidence.json').write_text(json.dumps(evidence,ensure_ascii=False,indent=2)+'\n')
+              print(json.dumps(evidence))
+          finally:
+              cx.close()
+          PY
+          (cd research/BR && sha256sum birzha_intraday_research_2025_2026.duckdb source_evidence.json source_capture.log > SHA256SUMS.txt)
+      - name: Preserve actual prices and source evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: br-source-pilot-2025-06-09
+          path: research/BR/
+          if-no-files-found: error
+          retention-days: 30
