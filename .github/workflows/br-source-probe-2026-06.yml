@@ -1,0 +1,52 @@
+name: BR 2026-06 single-day source access probe
+on:
+  push:
+    branches: [chatgpt/br-source-capture-20261015]
+    paths:
+      - .github/workflows/br-source-probe-2026-06.yml
+permissions:
+  contents: read
+jobs:
+  source_probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e '.[dev]'
+      - name: Exactly one BR real MOEX day, protected existing collector
+        shell: bash
+        run: |
+          mkdir -p research/BR
+          set +e
+          python -m scripts.g2_intraday_research_archive --mode ingest --date 2026-06-01 --markets BR --archive research/BR/birzha_intraday_research_2025_2026.duckdb --ack-research-write 2>&1 | tee research/BR/moex_source_probe.log
+          code=${PIPESTATUS[0]}
+          printf 'collector_exit_code=%s\n' "$code" > research/BR/collector_status.txt
+          if [ "$code" -ne 0 ] && [ ! -s research/BR/birzha_intraday_research_2025_2026.duckdb ]; then
+            echo 'MOEX_SOURCE_PROBE_BLOCKED: no persisted source rows'; exit 1
+          fi
+      - name: Read back actual BR source data and save source SHA
+        run: |
+          python - <<'PY'
+          import duckdb,hashlib,pathlib,json
+          p=pathlib.Path('research/BR/birzha_intraday_research_2025_2026.duckdb')
+          if not p.exists():raise SystemExit('NO_REAL_SOURCE_DB')
+          c=duckdb.connect(str(p),read_only=True)
+          try:
+              rows=c.execute("select secid,timeframe,count(*) from research_intraday_candles where symbol='BR' group by secid,timeframe").fetchall()
+              assert rows and all(s.startswith('BR') for s,t,n in rows) and all(n>0 for s,t,n in rows)
+          finally:c.close()
+          print(json.dumps({'actual_source_rows':rows,'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'scope':'RESEARCH_ONLY','pit':'UNKNOWN','calendar':'UNVERIFIED'}))
+          PY
+      - name: Preserve diagnostic and authentic source result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: br-source-access-probe-2026-06-01
+          path: research/BR/
+          retention-days: 14
+          if-no-files-found: warn
