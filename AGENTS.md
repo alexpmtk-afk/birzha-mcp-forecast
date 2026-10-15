@@ -3,10 +3,21 @@
 ## Start here
 
 For any candle download, storage, continuation or session-concatenation task,
-read docs/STORED_SESSION_SERIES_20261015.md and call history.session_rules on the
-connected MCP. Use tools/list to check installed capabilities. GitHub main,
-Draft PRs and installed HOME are different states; record the actual source SHA.
-The owner's current task and scope take precedence over generic historical notes.
+first read docs/CHAT_DATA_OPERATING_RUNBOOK.md and choose the route supported by
+the tools actually available in this chat. Then read
+docs/STORED_SESSION_SERIES_20261015.md for candle semantics.
+If Birzha MCP is connected, inspect tools/list and call history.session_rules.
+If it is absent, do not require a direct HOME connection or retry missing tools:
+complete accessible GitHub/Drive work and prepare one exact execution handoff
+using .github/ISSUE_TEMPLATE/market-data-execution.md. Search existing issues
+first; the project map remains the single operational queue. Publishing an issue
+does not execute it: no automatic GitHub-to-HOME consumer is established by this
+runbook. Only an authorised executor with the existing local control channel may
+report actual HOME results. Do not invent access or put secrets in GitHub.
+GitHub main, Draft PRs, isolated execution and installed HOME are different states;
+record the actual source SHA. The owner's current task and scope take precedence
+over generic historical notes. This route selection qualifies any older blanket
+instruction to call history.*; candle and authorisation rules remain mandatory.
 
 ## Execute ordinary work independently
 
