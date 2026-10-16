@@ -80,6 +80,7 @@ def test_analysis_run_core_returns_blocked_without_history_fetch():
         history=history,
         journal=ForecastJournalService(ForbiddenBuilder(), ReadableStore(),
                                        issuance_policy=ISSUANCE_POLICY_APPROVED),
+        issuance_policy=ISSUANCE_POLICY_APPROVED,
     )
     result = service.run()
     assert result["status"] == "BLOCKED"
@@ -116,3 +117,16 @@ def test_forecast_service_preview_stays_research_only_not_an_approved_issuance()
     from birzha.application.forecast import ForecastService
     assert callable(ForecastService.build)
     assert Settings().forecast_issuance_policy == "legacy_compat"
+
+
+def test_analysis_mismatched_guard_cannot_bypass_strict_journal():
+    history = ForbiddenHistory()
+    service = MarketAnalysisService(
+        history=history,
+        journal=ForecastJournalService(ForbiddenBuilder(), ReadableStore(),
+                                       issuance_policy=ISSUANCE_POLICY_APPROVED),
+        issuance_policy=ISSUANCE_POLICY_LEGACY,
+    )
+    got = service.run()
+    assert got["status"] == "BLOCKED"
+    assert history.calls == 0
