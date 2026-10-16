@@ -14,7 +14,8 @@ from statistics import median
 
 from birzha.domain.market import Candle, CandleSeries
 
-VERSION = "MARKET_STRUCTURE_FACTS_V1_20261016"
+VERSION = "MARKET_STRUCTURE_FACTS_V2_20261017"
+ARCHIVED_SOURCE = "G2_DURATION_NORMALIZED_ARCHIVE_RESEARCH_ONLY"
 MODES = {"RECONSTRUCTED_RESEARCH_ONLY", "T0_METADATA_GATED"}
 WINDOW = 50
 SWING_LEFT = SWING_RIGHT = 2
@@ -62,7 +63,9 @@ def _wilder(rows: tuple[Candle, ...]) -> dict:
     current, older = atrs[-1], atrs[-6]
     return _fact("AVAILABLE", {
         "atr_price": round(current, 8),
-        "atr_pct": round(current/recent[-1].close, 8),
+        "atr_pct": round((current/recent[-1].close) * 100, 6),
+        "atr_ratio": round(current/recent[-1].close, 8),
+        "atr_pct_unit": "PERCENT_100X_RATIO",
         "change_from_5_bars_ago_pct": round((current/older-1)*100, 6)
         if older > 0 else None,
         "formula": "WILDER_TR14_SEEDED_WITH_SMA14_FIXED_LAST_50",
@@ -121,22 +124,21 @@ def _relative_volume(rows: tuple[Candle, ...], supports_volume: bool) -> dict:
     })
 
 
-def build_market_structure_facts(
-    series: CandleSeries, *, t0: str,
-    mode: str = "RECONSTRUCTED_RESEARCH_ONLY",
-) -> dict:
-    """Read exactly one ordered completed D1/H1 contract without future data.
-
-    T0_METADATA_GATED checks claimed timestamps; it cannot independently attest
-    source clock, provenance or historical first receipt. Neither mode
-    authorizes forecasts, classifier thresholds or live trading.
-    """
+def _validate_series(series: CandleSeries, *, t0: str, mode: str,
+                     allow_archived_duration_flags: bool) -> datetime:
     if not isinstance(series, CandleSeries) or series.timeframe not in {"D1", "H1"}:
         raise ValueError("exact CandleSeries D1 or H1 required")
     if not series.instrument.secid or not series.instrument.symbol:
         raise ValueError("exact instrument SECID required")
-    if mode not in MODES:
+    if mode not in MODES and mode != "ARCHIVED_DURATION_FLAGS_RESEARCH_V2":
         raise ValueError("unsupported evidence mode")
+    if allow_archived_duration_flags:
+        if mode != "ARCHIVED_DURATION_FLAGS_RESEARCH_V2" or series.timeframe != "H1":
+            raise ValueError("duration-flag research is H1-only")
+        if series.source != ARCHIVED_SOURCE:
+            raise ValueError("duration-flag research requires exact archived source label")
+    elif mode == "ARCHIVED_DURATION_FLAGS_RESEARCH_V2":
+        raise ValueError("archived mode requires dedicated research entrypoint")
     cutoff = _dt(t0)
     previous_end = None
     for bar in series.candles:
@@ -146,7 +148,20 @@ def build_market_structure_facts(
         if previous_end is not None and start < previous_end:
             raise ValueError("overlapping or unsorted candles")
         previous_end = end
-        if type(bar.completed) is not bool or not bar.completed:
+        if type(bar.completed) is not bool:
+            raise ValueError("non-boolean completed")
+        if allow_archived_duration_flags:
+            if bar.source != ARCHIVED_SOURCE:
+                raise ValueError("archived candle provenance label required")
+            # This checks the known normalization rule only. It does NOT
+            # assert that the true primary completion status is known.
+            duration = (end - start).total_seconds()
+            if bar.completed != (duration in {3599.0, 3600.0}):
+                raise ValueError("archived duration flag disagrees with receipt semantics")
+            if (bar.available_at is not None or bar.observed_at is not None
+                    or bar.available_at_confidence != "UNKNOWN"):
+                raise ValueError("no constructed availability metadata in research archive")
+        elif not bar.completed:
             raise ValueError("forming candle not admitted")
         present = (bar.open, bar.high, bar.low, bar.close)
         if any(v is not None and not _numeric(v) for v in present):
@@ -155,6 +170,8 @@ def build_market_structure_facts(
             if not (bar.low <= min(bar.open, bar.close) <=
                     max(bar.open, bar.close) <= bar.high):
                 raise ValueError("inconsistent OHLC")
+        if bar.volume is not None and not _numeric(bar.volume, positive=False):
+            raise ValueError("invalid candle volume")
         if bar.available_at is not None and _dt(bar.available_at) > cutoff:
             raise ValueError("future available_at not admitted")
         if bar.observed_at is not None and _dt(bar.observed_at) > cutoff:
@@ -165,10 +182,16 @@ def build_market_structure_facts(
                 raise ValueError("T0 metadata unavailable: cannot claim as-known-at-T0")
             if (bar.source or "").startswith("NORMALIZED_RECONSTRUCTED"):
                 raise ValueError("reconstructed source cannot pass T0 metadata gate")
+    return cutoff
+
+
+def _describe(series: CandleSeries, *, cutoff: datetime, mode: str,
+              duration_research: bool) -> dict:
+    """One common formula path: absolutely no candle dropping or normalization."""
     raw = json.dumps(series.to_dict(), sort_keys=True, separators=(",", ":"),
                      ensure_ascii=False, allow_nan=False).encode("utf-8")
     candles = series.candles
-    return {
+    result = {
         "schema": VERSION,
         "symbol": series.instrument.symbol,
         "secid": series.instrument.secid,
@@ -176,7 +199,9 @@ def build_market_structure_facts(
         "t0": cutoff.isoformat(),
         "mode": mode,
         "data_sha256": hashlib.sha256(raw).hexdigest(),
-        "total_completed_bars": len(candles),
+        "total_input_bars": len(candles),
+        "total_completed_bars": sum(bar.completed for bar in candles),
+        "duration_flagged_bars": sum(not bar.completed for bar in candles),
         "facts": {
             "confirmed_price_structure": _swings(candles),
             "wilder_atr14": _wilder(candles),
@@ -191,4 +216,41 @@ def build_market_structure_facts(
         "independent_first_receipt_attested": False,
         "probability_calibrated": False,
         "forecast_or_trading_authorized": False,
+        "strict_pit_admitted": False,
     }
+    if duration_research:
+        result["archived_completed_flags_preserved"] = True
+        result["original_completion_unknown_for_duration_flags"] = True
+        result["use_of_duration_flagged_bars"] = "DESCRIPTIVE_RECONSTRUCTION_ONLY"
+        result["calendar_session_eligibility_attested"] = False
+    return result
+
+
+def build_market_structure_facts(
+    series: CandleSeries, *, t0: str,
+    mode: str = "RECONSTRUCTED_RESEARCH_ONLY",
+) -> dict:
+    """Strict completed-only input, including reconstructed research mode.
+
+    Both modes reject completed=False. T0 metadata gate checks source *claims*,
+    not independent receipt. No directional prediction or Forecast admission.
+    """
+    cutoff = _validate_series(
+        series, t0=t0, mode=mode, allow_archived_duration_flags=False
+    )
+    return _describe(series, cutoff=cutoff, mode=mode, duration_research=False)
+
+
+def build_archived_h1_descriptive_facts(series: CandleSeries, *, t0: str) -> dict:
+    """Explicit weak admission for the single duration-normalized G2 H1 archive.
+
+    A completed=False flag remains False and is still counted. This separate
+    research-only function does not and cannot turn it into a completed price
+    observation for strict Forecast or retrospective PIT validation. A caller
+    must check the frozen receipt and raw input SHA independently.
+    """
+    mode = "ARCHIVED_DURATION_FLAGS_RESEARCH_V2"
+    cutoff = _validate_series(
+        series, t0=t0, mode=mode, allow_archived_duration_flags=True
+    )
+    return _describe(series, cutoff=cutoff, mode=mode, duration_research=True)
