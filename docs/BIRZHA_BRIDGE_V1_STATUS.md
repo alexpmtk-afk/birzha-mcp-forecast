@@ -1,3 +1,8 @@
+> Revision 2026-10-14: historical Bridge v1 status below is not current activation approval.
+> Six canonical books are now ID-pinned; legacy whole-sheet replacement is blocked.
+> D1/H1/M15 append-only native transport is opt-in and requires separate runtime
+> migration/authorisation/acceptance. See CANONICAL_MARKET_MIRROR_20261014.md.
+
 # Birzha Google Drive / Sheets Bridge v1 status
 
 Release target: `protocol_version=1`, `bridge_release=1.0.0`.

@@ -52,6 +52,9 @@ class Settings:
     market_mirror_bridge_url: str | None = None
     market_mirror_bridge_secret: str | None = None
     market_mirror_root_folder_id: str | None = None
+    native_mirror_enabled: bool = False
+    native_mirror_credentials_path: str | None = None
+    native_mirror_sole_writer: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -97,6 +100,14 @@ class Settings:
                 "BIRZHA_MARKET_MIRROR_REQUIRED=true requires complete Bridge v1 configuration"
             )
 
+        native_enabled = _bool_env("BIRZHA_NATIVE_MIRROR_ENABLED", False)
+        native_credentials = (os.getenv("BIRZHA_NATIVE_MIRROR_CREDENTIALS_PATH") or "").strip() or None
+        native_owner = _bool_env("BIRZHA_NATIVE_MIRROR_SOLE_WRITER", False)
+        if native_enabled and (backend != "duckdb" or not native_credentials or not native_owner or not require_auth or not source_sha):
+            raise ValueError("native mirror requires DuckDB, explicit credentials path, sole writer, MCP authentication and source SHA")
+        if native_enabled and mirror_url:
+            raise ValueError("legacy bridge and native mirror cannot own the same workbook")
+
         return cls(
             host=os.getenv("HOST", "0.0.0.0"),
             port=int(os.getenv("PORT", "8080")),
@@ -113,4 +124,7 @@ class Settings:
             market_mirror_bridge_url=mirror_url,
             market_mirror_bridge_secret=mirror_secret,
             market_mirror_root_folder_id=mirror_root,
+            native_mirror_enabled=native_enabled,
+            native_mirror_credentials_path=native_credentials,
+            native_mirror_sole_writer=native_owner,
         )

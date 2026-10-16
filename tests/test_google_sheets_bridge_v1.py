@@ -62,39 +62,41 @@ def test_health_requires_stable_release_root_project_and_capabilities(monkeypatc
     assert exc.value.code == "BRIDGE_RELEASE_MISMATCH"
 
 
-def test_ensure_archive_uses_birzha_mapping_and_known_br_spreadsheet(monkeypatch):
+@pytest.mark.parametrize("symbol", ["Si", "BR", "GOLD", "IMOEX", "RTSI", "SBER"])
+def test_ensure_archive_uses_fixed_id_without_path_search(monkeypatch, symbol):
+    from birzha.storage.google_sheets_bridge import INSTRUMENT_TARGETS
     b = bridge()
-    seen: list[tuple[str, dict[str, Any], str | None]] = []
-
-    def fake_post(action: str, payload=None, *, idempotency_key=None):
-        payload = dict(payload or {})
-        seen.append((action, payload, idempotency_key))
-        if payload.get("spreadsheet_id"):
-            return {
-                "spreadsheet": {
-                    "id": payload["spreadsheet_id"],
-                    "name": "BIRZHA — BR — Market Data Mirror",
-                },
-                "created": False,
-            }
-        return {
-            "spreadsheet": {
-                "id": "si-sheet",
-                "name": "MOEX_HISTDATA_Si_MCP_CANONICAL",
-            },
-            "created": True,
-        }
-
+    target = INSTRUMENT_TARGETS[symbol.upper()]
+    def fake_post(action, payload, **kwargs):
+        assert action == "sheet_ensure"
+        assert payload == {"spreadsheet_id": target.spreadsheet_id}
+        return {"spreadsheet": {"id": target.spreadsheet_id, "name": target.spreadsheet_name}, "created": False}
     monkeypatch.setattr(b, "_post", fake_post)
-    si = b.ensure_archive(symbol="si")
-    br = b.ensure_archive(symbol="BR")
+    assert b.ensure_archive(symbol=symbol)["created"] is False
 
-    assert si["spreadsheet_id"] == "si-sheet"
-    assert seen[0][1]["path"] == "Si — Доллар-рубль"
-    assert seen[0][1]["filename"] == "MOEX_HISTDATA_Si_MCP_CANONICAL"
-    assert seen[0][2] and seen[0][2].startswith("birzha:v2:sheet_ensure:")
-    assert br["spreadsheet_id"] == "1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ"
-    assert seen[1][1] == {"spreadsheet_id": br["spreadsheet_id"]}
+
+@pytest.mark.parametrize("fault", ["created", "id", "name", "missing_created"])
+def test_ensure_archive_rejects_wrong_or_new_destination(monkeypatch, fault):
+    from birzha.storage.google_sheets_bridge import INSTRUMENT_TARGETS
+    b = bridge(); target = INSTRUMENT_TARGETS["SI"]
+    result = {"spreadsheet": {"id": target.spreadsheet_id, "name": target.spreadsheet_name}, "created": False}
+    if fault == "created": result["created"] = True
+    elif fault == "missing_created": del result["created"]
+    else: result["spreadsheet"][fault] = "wrong"
+    monkeypatch.setattr(b, "_post", lambda *a, **k: result)
+    with pytest.raises(GoogleSheetsBridgeError): b.ensure_archive(symbol="Si")
+
+
+def test_canonical_replacement_blocked_before_network(monkeypatch):
+    from birzha.storage.google_sheets_bridge import INSTRUMENT_TARGETS
+    b = bridge()
+    monkeypatch.setattr(b, "_post", lambda *a, **k: pytest.fail("no network"))
+    with pytest.raises(GoogleSheetsBridgeError, match="append-only"):
+        b.replace_snapshot(spreadsheet_id=INSTRUMENT_TARGETS["SI"].spreadsheet_id, sheets={"D1": [["key"], ["x"]]})
+
+
+def test_unregistered_instrument_has_no_creation_path():
+    with pytest.raises(ValueError): bridge().ensure_archive(symbol="TATN")
 
 
 def test_replace_snapshot_orders_stage_chunks_verify_commit_inspect(monkeypatch):
