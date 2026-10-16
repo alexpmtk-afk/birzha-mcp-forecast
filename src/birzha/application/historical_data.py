@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
+from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
 from birzha.domain.market import CandleSeries, Instrument
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCoverage
@@ -400,6 +401,52 @@ class HistoricalDataService:
                     f"contract warmup provider response incomplete for "
                     f"{instrument.secid} {timeframe}: {compact}"
                 )
+            # A legacy range marker is intentionally not enough to certify an
+            # exact calendar. Only newly fetched and checked D1 chunks receive
+            # an immutable session-level generation. Skipped legacy intervals
+            # remain marker-only and must not be relabelled as captured evidence.
+            evidence_dates: tuple[str, ...] = ()
+            if timeframe == "D1":
+                evidence_dates = tuple(day.isoformat() for day in expected_chunk)
+                relevant = tuple(
+                    candle for candle in series.candles
+                    if candle.begin[:10] in evidence_dates
+                )
+                if len(relevant) != len(evidence_dates) or any(
+                    not candle.completed
+                    or any(
+                        value is None
+                        for value in (candle.open, candle.high, candle.low, candle.close)
+                    )
+                    for candle in relevant
+                ):
+                    raise HistoricalDataIncompleteError(
+                        f"contract warmup D1 values incomplete for {instrument.secid} "
+                        f"{left.isoformat()}..{right.isoformat()}"
+                    )
+            if evidence_dates:
+                evidence_key = warmup_d1_evidence_key(
+                    instrument.secid, evidence_dates
+                )
+                self.store.record_sessions(
+                    evidence_key, instrument.secid, evidence_dates
+                )
+                stored_evidence = self.store.stored_session_contracts(
+                    evidence_key, left.isoformat(), right.isoformat()
+                )
+                if stored_evidence != tuple(
+                    (day, instrument.secid) for day in evidence_dates
+                ):
+                    raise HistoricalDataIncompleteError(
+                        f"contract warmup session evidence mismatch for "
+                        f"{instrument.secid}"
+                    )
+                # Verify the generation only after its exact dates are durable.
+                self.store.mark_session_range_verified(
+                    evidence_key, left.isoformat(), right.isoformat()
+                )
+            # Legacy price-range readiness comes last: a failed session
+            # evidence write must not suppress a safe retry on next sync.
             self.store.mark_verified(
                 verification_symbol,
                 timeframe,

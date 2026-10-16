@@ -191,3 +191,167 @@ def test_incomplete_preroll_response_blocks_root_readiness(monkeypatch) -> None:
         till_date="2025-01-11",
     ) is False
     store.close()
+
+
+def test_warmup_keys_are_immutable_versioned_and_origin_separated() -> None:
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    days = ("2025-01-08", "2025-01-09")
+    captured = warmup_d1_evidence_key("GDM5", days)
+    assert captured == warmup_d1_evidence_key("GDM5", tuple(reversed(days)))
+    assert captured != warmup_d1_evidence_key("GDM5", ("2025-01-08",))
+    assert captured != warmup_d1_evidence_key("GDH5", days)
+    assert captured != warmup_d1_evidence_key(
+        "GDM5", days, origin="RECONSTRUCTED_MOEX"
+    )
+    assert "#CAPTURED_AT_SYNC#" in captured
+    with pytest.raises(ValueError, match="duplicate"):
+        warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-08"))
+    with pytest.raises(ValueError, match="ISO"):
+        warmup_d1_evidence_key("GDM5", ("not-a-date",))
+
+
+def test_d1_warmup_records_exact_dates_in_isolated_verified_generation(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    service = _RollingHistory(market_data=_Market(), store=store)  # type: ignore[arg-type]
+    root_key = (
+        "GOLD#ROLLING_HISTORY_V2_PREWARM#D1_SESSION_V2_ACTIVITY"
+    )
+    store.record_sessions(root_key, GOLD_NEXT.secid, ("2025-01-10",))
+    before_root = store.stored_session_contracts(root_key, "2025-01-01", "2025-01-12")
+    service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    key = warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-09"))
+    assert store.stored_session_contracts(key, "2025-01-01", "2025-01-12") == (
+        ("2025-01-08", "GDM5"),
+        ("2025-01-09", "GDM5"),
+    )
+    assert store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+    assert store.stored_session_contracts(root_key, "2025-01-01", "2025-01-12") == before_root
+    assert store.stored_sessions("GOLD", "2025-01-01", "2025-01-12") == ()
+    assert store.stored_sessions("GDM5#CONTRACT_WARMUP_V2_ACTIVITY",
+                                 "2025-01-01", "2025-01-12") == ()
+    # Repeat does not create a different generation.
+    service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    assert store.stored_session_contracts(key, "2025-01-01", "2025-01-12") == (
+        ("2025-01-08", "GDM5"),
+        ("2025-01-09", "GDM5"),
+    )
+    store.close()
+
+
+def test_generation_keys_allow_different_calendars_to_coexist() -> None:
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    store = DuckDBHistoricalCandleStore()
+    first = ("2025-01-08", "2025-01-09")
+    second = ("2025-01-08",)
+    for dates in (first, second):
+        key = warmup_d1_evidence_key("GDM5", dates)
+        store.record_sessions(key, "GDM5", dates)
+        store.mark_session_range_verified(key, dates[0], dates[-1])
+    assert store.stored_sessions(warmup_d1_evidence_key("GDM5", first),
+                                 "2025-01-01", "2025-01-12") == first
+    assert store.stored_sessions(warmup_d1_evidence_key("GDM5", second),
+                                 "2025-01-01", "2025-01-12") == second
+    store.close()
+
+
+def test_marker_only_legacy_warmup_is_not_relabelled_as_captured(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    store.mark_verified(
+        "GDM5#CONTRACT_WARMUP_V2_ACTIVITY",
+        "D1", "2025-01-08", "2025-01-09"
+    )
+    service = _RollingHistory(market_data=_Market(), store=store)  # type: ignore[arg-type]
+    service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    key = warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-09"))
+    assert not store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+    assert store.stored_sessions(key, "2025-01-01", "2025-01-12") == ()
+    store.close()
+
+
+def test_incomplete_warmup_never_creates_verified_exact_dates(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    service = _RollingHistory(
+        market_data=_IncompleteWarmupMarket(), store=store  # type: ignore[arg-type]
+    )
+    with pytest.raises(HistoricalDataIncompleteError):
+        service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    key = warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-09"))
+    assert store.stored_sessions(key, "2025-01-01", "2025-01-12") == ()
+    assert not store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+    store.close()
+
+
+@pytest.mark.parametrize("issue", ["incomplete", "missing_ohlc"])
+def test_bad_warmup_candle_has_no_verified_session_evidence(monkeypatch, issue) -> None:
+    from dataclasses import replace
+    import birzha.application.historical_data as module
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    class _BadWarmupMarket(_Market):
+        def candles_for_instrument(self, instrument, *, timeframe, from_date,
+                                   till_date, completed_only=True):
+            series = super().candles_for_instrument(
+                instrument, timeframe=timeframe, from_date=from_date,
+                till_date=till_date, completed_only=completed_only
+            )
+            candles = tuple(
+                replace(candle, completed=False)
+                if issue == "incomplete" and candle.begin.startswith("2025-01-09")
+                else replace(candle, high=None)
+                if issue == "missing_ohlc" and candle.begin.startswith("2025-01-09")
+                else candle
+                for candle in series.candles
+            )
+            return CandleSeries(
+                instrument=instrument, timeframe=timeframe, candles=candles, source="TEST"
+            )
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    service = _RollingHistory(market_data=_BadWarmupMarket(), store=store)  # type: ignore[arg-type]
+    with pytest.raises(HistoricalDataIncompleteError, match="D1 values incomplete"):
+        service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    key = warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-09"))
+    assert not store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+    store.close()
+
+
+def test_failed_evidence_write_does_not_mark_legacy_or_prevent_retry(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+    from birzha.application.warmup_session_evidence import warmup_d1_evidence_key
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    service = _RollingHistory(market_data=_Market(), store=store)  # type: ignore[arg-type]
+    original_record = store.record_sessions
+
+    def reject_session_write(symbol, secid, trade_dates):
+        raise RuntimeError("simulated session persistence failure")
+
+    monkeypatch.setattr(store, "record_sessions", reject_session_write)
+    with pytest.raises(RuntimeError, match="session persistence failure"):
+        service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    legacy = "GDM5#CONTRACT_WARMUP_V2_ACTIVITY"
+    key = warmup_d1_evidence_key("GDM5", ("2025-01-08", "2025-01-09"))
+    assert not store.is_verified(legacy, "D1", "2025-01-08", "2025-01-09")
+    assert not store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+
+    monkeypatch.setattr(store, "record_sessions", original_record)
+    service._sync_contract_warmup(GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START)
+    assert store.is_verified(legacy, "D1", "2025-01-08", "2025-01-09")
+    assert store.is_session_range_verified(key, "2025-01-08", "2025-01-09")
+    store.close()
