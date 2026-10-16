@@ -50,6 +50,7 @@ async def check_mcp() -> None:
         tool_names = {tool.name for tool in tools.tools}
         required = {
             "system.version",
+            "market.state",
             "workflow.start_core_validation",
             "workflow.status",
             "workflow.list",
