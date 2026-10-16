@@ -9,7 +9,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from birzha.application.market_mirror import D1_COLUMNS
@@ -78,6 +78,31 @@ def index_rows(rows: list[list[object]]) -> dict[str, list[object]]:
     return found
 
 
+def sheet_timestamp(value: object) -> datetime:
+    """Interpret the native SERIAL_NUMBER read contract without changing cells.
+
+    Legacy numeric dates support whole seconds only; tolerate floating-point
+    representation error, never round a meaningful fractional second away.
+    This is a representation conversion, not historical availability evidence.
+    """
+    if isinstance(value, bool):
+        raise MirrorConflict("invalid timestamp boolean")
+    if isinstance(value, (int, float)):
+        if not math.isfinite(value) or not 0 <= value <= 100000:
+            raise MirrorConflict("unsupported Google serial date")
+        seconds = value * 86400
+        whole = round(seconds)
+        if abs(seconds - whole) > 0.00001:
+            raise MirrorConflict("subsecond Google serial date requires explicit migration")
+        return datetime(1899, 12, 30) + timedelta(seconds=whole)
+    if not isinstance(value, str):
+        raise MirrorConflict("invalid timestamp cell type")
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise MirrorConflict("invalid timestamp text") from None
+
+
 def validate_identity(rows: list[list[object]], symbol: str, timeframe: str, *, incoming: bool) -> None:
     import re
     header = rows[0]
@@ -88,8 +113,17 @@ def validate_identity(rows: list[list[object]], symbol: str, timeframe: str, *, 
         if not valid:
             raise MirrorConflict("wrong instrument / exact contract required")
         key = row[header.index("record_key")]
-        if len(key.split("|")) != 4 or key.split("|")[0].upper() != symbol or key.split("|")[1] != timeframe or key.split("|")[2] != code or key.split("|")[3] != row[header.index("bar_start_time")]:
+        parts = key.split("|")
+        start_cell = row[header.index("bar_start_time")]
+        if len(parts) != 4 or parts[0].upper() != symbol or parts[1] != timeframe or parts[2] != code:
             raise MirrorConflict("record_key does not match identity")
+        if parts[3] != start_cell:
+            # Only the observed legacy numeric representation may differ from
+            # the key. Text timestamps still require their exact key spelling.
+            if (isinstance(start_cell, bool) or not isinstance(start_cell, (int, float))
+                    or sheet_timestamp(parts[3]).tzinfo is not None
+                    or sheet_timestamp(parts[3]) != sheet_timestamp(start_cell)):
+                raise MirrorConflict("record_key does not match identity")
         if incoming and timeframe in {"H1", "M15"}:
             try:
                 start = datetime.fromisoformat(str(row[header.index("bar_start_time")]).replace("Z", "+00:00"))

@@ -9,7 +9,7 @@ from datetime import datetime
 import threading
 from zoneinfo import ZoneInfo
 
-from birzha.application.canonical_market_mirror import CanonicalMirrorPublisher, MirrorConflict, digest, rectangular, index_rows, plan_append
+from birzha.application.canonical_market_mirror import CanonicalMirrorPublisher, MirrorConflict, digest, rectangular, index_rows, plan_append, sheet_timestamp, validate_identity
 from birzha.application.market_mirror import D1_COLUMNS
 from birzha.storage.google_sheets_bridge import GoogleSheetsBridge
 
@@ -17,8 +17,8 @@ MOSCOW = ZoneInfo("Europe/Moscow")
 EXTRA_COLUMNS = ["research_status", "normalized_sha256", "source_archive_sha256", "capture_day_status", "source_kind", "caveat"]
 
 
-def _stamp(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _stamp(value: object) -> datetime:
+    parsed = sheet_timestamp(value)
     # Explicit provider clock interpretation only; not a first-availability proof.
     return parsed.replace(tzinfo=MOSCOW) if parsed.tzinfo is None else parsed.astimezone(MOSCOW)
 
@@ -26,35 +26,59 @@ def _stamp(value: str) -> datetime:
 def project_source(bundle: dict, timeframe: str, existing: list[list[object]]) -> tuple[list[list[object]], dict]:
     before = rectangular(existing) if existing else []
     header = before[0] if before else D1_COLUMNS + (EXTRA_COLUMNS if timeframe != "D1" else [])
+    if before:
+        validate_identity(before, bundle["symbol"], timeframe, incoming=False)
     original = index_rows(before) if before else {}
     by_identity = {}
     for row in original.values():
-        identity = (row[header.index("contract_code")], _stamp(str(row[header.index("bar_start_time")])) )
+        identity = (row[header.index("contract_code")], _stamp(row[header.index("bar_start_time")]) )
         if identity in by_identity:
             raise MirrorConflict("destination has duplicate semantic candle identities")
         by_identity[identity] = row
     output = [header[:]]
     matches = 0
     differing_metadata = 0
-    seen = set()
+    preserved_stricter_completion = 0
+    preserved_unknown_index_volume = 0
+    seen = {}
+    identical_time_aliases = 0
     for candle in bundle["candles"]:
         if candle["timeframe"] != timeframe:
             continue
         secid, start = candle["secid"], _stamp(candle["begin"])
         identity = (secid, start)
+        comparable = {**candle, "begin": start.isoformat(), "end_time": _stamp(candle["end_time"]).isoformat()}
         if identity in seen:
-            raise MirrorConflict("source has duplicate semantic candle identities")
-        seen.add(identity)
+            if seen[identity] != comparable:
+                raise MirrorConflict("source has conflicting semantic candle identities")
+            identical_time_aliases += 1
+            continue
+        seen[identity] = comparable
         old = by_identity.get(identity)
         if old is not None:
             # Preserve older provenances, key spellings and accepted prices.
             # Never reinterpret differing metadata as a source payload match.
             for column, key in (("open","open"),("high","high"),("low","low"),("close","close"),("volume","volume")):
                 value = candle[key]
-                if value is None or old[header.index(column)] != value:
+                prior = old[header.index(column)]
+                if (column == "volume" and bundle["symbol"] in {"IMOEX", "RTSI"}
+                        and prior == "" and value == 0 and not isinstance(value, bool)):
+                    # Preserve explicitly missing index volume; never call NULL
+                    # equal to zero or replace it with the provider placeholder.
+                    preserved_unknown_index_volume += 1
+                    continue
+                if value is None or prior != value:
                     raise MirrorConflict("stored source conflicts with existing candle values")
-            if _stamp(str(old[header.index("bar_end_time")])) != _stamp(candle["end_time"]) or old[header.index("is_complete")] is not candle["completed"]:
+            if _stamp(old[header.index("bar_end_time")]) != _stamp(candle["end_time"]):
                 raise MirrorConflict("stored source conflicts with existing interval or source completion")
+            prior_completion = old[header.index("is_complete")]
+            if prior_completion is not candle["completed"]:
+                if prior_completion is False and candle["completed"] is True:
+                    # Completed source interval does not attest minute coverage.
+                    # Keep the stricter archived false, report the difference.
+                    preserved_stricter_completion += 1
+                else:
+                    raise MirrorConflict("stored source conflicts with existing interval or source completion")
             if candle["value"] is not None and old[header.index("turnover")] != "" and old[header.index("turnover")] != candle["value"]:
                 raise MirrorConflict("stored source conflicts with existing turnover")
             matches += 1
@@ -84,7 +108,10 @@ def project_source(bundle: dict, timeframe: str, existing: list[list[object]]) -
         output.append([source[x] for x in header])
     # Strict validation and detection of old-key conflicts before any writes.
     plan_append(symbol=bundle["symbol"], timeframe=timeframe, existing=existing, incoming=output)
-    return output, {"matched_source_bars": matches, "preserved_different_provenance": differing_metadata,
+    return output, {"matched_source_bars": matches, "identical_source_time_aliases": identical_time_aliases, "preserved_different_provenance": differing_metadata,
+                    "preserved_stricter_completion": preserved_stricter_completion,
+                    "preserved_unknown_index_volume": preserved_unknown_index_volume,
+                    "full_source_payload_match_claimed": False,
                     "price_semantics": "NO_ADJUSTMENT", "timestamp_interpretation": "MOEX_PROVIDER_EUROPE_MOSCOW_NOT_PIT_PROOF"}
 
 

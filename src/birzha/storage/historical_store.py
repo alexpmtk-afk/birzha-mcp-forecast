@@ -395,20 +395,26 @@ class DuckDBHistoricalCandleStore:
         if finish < start or (finish - start).days > 366:
             raise ValueError("mirror export range must be within 367 civil dates")
         columns = ["secid", "timeframe", "begin", "end_time", "open", "high", "low", "close", "volume", "value", "completed", "source", "available_at", "available_at_confidence", "observed_at", "revision"]
+        # GOLD also names a stock-market security; it is not the GD futures root.
+        # A canonical futures book must never combine those identities.
+        future_pattern = {"SI": r"Si[A-Z]\d{1,2}", "BR": r"BR[A-Z]\d{1,2}", "GOLD": r"GD[A-Z]\d{1,2}"}.get(key)
+        candle_scope = " AND engine='futures' AND market='forts' AND regexp_full_match(secid,?) " if future_pattern else " "
+        session_scope = " AND regexp_full_match(secid,?) " if future_pattern else " "
+        scope_params = [future_pattern] if future_pattern else []
         with self._lock:
             self._connection.execute("BEGIN TRANSACTION")
             try:
                 rows = self._connection.execute(
                     "SELECT " + ",".join(columns) + " FROM historical_candles WHERE "
-                    "(upper(root_symbol)=? OR upper(symbol)=? OR upper(secid)=?) "
+                    "(upper(root_symbol)=? OR upper(symbol)=? OR upper(secid)=?) " + candle_scope +
                     "AND timeframe IN ('D1','H1','M15') AND substr(begin,1,10) BETWEEN ? AND ? "
                     "ORDER BY timeframe,begin,secid LIMIT 100001",
-                    [key, key, key, from_date, till_date],
+                    [key, key, key, *scope_params, from_date, till_date],
                 ).fetchall()
                 sessions = self._connection.execute(
                     "SELECT DISTINCT secid,trade_date FROM historical_sessions WHERE "
-                    "(upper(symbol)=? OR upper(symbol) LIKE ?) AND trade_date BETWEEN ? AND ? ORDER BY trade_date,secid",
-                    [key, key + "#%", from_date, till_date],
+                    "(upper(symbol)=? OR upper(symbol) LIKE ?) " + session_scope + "AND trade_date BETWEEN ? AND ? ORDER BY trade_date,secid",
+                    [key, key + "#%", *scope_params, from_date, till_date],
                 ).fetchall()
                 ranges = self._connection.execute(
                     "SELECT symbol,timeframe,from_date,till_date FROM historical_verified_ranges WHERE "

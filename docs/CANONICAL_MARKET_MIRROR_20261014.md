@@ -275,3 +275,45 @@ rules covering each exact contract/date must be independently checked before
 calendar attestation. Present-day collection cannot establish historical first_seen.
 No new source-history download, clock change or calendar admission is part of
 this compatibility correction. HOME activation remains a separate control step.
+
+
+### Actual Google access and representation defects — 2026-10-16
+
+The owner granted edit access to the six existing books and viewer access to
+their archive parent. Exact book identity/name/folder and D1 tab checks now pass
+through the actual service identity. No secret or Google row was published.
+
+The isolated, read-only backup-to-live-Sheets preflight exposed numeric date
+cells returned by FORMULA/SERIAL_NUMBER (e.g. 44200 = 2021-01-04).
+The projection previously parsed every start as ISO text and failed. It now
+decodes legacy whole-second serial timestamps only for comparison, validates
+the decoded start against the original text record key, and retains every raw
+cell value for hashes/readback. It does not rewrite dates/prices, round meaningful
+fractional seconds or convert an inferred date into availability proof.
+
+The source snapshot also contains SBER space/T timestamp aliases. Projection now
+collapses an alias only when all fields, including provenance/quality, agree
+after begin/end representation normalization; any substantive difference blocks.
+Source database records remain unchanged. Omitted aliases are counted explicitly.
+
+Isolated preflight is not installed acceptance. Existing price/interval/contract
+conflicts must be separately evidenced and resolved, never overwritten to obtain
+a successful status. No canonical write or installation was performed here.
+
+
+### Exact GOLD scope and conservative archive compatibility
+
+The verified snapshot contains both GD futures and an unrelated stock-market
+security whose exact SECID is GOLD. The old export OR clause mixed them. Futures
+exports now require futures/forts and the exact family SECID pattern; stored
+sessions use the same contract pattern. No source record is removed or rewritten.
+
+Read-only comparison found stricter false completion flags in archived IMOEX H1
+and missing RTSI index volumes where the source has zero. Compatibility is
+directional: existing false completion remains false when the source interval
+is completed; existing missing index volume remains missing when source volume
+is zero. Both differences have explicit result counters. NULL is never declared
+equal to zero, and no full source-payload match is claimed. The reverse completion
+disagreement, other volume disagreements, OHLC and interval conflicts still fail
+before writes. These rules preserve conservative archive quality, do not certify
+minute coverage, and do not admit any row to Forecast.

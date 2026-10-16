@@ -223,3 +223,99 @@ def test_existing_26_column_research_rows_and_install_receipt_survive_mirroring(
         assert dict(book.data["SYNC_STATUS"][1:])["br_home_install_20261016_receipt"] == "PRESERVE"
     finally:
         db.close()
+
+
+def test_legacy_google_serial_dates_match_without_rewriting_cells():
+    from datetime import datetime
+    db=store();bundle=db.export_mirror_bundle("SBER","2026-10-12","2026-10-12")
+    old,_=project_source(bundle,"D1",[])
+    start=(datetime(2026,10,12,10)-datetime(1899,12,30)).total_seconds()/86400
+    end=(datetime(2026,10,12,23,59,59)-datetime(1899,12,30)).total_seconds()/86400
+    old[1][4]=start;old[1][5]=end;old[1][6]=end
+    old[1][1]=old[1][2]=int(start)
+    expected=deepcopy(old)
+    try:
+        incoming,evidence=project_source(bundle,"D1",old)
+        assert incoming==expected and old==expected and evidence["matched_source_bars"]==1
+        assert isinstance(incoming[1][4],float)
+        old[1][4]+=1
+        with pytest.raises(MirrorConflict,match="record_key"):
+            project_source(bundle,"D1",old)
+    finally:db.close()
+
+
+@pytest.mark.parametrize("value",[True,float("inf"),-1,100001,44200.123456])
+def test_unsupported_numeric_timestamp_is_not_guessed(value):
+    from birzha.application.canonical_market_mirror import sheet_timestamp
+    with pytest.raises(MirrorConflict):sheet_timestamp(value)
+
+
+def test_identical_source_space_T_aliases_reconcile_without_database_changes():
+    db=store();bundle=db.export_mirror_bundle("SBER","2026-10-12","2026-10-12")
+    alias=deepcopy(next(c for c in bundle["candles"] if c["timeframe"]=="M15"))
+    alias["begin"]=alias["begin"].replace(" ","T")
+    alias["end_time"]=alias["end_time"].replace(" ","T")
+    bundle["candles"].append(alias)
+    before=deepcopy(bundle)
+    try:
+        rows,evidence=project_source(bundle,"M15",[])
+        assert len(rows)==2 and evidence["identical_source_time_aliases"]==1
+        assert bundle==before
+        alias["close"]+=0.1
+        with pytest.raises(MirrorConflict,match="conflicting semantic"):
+            project_source(bundle,"M15",[])
+        alias["close"]-=0.1;alias["source"]="OTHER_PROVENANCE"
+        with pytest.raises(MirrorConflict,match="conflicting semantic"):
+            project_source(bundle,"M15",[])
+    finally:db.close()
+
+
+def test_gold_future_export_excludes_unrelated_exact_stock_security_and_sessions():
+    db=DuckDBHistoricalCandleStore(":memory:")
+    future=Instrument(symbol="GOLD",secid="GDZ6",root_symbol="GOLD",board="RFUD",engine="futures",market="forts",asset_class="future")
+    stock=Instrument(symbol="GOLD",secid="GOLD",board="TQBR",engine="stock",market="shares",asset_class="equity")
+    candle=Candle(open=100,high=102,low=99,close=101,volume=10,value=1000,begin="2026-10-12 10:00:00",end="2026-10-12 10:59:59")
+    try:
+        for instrument in (future,stock):
+            db.upsert_series(CandleSeries(instrument,"H1",(candle,)))
+            db.record_sessions("GOLD",instrument.secid,("2026-10-12",))
+        before=db._connection.execute("SELECT * FROM historical_candles ORDER BY secid").fetchall()
+        bundle=db.export_mirror_bundle("GOLD","2026-10-12","2026-10-12")
+        assert [r["secid"] for r in bundle["candles"]]==["GDZ6"]
+        assert bundle["sessions"]==[["GOLD","GDZ6","2026-10-12"]]
+        assert db._connection.execute("SELECT * FROM historical_candles ORDER BY secid").fetchall()==before
+    finally:db.close()
+
+
+def test_stricter_archive_completion_is_retained_and_reported_not_promoted():
+    db=store();bundle=db.export_mirror_bundle("SBER","2026-10-12","2026-10-12")
+    old,_=project_source(bundle,"H1",[]);old[1][16]=False
+    try:
+        projected,evidence=project_source(bundle,"H1",old)
+        assert projected==old and projected[1][16] is False
+        assert evidence["preserved_stricter_completion"]==1
+        assert evidence["full_source_payload_match_claimed"] is False
+        old[1][16]=True
+        next(c for c in bundle["candles"] if c["timeframe"]=="H1")["completed"]=False
+        with pytest.raises(MirrorConflict,match="source completion"):
+            project_source(bundle,"H1",old)
+    finally:db.close()
+
+
+@pytest.mark.parametrize("symbol,allowed",[("RTSI",True),("IMOEX",True),("SBER",False)])
+def test_missing_index_volume_is_preserved_never_equated_to_zero(symbol,allowed):
+    db=store(symbol);bundle=db.export_mirror_bundle(symbol,"2026-10-12","2026-10-12")
+    old,_=project_source(bundle,"D1",[]);old[1][13]=""
+    candle=next(c for c in bundle["candles"] if c["timeframe"]=="D1");candle["volume"]=0.
+    try:
+        if allowed:
+            projected,evidence=project_source(bundle,"D1",old)
+            assert projected==old and projected[1][13]==""
+            assert evidence["preserved_unknown_index_volume"]==1
+            candle["close"]+=0.1
+            with pytest.raises(MirrorConflict,match="candle values"):
+                project_source(bundle,"D1",old)
+        else:
+            with pytest.raises(MirrorConflict,match="candle values"):
+                project_source(bundle,"D1",old)
+    finally:db.close()
