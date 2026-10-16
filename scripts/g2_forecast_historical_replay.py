@@ -13,7 +13,15 @@ import math
 import re
 from zoneinfo import ZoneInfo
 
-from birzha.application.forecast import build_forecast_from_snapshot, ENGINE_VERSION
+from birzha.application import forecast as forecast_module
+from birzha.application.forecast import build_forecast_from_snapshot
+
+# Research artifacts are stamped with the *actual* active price engine.
+# Older branches have only V0.4; evidence-aware branches use V0.6.
+# Do not relabel previously frozen files: assessment pins their original version.
+ENGINE_VERSION = getattr(
+    forecast_module, "FULL_WINDOWS_ENGINE_VERSION", forecast_module.ENGINE_VERSION
+)
 from birzha.application.history_policy import require_historical_intraday_scope
 from birzha.application.snapshot import MarketSnapshotService
 from birzha.domain.market import CandleSeries, Instrument
@@ -152,6 +160,10 @@ def replay_existing_forecast(
     if _when(snapshot.as_of) > cutoff:
         raise ValueError("canonical snapshot is later than requested cutoff")
     forecast = build_forecast_from_snapshot(snapshot)
+    if forecast.engine_version != ENGINE_VERSION:
+        raise ValueError(
+            "research engine version differs from active engine; refusing mislabelled replay"
+        )
     # This nested research result is NOT issued or appended as a past Forecast Record.
     report["research_engine_result"] = {
         "engine_payload": forecast.to_dict(), "snapshot_id": forecast.snapshot_id,

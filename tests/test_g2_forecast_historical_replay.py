@@ -206,3 +206,26 @@ def test_replay_refuses_old_or_later_intraday_bars_before_engine(tf, bad_day, mo
         module.replay_existing_forecast(
             instrument, cutoff_at=CUTOFF, series=series, source_sha256=SHA
         )
+
+
+def test_research_report_version_matches_the_active_price_engine():
+    from birzha.application import forecast as live_forecast
+    expected = getattr(live_forecast, "FULL_WINDOWS_ENGINE_VERSION", live_forecast.ENGINE_VERSION)
+    assert module.ENGINE_VERSION == expected
+    instrument, series = fixture("SBER")
+    report = module.replay_existing_forecast(instrument, cutoff_at=CUTOFF, series=series, source_sha256=SHA)
+    assert report["engine_version"] == expected
+    assert report["research_engine_result"]["engine_payload"]["engine_version"] == expected
+
+
+def test_replay_rejects_mislabelled_engine_version(monkeypatch):
+    from dataclasses import replace
+    instrument, series = fixture("SBER")
+    build = module.build_forecast_from_snapshot
+
+    def mismatched(snapshot):
+        return replace(build(snapshot), engine_version="UNEXPECTED_ENGINE_V9")
+
+    monkeypatch.setattr(module, "build_forecast_from_snapshot", mismatched)
+    with pytest.raises(ValueError, match="version differs"):
+        module.replay_existing_forecast(instrument, cutoff_at=CUTOFF, series=series, source_sha256=SHA)
