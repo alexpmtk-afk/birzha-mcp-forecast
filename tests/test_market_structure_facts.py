@@ -6,7 +6,8 @@ import math
 import pytest
 
 from birzha.application.market_structure_facts import (
-    VERSION, build_market_structure_facts,
+    VERSION, ARCHIVED_SOURCE, build_market_structure_facts,
+    build_archived_h1_descriptive_facts,
 )
 from birzha.domain.market import Candle, CandleSeries, Instrument
 
@@ -58,7 +59,9 @@ def test_wilder_atr_true_range_and_prior_volume_median():
     got = build_market_structure_facts(series, t0=t0)["facts"]
     assert got["wilder_atr14"]["status"] == "AVAILABLE"
     assert got["wilder_atr14"]["value"]["atr_price"] == 4.0
-    assert got["wilder_atr14"]["value"]["atr_pct"] == 0.04
+    assert got["wilder_atr14"]["value"]["atr_pct"] == 4.0
+    assert got["wilder_atr14"]["value"]["atr_ratio"] == 0.04
+    assert got["wilder_atr14"]["value"]["atr_pct_unit"] == "PERCENT_100X_RATIO"
     assert got["relative_volume_prior20"]["value"]["ratio_to_prior_20_median"] == 3.0
     assert got["relative_volume_prior20"]["value"]["prior_20_median_volume"] == 10
 
@@ -161,3 +164,70 @@ def test_overlapping_or_reordered_bars_rejected():
     s=replace_bar(s,1,begin=s.candles[0].begin)
     with pytest.raises(ValueError,match="overlapping"):
         build_market_structure_facts(s,t0=t)
+
+
+
+def _archived_h1():
+    s,t = history()
+    from dataclasses import replace
+    from datetime import timedelta
+    bars = []
+    for idx,c in enumerate(s.candles):
+        start = datetime.fromisoformat(c.begin)
+        # An archived short interval is flagged False by an obsolete rule.
+        end = (start + timedelta(minutes=54)).isoformat() if idx == 30 else (start + timedelta(seconds=3599)).isoformat()
+        bars.append(replace(c, begin=c.begin, end=end,
+                            completed=False if idx == 30 else True,
+                            available_at=None, observed_at=None,
+                            available_at_confidence="UNKNOWN", source=ARCHIVED_SOURCE))
+    return replace(s, timeframe="H1", candles=tuple(bars), source=ARCHIVED_SOURCE), t
+
+
+def test_archived_h1_is_separate_and_does_not_promote_old_false_flags():
+    s,t = _archived_h1()
+    with pytest.raises(ValueError, match="forming candle"):
+        build_market_structure_facts(s, t0=t, mode="RECONSTRUCTED_RESEARCH_ONLY")
+    with pytest.raises(ValueError, match="T0 metadata unavailable|forming candle"):
+        build_market_structure_facts(s, t0=t, mode="T0_METADATA_GATED")
+    output=build_archived_h1_descriptive_facts(s, t0=t)
+    assert output["duration_flagged_bars"] == 1
+    assert output["total_completed_bars"] == len(s.candles)-1
+    assert output["total_input_bars"] == len(s.candles)
+    assert output["archived_completed_flags_preserved"] is True
+    assert output["original_completion_unknown_for_duration_flags"] is True
+    assert output["strict_pit_admitted"] is False
+    assert output["forecast_or_trading_authorized"] is False
+    assert output["facts"]["wilder_atr14"]["status"] == "AVAILABLE"
+    assert s.candles[30].completed is False
+
+
+def test_archive_still_refuses_future_bar_bad_provenance_and_availability():
+    s,t = _archived_h1()
+    s_bad=replace_bar(s,30,source="MISLABELED")
+    with pytest.raises(ValueError, match="provenance"):
+        build_archived_h1_descriptive_facts(s_bad,t0=t)
+    s_bad=replace_bar(s,30,completed=True)
+    with pytest.raises(ValueError,match="duration flag disagrees"):
+        build_archived_h1_descriptive_facts(s_bad,t0=t)
+    s_bad=replace_bar(s,30,observed_at=s.candles[30].end)
+    with pytest.raises(ValueError,match="no constructed availability"):
+        build_archived_h1_descriptive_facts(s_bad,t0=t)
+    with pytest.raises(ValueError,match="future candle"):
+        build_archived_h1_descriptive_facts(s,t0=s.candles[-2].end)
+
+
+def test_archived_research_uses_same_formulas_without_candle_drops():
+    s,t=_archived_h1()
+    from dataclasses import replace
+    with_flag=build_archived_h1_descriptive_facts(s,t0=t)
+    # Last 50 are all unflagged in this fixture, so changing only the
+    # source of the marked earlier candle does not alter last50 formulas.
+    alternate=replace(s,candles=tuple(replace(c,source=ARCHIVED_SOURCE) for c in s.candles))
+    assert build_archived_h1_descriptive_facts(alternate,t0=t)["facts"]==with_flag["facts"]
+    noflags=replace(s,candles=tuple(replace(c, completed=True, source="MOEX_ISS")
+                    for c in s.candles),source="MOEX_ISS")
+    assert build_market_structure_facts(noflags,t0=t)["facts"]==with_flag["facts"]
+
+
+def test_arithmetic_module_version_changed_when_atr_pct_unit_changed():
+    assert VERSION == "MARKET_STRUCTURE_FACTS_V2_20261017"

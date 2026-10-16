@@ -1,0 +1,41 @@
+name: G2 Market Structure Actual Code Replay Research
+on:
+  push:
+    branches:
+      - chatgpt/g2-structure-real-replay-20261017
+  pull_request:
+    branches:
+      - chatgpt/g2-observable-market-structure-facts-20261016
+permissions:
+  contents: read
+jobs:
+  strictly-offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install isolated development environment
+        run: python -m pip install -e ".[dev]"
+      - name: Verify strict and reconstructed input independently
+        run: python -m pytest -q -p no:cacheprovider tests/test_market_structure_facts.py
+      - name: Complete regression
+        run: python -m pytest -q -p no:cacheprovider
+      - name: Repository preflight
+        run: python scripts/repository_preflight.py
+      - name: Package exact executable source only
+        run: |
+          mkdir -p g2-replay-source/src/birzha/domain g2-replay-source/src/birzha/application g2-replay-source/scripts
+          cp src/birzha/domain/market.py g2-replay-source/src/birzha/domain/
+          cp src/birzha/application/market_structure_facts.py g2-replay-source/src/birzha/application/
+          cp scripts/g2_market_structure_real_archive_runner.py g2-replay-source/scripts/
+          git rev-parse HEAD > g2-replay-source/EXACT_SOURCE_COMMIT.txt
+          (cd g2-replay-source && sha256sum src/birzha/domain/market.py src/birzha/application/market_structure_facts.py scripts/g2_market_structure_real_archive_runner.py > SOURCE_SHA256.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g2-exact-source-no-user-data
+          path: g2-replay-source/
+          if-no-files-found: error
+          retention-days: 7
