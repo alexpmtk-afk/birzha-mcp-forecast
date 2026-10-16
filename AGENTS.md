@@ -19,6 +19,10 @@ record the actual source SHA. The owner's current task and scope take precedence
 over generic historical notes. This route selection qualifies any older blanket
 instruction to call history.*; candle and authorisation rules remain mandatory.
 
+## G2 strict/reconstructed boundaries and preregistered pilot (coord-20261017-02)
+
+Before touching candidate methods, read [the actual 30-case report](docs/G2_MARKET_STRUCTURE_ACTUAL_30_CASES_20261017.md), [fixed input identity manifest](scripts/g2_frozen_input_identity_20261017.py), and [predeclared future pilot](docs/G2_FIRST_FORECAST_STRUCTURE_PILOT_PREREG_20261017.md). The frozen archive SHA and inputs SHA are independent of the receipt: verify both *before calculating*, then verify receipt separately. `build_reconstructed_market_structure_facts` does NOT admit historical incomplete flags to strict Forecast. `g2_structure_pilot_plan.py` only writes an exclusive **offline plan**, not source capture. No model weights fitting on already-known 30 cases, no merge/deploy, no first-seen claims. Future candidate rule is D1/H1 concordant HH_HL → UP, LH_LL → DOWN, otherwise ABSTAIN; fixed horizons 5/10/20, paired flat/momentum comparison and missing-data reasons. No release or accuracy claim.
+
 ## Execute ordinary work independently
 
 Within an authorised task, choose bounded batches, inspect existing coverage,
