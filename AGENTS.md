@@ -29,6 +29,12 @@ Do not delegate routine investigation back to the owner. After two or three
 failed attempts of the same approach, report the concrete blocker and exact
 manual action if one is needed; do not consume limits repeating the same attempt.
 
+## G2 research Market Structure: admissions and actual replay
+
+Before describing G2 structure, read [the reproducible 30-case research run](docs/G2_MARKET_STRUCTURE_REAL_EXECUTION_30_CASES_20261017.md) and, for negative evidence, [the H1 duration forensics](https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/257). PR #258 adds a strictly separate `build_archived_h1_descriptive_facts` input for the fixed duration-normalized archive ONLY; strict `build_market_structure_facts` continues rejecting all completed=False bars. Never change the archived false to true, invent `available_at/observed_at`, use reconstructed H1 as proven historic PIT, fill absent GOLD/BR H1, or re-fit v0.4/v0.6.
+
+V2 ATR uses `atr_pct=100*ATR/Close` (percent), and `atr_ratio=ATR/Close` (unitless). Results from 30 reconstructed cases describe historical facts, not independently validated direction. PR #254 Real MOEX Validation had a separate external HTTP 503 failure; no general claim that **all** workflows passed. No merge/deploy/install without separate owner authorisation.
+
 ## Canonical mechanics
 
 - One exact SECID and one timeframe per stored series. Futures roots require
