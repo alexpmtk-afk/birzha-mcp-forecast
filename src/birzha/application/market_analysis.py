@@ -9,6 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from birzha.application.forecast import ENGINE_VERSION
+from birzha.application.forecast_issuance_policy import (
+    UnapprovedForecastIssuanceError,
+    assert_forecast_issuance_allowed,
+    blocked_forecast_result,
+)
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.history_policy import D1_ARCHIVE_START, latest_safe_d1_calendar_date
 from birzha.application.journal import ForecastJournalService
@@ -29,6 +35,15 @@ class MarketAnalysisService:
     journal: ForecastJournalService
 
     def run(self, *, now: datetime | None = None) -> dict[str, object]:
+        # The combined command refreshes history before issuing forecasts. When
+        # no engine is approved, refuse *before* any history/provider operations.
+        try:
+            assert_forecast_issuance_allowed(
+                ENGINE_VERSION, policy=self.journal.issuance_policy
+            )
+        except UnapprovedForecastIssuanceError as exc:
+            return {**blocked_forecast_result(exc), "requested": len(CORE_SYMBOLS),
+                    "passed": 0, "failed": 0, "items": [], "history_synced": False}
         observed = now or datetime.now(UTC)
         safe_till = latest_safe_d1_calendar_date(observed)
         recent_from = max(
