@@ -14,7 +14,7 @@ from statistics import median
 
 from birzha.domain.market import Candle, CandleSeries
 
-VERSION = "MARKET_STRUCTURE_FACTS_V1_20261016"
+VERSION = "MARKET_STRUCTURE_FACTS_V2_20261017"
 MODES = {"RECONSTRUCTED_RESEARCH_ONLY", "T0_METADATA_GATED"}
 WINDOW = 50
 SWING_LEFT = SWING_RIGHT = 2
@@ -62,7 +62,8 @@ def _wilder(rows: tuple[Candle, ...]) -> dict:
     current, older = atrs[-1], atrs[-6]
     return _fact("AVAILABLE", {
         "atr_price": round(current, 8),
-        "atr_pct": round(current/recent[-1].close, 8),
+        "atr_pct": round(current/recent[-1].close*100.0, 6),
+        "atr_ratio": round(current/recent[-1].close, 8),
         "change_from_5_bars_ago_pct": round((current/older-1)*100, 6)
         if older > 0 else None,
         "formula": "WILDER_TR14_SEEDED_WITH_SMA14_FIXED_LAST_50",
@@ -188,6 +189,98 @@ def build_market_structure_facts(
         "market_state_regime": None,
         "control": "UNKNOWN",
         "route": "UNAVAILABLE",
+        "independent_first_receipt_attested": False,
+        "probability_calibrated": False,
+        "forecast_or_trading_authorized": False,
+    }
+
+
+RECONSTRUCTED_ENTRY_VERSION = "G2_MARKET_STRUCTURE_RECONSTRUCTED_INPUT_V1_20261017"
+
+
+def build_reconstructed_market_structure_facts(
+    series: CandleSeries, *, t0: str,
+    timezone_assumption: str,
+    original_input_sha256: str,
+) -> dict:
+    """Separate descriptive-only entry for an *unchanged* reconstructed bundle.
+
+    It deliberately accepts duration-flagged `completed=False` candles as
+    UNVERIFIED COMPLETION EVIDENCE, **not** as known completed market candles.
+    Shares the original _swings/_wilder/_relative_volume calculations with the
+    strict entrypoint; every candle, its original completion bit and null
+    availability metadata survive in the input's data_sha256. This function
+    cannot be used to issue Forecast or assert historical first receipt.
+    """
+    if not isinstance(series, CandleSeries) or series.timeframe not in {"D1", "H1"}:
+        raise ValueError("exact D1/H1 series required")
+    if not series.instrument.secid or not series.instrument.symbol:
+        raise ValueError("exact SECID required")
+    if series.source != "RECONSTRUCTED_RESEARCH_ONLY":
+        raise ValueError("source must explicitly be reconstructed research only")
+    if timezone_assumption != "Europe/Moscow UTC+03:00 2025-2026 (assumption, not source receipt)":
+        raise ValueError("explicit archive time-zone assumption required")
+    if (not isinstance(original_input_sha256, str) or len(original_input_sha256) != 64
+            or any(ch not in "0123456789abcdef" for ch in original_input_sha256)):
+        raise ValueError("original archived input SHA256 required")
+    cutoff = _dt(t0)
+    prev_end = None
+    complete_true = complete_false = 0
+    missing_t0_metadata = 0
+    for bar in series.candles:
+        start, end = _dt(bar.begin), _dt(bar.end)
+        if start >= end or end > cutoff:
+            raise ValueError("future/invalid bar interval relative to T0")
+        if prev_end is not None and start < prev_end:
+            raise ValueError("overlapping or unsorted series")
+        prev_end = end
+        if type(bar.completed) is not bool:
+            raise ValueError("non-boolean original completed flag")
+        complete_true += bool(bar.completed)
+        complete_false += not bar.completed
+        ohlc = (bar.open, bar.high, bar.low, bar.close)
+        if any(not _numeric(x) for x in ohlc):
+            raise ValueError("invalid or missing historical OHLC")
+        if not (bar.low <= min(bar.open, bar.close)
+                <= max(bar.open, bar.close) <= bar.high):
+            raise ValueError("inconsistent OHLC")
+        if bar.volume is not None and not _numeric(bar.volume, positive=False):
+            raise ValueError("invalid volume")
+        if bar.available_at is not None and _dt(bar.available_at) > cutoff:
+            raise ValueError("future available_at")
+        if bar.observed_at is not None and _dt(bar.observed_at) > cutoff:
+            raise ValueError("future observed_at")
+        if bar.available_at is None or bar.observed_at is None:
+            missing_t0_metadata += 1
+        if bar.available_at_confidence not in {"UNKNOWN", "INFERRED"}:
+            raise ValueError("reconstructed source cannot claim exact T0 availability")
+    raw = json.dumps(series.to_dict(), sort_keys=True, separators=(",", ":"),
+                     ensure_ascii=False, allow_nan=False).encode("utf-8")
+    bars = series.candles
+    facts = {
+        "confirmed_price_structure": _swings(bars),
+        "wilder_atr14": _wilder(bars),
+        "relative_volume_prior20": _relative_volume(
+            bars, "VOLUME" in series.instrument.data_capabilities),
+    }
+    return {
+        "schema": VERSION,
+        "research_entry_schema": RECONSTRUCTED_ENTRY_VERSION,
+        "symbol": series.instrument.symbol, "secid": series.instrument.secid,
+        "timeframe": series.timeframe, "t0": cutoff.isoformat(),
+        "mode": "RECONSTRUCTED_RESEARCH_ONLY_DURATION_FLAG_UNKNOWN",
+        "timezone_assumption": timezone_assumption,
+        "original_input_sha256": original_input_sha256,
+        "data_sha256": hashlib.sha256(raw).hexdigest(),
+        "total_input_bars": len(bars),
+        "original_completed_true": complete_true,
+        "original_completed_false": complete_false,
+        "original_completion_false_semantics": "UNKNOWN_AFTER_DURATION_NORMALIZATION",
+        "missing_first_receipt_metadata_bars": missing_t0_metadata,
+        "facts": facts,
+        "directional_prediction": None, "market_state_regime": None,
+        "control": "UNKNOWN", "route": "UNAVAILABLE",
+        "source_session_eligibility_attested": False,
         "independent_first_receipt_attested": False,
         "probability_calibrated": False,
         "forecast_or_trading_authorized": False,
