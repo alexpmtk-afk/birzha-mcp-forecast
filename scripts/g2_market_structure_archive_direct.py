@@ -18,6 +18,10 @@ from birzha.application.market_structure_facts import (
     VERSION, build_market_structure_facts, build_reconstructed_market_structure_facts,
 )
 from birzha.domain.market import Instrument, Candle, CandleSeries
+from scripts.g2_frozen_input_identity_20261017 import (
+    IDENTITY_VERSION, EXPECTED_CASE_COUNT, EXPECTED_DURATION_FALSE,
+    verify_fixed_research_identity,
+)
 
 ENTRY = "allowed-real-run-v2/inputs.json"
 RECEIPT = "allowed-real-run-v2/execution-receipt.json"
@@ -76,18 +80,20 @@ def _brief(facts: dict) -> tuple[str, str | None, float | None, float | None, st
 
 def run(archive: Path) -> dict:
     from scripts.g2_h1_duration_forensics import audit_bundle
+    # Establish byte-for-byte identity against constants stored OUTSIDE the
+    # user archive. This MUST happen before parsing research cases or features.
+    archive_bytes = archive.read_bytes()
     with zipfile.ZipFile(archive) as z:
         input_bytes = z.read(ENTRY)
         receipt = json.loads(z.read(RECEIPT))
-    input_sha = hashlib.sha256(input_bytes).hexdigest()
-    if receipt["input_sha256"] != input_sha:
-        raise ValueError("source input and original receipt SHA mismatch")
+    identity = verify_fixed_research_identity(archive_bytes, input_bytes, receipt)
+    input_sha = identity["inputs_sha256"]
     bundle = json.loads(input_bytes)
     audit = audit_bundle(bundle, receipt)
-    if audit["total_counts"].get("false_from_duration_rule") != 933:
+    if audit["total_counts"].get("false_from_duration_rule") != EXPECTED_DURATION_FALSE:
         raise ValueError("frozen archive no longer matches accepted 933 duration marks")
     cases = bundle["cases"]
-    if len(cases) != 30 or len({c["case_id"] for c in cases}) != 30:
+    if len(cases) != EXPECTED_CASE_COUNT or len({c["case_id"] for c in cases}) != EXPECTED_CASE_COUNT:
         raise ValueError("must be exactly original 30 distinct cases")
     results = []
     for case in cases:
@@ -129,7 +135,10 @@ def run(archive: Path) -> dict:
         "schema":"G2_DIRECT_MODULE_RUN_V1_20261017",
         "module_version":VERSION,"source_file":"src/birzha/application/market_structure_facts.py",
         "cutoff_timezone_assumption":ASSUMPTION,
-        "archive_sha256":hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "archive_sha256":identity["archive_sha256"],
+        "frozen_identity_version": IDENTITY_VERSION,
+        "frozen_identity_pass": identity["frozen_identity_pass"],
+        "receipt_integrity_pass": identity["receipt_integrity_pass"],
         "input_sha256":input_sha,
         "source_completion_bit_recovered":False,
         "relabels_original_completed":False,
