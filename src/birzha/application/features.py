@@ -14,8 +14,8 @@ class TimeframeFeatureEngine:
 
     def build(self, series: CandleSeries) -> TimeframeState:
         candles = list(series.candles)
-        closes = [c.close for c in candles if c.close is not None]
-        volumes = [c.volume for c in candles if c.volume is not None]
+        closes = [c.close for c in candles]
+        volumes = [c.volume for c in candles]
         return TimeframeState(
             timeframe=series.timeframe,
             candles=len(candles),
@@ -36,44 +36,58 @@ class TimeframeFeatureEngine:
         )
 
 
-def _return_n(values: list[float], n: int) -> float | None:
-    if len(values) <= n or values[-n - 1] == 0:
+def _complete_trailing(values: list[float | None], count: int) -> list[float] | None:
+    if len(values) < count:
         return None
-    return values[-1] / values[-n - 1] - 1.0
-
-
-def _sma(values: list[float], n: int) -> float | None:
-    if len(values) < n:
+    window = values[-count:]
+    if any(value is None for value in window):
         return None
-    return sum(values[-n:]) / n
+    return [value for value in window if value is not None]
 
 
-def _efficiency_ratio(values: list[float], n: int) -> float | None:
-    if len(values) <= n:
+def _return_n(values: list[float | None], n: int) -> float | None:
+    window = _complete_trailing(values, n + 1)
+    if window is None or window[0] == 0:
         return None
-    window = values[-(n + 1):]
+    return window[-1] / window[0] - 1.0
+
+
+def _sma(values: list[float | None], n: int) -> float | None:
+    window = _complete_trailing(values, n)
+    if window is None:
+        return None
+    return sum(window) / n
+
+
+def _efficiency_ratio(values: list[float | None], n: int) -> float | None:
+    window = _complete_trailing(values, n + 1)
+    if window is None:
+        return None
     direction = abs(window[-1] - window[0])
     noise = sum(abs(b - a) for a, b in zip(window, window[1:]))
     return direction / noise if noise else 0.0
 
 
 def _atr_pct(candles: list[Candle], n: int) -> float | None:
-    usable = [c for c in candles if c.high is not None and c.low is not None and c.close is not None]
-    if len(usable) < n + 1:
+    window = candles[-(n + 1):]
+    if len(window) < n + 1 or any(
+        c.high is None or c.low is None or c.close is None for c in window
+    ):
         return None
     trs: list[float] = []
-    for prev, cur in zip(usable[-(n + 1):-1], usable[-n:]):
+    for prev, cur in zip(window[:-1], window[1:]):
         assert cur.high is not None and cur.low is not None and prev.close is not None
         trs.append(max(cur.high-cur.low, abs(cur.high-prev.close), abs(cur.low-prev.close)))
-    last_close = usable[-1].close
+    last_close = window[-1].close
     return (sum(trs) / len(trs)) / last_close if last_close else None
 
 
-def _volume_ratio(values: list[float], n: int) -> float | None:
-    if len(values) < n + 1:
+def _volume_ratio(values: list[float | None], n: int) -> float | None:
+    window = _complete_trailing(values, n + 1)
+    if window is None:
         return None
-    baseline = sum(values[-(n + 1):-1]) / n
-    return values[-1] / baseline if baseline else None
+    baseline = sum(window[:-1]) / n
+    return window[-1] / baseline if baseline else None
 
 
 def _typical_price(candle: Candle) -> float | None:
@@ -83,7 +97,10 @@ def _typical_price(candle: Candle) -> float | None:
 def _vwap(candles: list[Candle], n: int) -> float | None:
     weighted = 0.0
     volume = 0.0
-    for candle in candles[-n:]:
+    window = candles[-n:]
+    if any(c.close is None or c.volume is None for c in window):
+        return None
+    for candle in window:
         price = _typical_price(candle)
         if price is None or candle.volume is None or candle.volume <= 0:
             continue
@@ -94,6 +111,10 @@ def _vwap(candles: list[Candle], n: int) -> float | None:
 
 def _price_location(candles: list[Candle], n: int) -> float | None:
     window = candles[-n:]
+    if any(
+        c.high is None or c.low is None or c.close is None for c in window
+    ):
+        return None
     highs = [c.high for c in window if c.high is not None]
     lows = [c.low for c in window if c.low is not None]
     closes = [c.close for c in window if c.close is not None]
@@ -106,19 +127,27 @@ def _price_location(candles: list[Candle], n: int) -> float | None:
 
 
 def _support(candles: list[Candle], n: int) -> float | None:
-    lows = [c.low for c in candles[-n:] if c.low is not None]
+    window = candles[-n:]
+    if any(c.low is None for c in window):
+        return None
+    lows = [c.low for c in window if c.low is not None]
     return min(lows) if lows else None
 
 
 def _resistance(candles: list[Candle], n: int) -> float | None:
-    highs = [c.high for c in candles[-n:] if c.high is not None]
+    window = candles[-n:]
+    if any(c.high is None for c in window):
+        return None
+    highs = [c.high for c in window if c.high is not None]
     return max(highs) if highs else None
 
 
-def _trend_score(closes: list[float]) -> float:
+def _trend_score(closes: list[float | None]) -> float:
     if not closes:
         return 0.0
     last = closes[-1]
+    if last is None:
+        return 0.0
     score = 0.0
     sma20, sma50 = _sma(closes, 20), _sma(closes, 50)
     r20, er = _return_n(closes, 20), _efficiency_ratio(closes, 20)

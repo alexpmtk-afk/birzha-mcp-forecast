@@ -20,7 +20,7 @@ from birzha.domain.forecast import (
     ForecastRecord,
     HorizonForecast,
 )
-from birzha.domain.snapshot import MarketSnapshot
+from birzha.domain.snapshot import MarketSnapshot, market_snapshot_id
 
 
 ENGINE_VERSION = "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS"
@@ -111,16 +111,7 @@ def build_forecast_from_snapshot(snapshot: MarketSnapshot, *, parameters: Foreca
     except ValueError:
         prediction = None
 
-    snapshot_payload = json.dumps(
-        snapshot.to_dict(),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        allow_nan=False,
-    )
-    snapshot_id = "snap_" + hashlib.sha256(
-        snapshot_payload.encode("utf-8")
-    ).hexdigest()[:24]
+    snapshot_id = market_snapshot_id(snapshot)
 
     identity_payload = {
         "record_version": FORECAST_RECORD_CONTRACT_VERSION,
