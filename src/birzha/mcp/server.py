@@ -201,6 +201,27 @@ def history_stored_series(secid: str, timeframe: str, from_date: str, till_date:
         return {"status": "ERROR", "reason": "STORED_SERIES_READ_FAILED"}
 
 
+@mcp.tool(name="history.br_research_reconcile", description="Bounded administrator repair for BR only. SHA-pinned Google research proposal, dry-run by default. Apply creates a same-database research quarantine with backup; never changes accepted candles, verified ranges or Forecast inputs. Requires owner-authorised write scope.", annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
+def history_br_research_reconcile(payload: dict, expected_sha256: str, apply: bool = False) -> dict:
+    from birzha.application.br_research_repair import reconcile, RepairError
+    try:
+        return reconcile(_historical_store, payload, expected_sha256, apply=apply)
+    except RepairError as exc:
+        return {"status": "ERROR", "reason": str(exc)}
+    except Exception:
+        return {"status": "ERROR", "reason": "BR_RESEARCH_REPAIR_FAILED"}
+
+
+@mcp.tool(name="history.br_research_series", description="Read BR research quarantine by exact contract and bounded dates. Original source fields preserved; never a verified calendar, historical first-seen or Forecast admission. Separate from the accepted historical reader.", annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
+def history_br_research_series(secid: str, timeframe: str, from_date: str, till_date: str) -> dict:
+    from birzha.application.br_research_repair import research_series, RepairError
+    try:
+        return research_series(_historical_store, secid, timeframe, from_date, till_date)
+    except (RepairError, ValueError) as exc:
+        return {"status": "ERROR", "reason": str(exc) if isinstance(exc, RepairError) else "INVALID_DATE_RANGE"}
+    except Exception:
+        return {"status": "ERROR", "reason": "BR_RESEARCH_READ_FAILED"}
+
 @mcp.tool(name="history.coverage", description="Return durable stored coverage for one exact MOEX SECID and timeframe.")
 def history_coverage(secid: str, timeframe: str) -> dict[str, object]:
     try:

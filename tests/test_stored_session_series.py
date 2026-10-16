@@ -148,6 +148,30 @@ server.mcp.run(transport='stdio')
             async with ClientSession(read,write) as client:
                 await client.initialize()
                 tools=await client.list_tools()
+                repair_tool=next(t for t in tools.tools if t.name=='history.br_research_reconcile')
+                assert repair_tool.annotations.read_only_hint is False
+                research_tool=next(t for t in tools.tools if t.name=='history.br_research_series')
+                assert research_tool.annotations.read_only_hint is True
+                from birzha.application.br_research_repair import digest
+                proposal={'status':'PROPOSAL_ONLY_NOT_APPROVED_FOR_IMPORT',
+                    'source_book':'1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ','count':1,
+                    'records':[{'timeframe':'M15','record_quality':'RESEARCH_NOT_ADMITTED',
+                    'forecast_admission':'NOT_GRANTED','sheet_row':{'contract_code':'BRZ5',
+                    'bar_start_time':'2025-11-01T08:00:00+03:00','bar_end_time':'2025-11-01T08:14:59+03:00',
+                    'open':10.,'high':12.,'low':9.,'close':11.,'volume':20.}}]}
+                for apply,expected in [(False,'DRY_RUN'),(True,'RESEARCH_APPLIED'),(True,'RESEARCH_APPLIED')]:
+                    reply=await client.call_tool('history.br_research_reconcile',arguments={
+                        'payload':proposal,'expected_sha256':digest(proposal),'apply':apply})
+                    result=reply.structured_content or json.loads(reply.content[0].text)
+                    assert not reply.is_error and result['status']==expected
+                    assert result['accepted_history_unchanged'] is True
+                reply=await client.call_tool('history.br_research_series',arguments={
+                    'secid':'BRZ5','timeframe':'M15','from_date':'2025-11-01','till_date':'2025-11-01'})
+                result=reply.structured_content or json.loads(reply.content[0].text)
+                assert result['count']==1 and result['forecast_admission']=='NOT_GRANTED'
+                reply=await client.call_tool('history.coverage',arguments={'secid':'BRZ5','timeframe':'M15'})
+                result=reply.structured_content or json.loads(reply.content[0].text)
+                assert result['count']==0
                 rules_reply=await client.call_tool("history.session_rules",arguments={})
                 rules=rules_reply.structured_content
                 if rules is None:rules=json.loads(rules_reply.content[0].text)
