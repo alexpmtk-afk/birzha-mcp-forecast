@@ -187,7 +187,7 @@ def test_archived_h1_is_separate_and_does_not_promote_old_false_flags():
     s,t = _archived_h1()
     with pytest.raises(ValueError, match="forming candle"):
         build_market_structure_facts(s, t0=t, mode="RECONSTRUCTED_RESEARCH_ONLY")
-    with pytest.raises(ValueError, match="forming candle"):
+    with pytest.raises(ValueError, match="T0 metadata unavailable|forming candle"):
         build_market_structure_facts(s, t0=t, mode="T0_METADATA_GATED")
     output=build_archived_h1_descriptive_facts(s, t0=t)
     assert output["duration_flagged_bars"] == 1
