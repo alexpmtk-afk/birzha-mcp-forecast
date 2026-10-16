@@ -191,10 +191,20 @@ def validate_baseline_evidence_payload(data: dict[str, object]) -> None:
     if type(strength) not in (int, float) or not 0 <= strength <= 1 or not math.isfinite(strength):
         raise ValueError('invalid baseline signal strength')
     horizons = data.get('horizons')
-    if not isinstance(horizons, list) or [h.get('sessions') for h in horizons if isinstance(h, dict)] != [5, 10, 20]:
-        raise ValueError('baseline evidence requires ordered 5/10/20 horizons')
+    if (
+        not isinstance(horizons, list)
+        or len(horizons) != 3
+        or not all(isinstance(h, dict) for h in horizons)
+        or [h.get('sessions') for h in horizons] != [5, 10, 20]
+    ):
+        raise ValueError('baseline evidence requires exactly three ordered 5/10/20 horizons')
     if any(h.get('direction') != direction or h.get('signal_strength') != strength for h in horizons):
         raise ValueError('horizon estimates contradict the baseline decision')
+    for horizon in horizons:
+        for field in ('expected_move_pct', 'adverse_move_pct'):
+            value = horizon.get(field)
+            if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+                raise ValueError(f'invalid baseline horizon {field}')
     if decision == 'ABSTAIN':
         if strength != 0 or any(h.get('direction') != 'NEUTRAL' or h.get('signal_strength') != 0 or h.get('expected_move_pct') is not None or h.get('adverse_move_pct') is not None for h in horizons):
             raise ValueError('abstention cannot contain a directional estimate')
