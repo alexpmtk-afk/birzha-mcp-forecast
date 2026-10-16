@@ -181,3 +181,45 @@ def test_stored_future_root_exact_contract_and_versioned_session_keys(root,secid
     rows,_=project_source(bundle,'H1',[])
     assert rows[1][8]==secid and rows[1][0].startswith(root.upper()+'|H1|'+secid+'|')
     db.close()
+
+def test_current_main_br_quarantine_is_not_exported_or_promoted():
+    from birzha.application.br_research_repair import reconcile, digest
+    db = DuckDBHistoricalCandleStore(":memory:")
+    proposal = {"status": "PROPOSAL_ONLY_NOT_APPROVED_FOR_IMPORT",
+        "source_book": "1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ", "count": 1,
+        "records": [{"timeframe": "H1", "record_quality": "RESEARCH_NOT_ADMITTED",
+            "forecast_admission": "NOT_GRANTED", "sheet_row": {
+                "contract_code": "BRZ5", "bar_start_time": "2025-11-01T08:00:00+03:00",
+                "bar_end_time": "2025-11-01T08:59:59+03:00", "open": 10., "high": 12.,
+                "low": 9., "close": 11., "volume": 20., "is_complete": True}}]}
+    try:
+        reconcile(db, proposal, digest(proposal), apply=True)
+        before = db._connection.execute("SELECT * FROM br_research_quarantine").fetchall()
+        bundle = db.export_mirror_bundle("BR", "2025-11-01", "2025-11-01")
+        assert bundle["candles"] == []
+        assert bundle["calendar_attestation"] == "UNVERIFIED"
+        assert db._connection.execute("SELECT * FROM br_research_quarantine").fetchall() == before
+    finally:
+        db.close()
+
+
+def test_existing_26_column_research_rows_and_install_receipt_survive_mirroring():
+    db = store()
+    book = Book()
+    bundle = db.export_mirror_bundle("SBER", "2026-10-12", "2026-10-12")
+    try:
+        old, _ = project_source(bundle, "H1", [])
+        archive = deepcopy(old[1])
+        archive[0] = "SBER|H1|SBER|2026-10-11T10:00:00+03:00"
+        archive[1] = "2026-10-11"
+        archive[4:6] = ["2026-10-11T10:00:00+03:00", "2026-10-11T10:59:59+03:00"]
+        archive[20:] = ["RESEARCH_NOT_ADMITTED", "saved-hash", "archive-hash", "UNVERIFIED", "ARCHIVE", "PIT_NOT_ATTESTED"]
+        book.data["H1"] = [old[0], archive]
+        book.data["SYNC_STATUS"].append(["br_home_install_20261016_receipt", "PRESERVE"])
+        result = HomeCanonicalMirror(db, book, "a"*40).sync(symbol="SBER", from_date="2026-10-12", till_date="2026-10-12", dry_run=False, exclusive_workbook_owner=True)
+        assert result["status"] == "MIRROR_SYNC_PASS"
+        assert book.data["H1"][1] == archive
+        assert len(book.data["H1"][0]) == 26 and len(book.data["H1"]) == 3
+        assert dict(book.data["SYNC_STATUS"][1:])["br_home_install_20261016_receipt"] == "PRESERVE"
+    finally:
+        db.close()

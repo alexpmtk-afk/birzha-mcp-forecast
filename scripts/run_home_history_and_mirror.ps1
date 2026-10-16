@@ -30,6 +30,18 @@ function Write-RefreshLog {
     Add-Content -LiteralPath $LogPath -Value (('{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'),$Message)) -Encoding UTF8
 }
 
+function Enter-RefreshLease {
+    param([string]$Name = 'Local\BirzhaHistoryAndMirrorRefresh')
+    $lease = [Threading.Mutex]::new($false, $Name)
+    try {
+        try { $acquired = $lease.WaitOne(0) }
+        catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if(-not $acquired){ $lease.Dispose(); return $null }
+        return ,$lease
+    }
+    catch { $lease.Dispose(); throw }
+}
+
 function Get-SafeTill {
     $tz=[TimeZoneInfo]::FindSystemTimeZoneById('Russian Standard Time')
     $moscow=[TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow,$tz)
@@ -125,19 +137,16 @@ foreach($path in @($QueueRoot,$TempRoot,$LogRoot)){New-Item -ItemType Directory 
 if(-not(Test-Path -LiteralPath $VenvPython -PathType Leaf)){throw "Birzha Python missing: $VenvPython"}
 if(-not(Test-Path -LiteralPath $McpHelper -PathType Leaf)){throw "MCP helper missing: $McpHelper"}
 
-if(Test-Path -LiteralPath $PidPath -PathType Leaf){
-    try {
-        $existingPid=[int](Get-Content -LiteralPath $PidPath -Raw).Trim()
-        if($existingPid -gt 0 -and $existingPid -ne $PID -and (Get-Process -Id $existingPid -ErrorAction SilentlyContinue)){
-            Write-RefreshLog ("ALREADY_RUNNING pid=$existingPid")
-            exit 0
-        }
-    } catch {}
+# A PID file is diagnostic only: Windows can reuse a dead process ID.
+$refreshLease = Enter-RefreshLease
+if($null -eq $refreshLease){
+    Write-RefreshLog 'ALREADY_RUNNING lease_owned=true'
+    exit 0
 }
 
-$PID | Set-Content -LiteralPath $PidPath -Encoding ASCII
-Write-RefreshLog ("START pid=$PID user=$currentUser interval_seconds=$IntervalSeconds")
 try {
+    $PID | Set-Content -LiteralPath $PidPath -Encoding ASCII
+    Write-RefreshLog ("START pid=$PID user=$currentUser interval_seconds=$IntervalSeconds")
     if($InitialDelaySeconds -gt 0){Start-Sleep -Seconds $InitialDelaySeconds}
     while($true){
         try {
@@ -156,4 +165,6 @@ finally {
             if($current -eq $PID){Remove-Item -LiteralPath $PidPath -Force -ErrorAction SilentlyContinue}
         }
     } catch {}
+    $refreshLease.ReleaseMutex()
+    $refreshLease.Dispose()
 }

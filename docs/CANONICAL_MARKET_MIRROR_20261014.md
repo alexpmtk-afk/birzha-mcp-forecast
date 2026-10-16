@@ -241,3 +241,37 @@ parents and tab schemas through the actual service account; grant folder viewer
 access only if required to expose parent metadata. Then run the existing dry-run
 and separately controlled HOME installation/activation procedure. No production
 readiness or forecast quality claim follows from token exchange.
+
+
+## Current-main compatibility and collector restart — 2026-10-16
+
+The existing PR branch now incorporates main fcb8ece387085b619d09b043bb1d6a4bc7068662,
+including session reading/rules and separate BR research quarantine. Earlier
+"not yet created" Cloud setup notes are historical: the explicit service-account
+provider exists, but read-only checks of all six pinned files still return 404.
+This indicates unavailable access for that identity, not deletion of the books.
+The owner must share the existing books with the service identity; never create
+replacement books or publish credentials to resolve this refusal.
+
+One confirmed collector defect was found: PID-only startup exclusion accepts any
+process with the old PID. Windows can reuse that PID for an unrelated process,
+causing a false ALREADY_RUNNING and no refresh. The candidate refresh script now
+holds an OS named mutex for the whole loop; the PID file is diagnostic only.
+Concurrent launch refuses, normal exit releases, and crashed-owner abandonment
+permits restart. Tests execute only the extracted lease function in disposable
+PowerShell processes; they never execute the collector or contact MOEX/HOME.
+No unrelated process needs to be stopped or modified.
+
+Regression checks explicitly exclude BR quarantine from the operational export,
+preserve pre-existing 26-column research rows and retain installation receipts
+in SYNC_STATUS. Preserving archive rows does not independently certify them.
+
+Calendar evidence remains separate: the current calendar provider reads trading
+activity dates for an exact security, while stored session/range markers alone
+do not prove intraday boundaries, completeness or first historical availability.
+The mirror retains UNVERIFIED and does not infer missing bars, join incomplete
+groups across sessions, or adjust prices. Source responses and official session
+rules covering each exact contract/date must be independently checked before
+calendar attestation. Present-day collection cannot establish historical first_seen.
+No new source-history download, clock change or calendar admission is part of
+this compatibility correction. HOME activation remains a separate control step.
