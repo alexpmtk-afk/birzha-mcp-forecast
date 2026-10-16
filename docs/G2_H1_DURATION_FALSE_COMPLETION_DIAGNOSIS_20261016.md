@@ -70,3 +70,14 @@ python -m scripts.g2_h1_duration_forensics --archive "Прогнозный дв�
 ```
 
 Контроль SHA input: `dabb1eca56ae69267829b81f9b13318cfb6c142806c3b2229eafd24d684b0c03`. Следующий этап — read-only сверка первичных H1/сессий в доступном разрешённом архиве, не автоматическое повышение меток.
+
+
+## Follow-up 16.10.2026: repaired research *interpretation*, not original flags
+
+An independent offline, read-only check of the **same frozen** `inputs.json` used the original 50 H1 rows including 933 duration-flagged records, without relabelling their `completed` fields. It checked each original end <= fixed historical case cutoff (assumed Europe/Moscow UTC+03:00 for 2025–26), chronological unique starts, no overlaps, positive and internally consistent OHLC, nonnegative volume, and exact receipt counts. Summary: **23/30 cases have >=50 structurally valid H1 for reconstructed descriptive analysis**, 7/30 truly lack rows (GOLD five cases have 0; BR two cases have 16). In these 23 cases **zero** temporal/OHLC failures were detected. Breakdown: SBER 5, Si 5, BR 3, IMOEX 5, RTSI 5.
+
+This is a *relaxation only of the false assumption that every H1 must last exactly one full hour*. The historical provenance is still unverified. The 933 flags stay untouched in original JSON. A researcher may calculate **unverified descriptive historical features** using those original OHLC observations; a predictive engine must not treat this as proven first-seen T0 data. The test did not check independent session eligibility, original `completed` from the database, detailed instrument/board/date timetable, or source receipt.
+
+A separate reference example is in the existing Si canonical Google workbook `H1` row 962: `SiM5 2025-03-31T23:00:00+03:00`, end 23:59:41, `is_complete=TRUE` in a **RECONSTRUCTED_RESEARCH** row; the frozen bundle calls the *same shortened time* `completed=false`. This proves **conflicting derived completion labels** across project archives, but the Google row is expressly `SESSION_UNVERIFIED` and its original `source_file_id` was inaccessible during inspection. Neither label establishes primary completeness.
+
+**Methodology question for independent consultant:** Is it acceptable to retain short H1 from the historical MOEX ISS response in a separate RECONSTRUCTED_RESEARCH_ONLY descriptive dataset when chronology, OHLC and interval end <= T0 are satisfied, provided every short interval carries ORIGINAL_COMPLETION_UNKNOWN and never receives PIT/Forecast admission? This is explicitly distinct from authenticating the original source's completion bit and first receipt, which still needs original storage/independent witness. Until affirmative explicit reviewed methodology and original source checks: no strict Forecast admission.
