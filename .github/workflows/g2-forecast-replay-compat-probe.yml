@@ -43,6 +43,19 @@ jobs:
           echo "FORECAST_AND_REPLAY_EPHEMERAL_MERGE=PASS"
           test -e scripts/g2_historical_engine_batch.py
           test -e tests/test_g2_historical_engine_batch.py
+      - name: Package combined public source for local offline historical comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          printf "MAIN=fcb8ece387085b619d09b043bb1d6a4bc7068662\\nFORECAST=2ca728915539c8c939f78376baf36808453e5526\\nREPLAY=4b261ec420ad0f23b5fd4c367b571ce1d505af7f\\nSOURCE_ONLY=TRUE\\n" > package/SOURCE_REFS.txt
+          tar -czf package/birzha-g2-source.tar.gz src scripts tests pyproject.toml README.md
+          sha256sum package/birzha-g2-source.tar.gz > package/SOURCE_SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g2-pinned-source-no-data
+          path: package/
+          retention-days: 7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
