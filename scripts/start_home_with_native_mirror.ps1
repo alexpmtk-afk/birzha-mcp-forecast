@@ -7,8 +7,11 @@ $env:BIRZHA_STATE_BACKEND = 'duckdb'
 $env:BIRZHA_FORECAST_JOURNAL_PATH = 'C:\MCP-HOME\data\birzha\birzha_state.duckdb'
 $env:BIRZHA_HISTORICAL_STORE_PATH = 'C:\MCP-HOME\data\birzha\birzha_history.duckdb'
 $env:BIRZHA_DURABLE_LOCAL_ORCHESTRATION = 'true'
-$env:BIRZHA_SOURCE_SHA = [string](& git -C $repo rev-parse HEAD)
-if($LASTEXITCODE -ne 0 -or $env:BIRZHA_SOURCE_SHA -notmatch '^[0-9a-f]{40}$'){throw 'Installed source revision unavailable'}
+$installedSourceSha = [string](& git -C $repo rev-parse HEAD)
+if($LASTEXITCODE -ne 0 -or $installedSourceSha -notmatch '^[0-9a-f]{40}$'){throw 'Installed source revision unavailable'}
+$env:BIRZHA_SOURCE_SHA = $installedSourceSha
+# The existing controller rewrites this env assignment during deploy/rollback.
+if($env:BIRZHA_SOURCE_SHA -ne $installedSourceSha){throw 'Configured revision differs from installed source'}
 $env:MCP_ALLOWED_HOSTS = '127.0.0.1,127.0.0.1:*,localhost,localhost:*'
 $env:MCP_ALLOWED_ORIGINS = ''
 $env:BIRZHA_REQUIRE_MCP_AUTH = 'true'

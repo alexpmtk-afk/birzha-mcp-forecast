@@ -330,3 +330,12 @@ The actual IMOEX SYNC_STATUS has a fully blank separator at row 20. It is
 preserved at its original position; blank rows are not status keys. Nonempty
 rows with empty keys and repeated nonempty keys still fail before writes.
 Status updates skip separators and retain all older receipts.
+
+
+The launcher now verifies the installed revision independently of the environment
+assignment rewritten by the existing deploy/rollback controller. Both dynamic
+startup and a matching controller-pinned SHA pass; a different SHA fails before
+credentials/server startup. This prevents the controller rewrite from removing
+the git invocation whose exit status the old candidate launcher depended on.
+The production Python currently lacks google-auth; the pinned dependency must
+be installed as part of the separately authorised activation, never assumed.

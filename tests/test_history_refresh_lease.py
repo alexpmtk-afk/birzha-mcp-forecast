@@ -58,3 +58,16 @@ $lease.ReleaseMutex();$lease.Dispose()
         if holder.poll() is None:
             holder.kill()
             holder.communicate(timeout=10)
+
+
+@pytest.mark.skipif(not SHELL, reason="PowerShell runtime required")
+@pytest.mark.parametrize("pinned",[None,"a"*40,"b"*40])
+def test_startup_revision_guard_survives_existing_controller_assignment_rewrite(pinned):
+    source=(SCRIPT.parent/"start_home_with_native_mirror.ps1").read_text(encoding="utf-8-sig")
+    snippet=source[source.index("$installedSourceSha ="):source.index("$env:MCP_ALLOWED_HOSTS")]
+    if pinned:
+        snippet=snippet.replace("$env:BIRZHA_SOURCE_SHA = $installedSourceSha", "$env:BIRZHA_SOURCE_SHA = '"+pinned+"'")
+    # Stub git in a child process; do not execute launcher/network/secret reads.
+    stub="$ErrorActionPreference='Stop';$repo='test-only';function git { $global:LASTEXITCODE=0; '"+"a"*40+"' };"
+    result=subprocess.run([SHELL,"-NoProfile","-NonInteractive","-Command",stub+snippet],capture_output=True,text=True,timeout=20)
+    assert (result.returncode==0)==(pinned in (None,"a"*40)),result.stderr
