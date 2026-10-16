@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from birzha.application.market_data import MarketDataService, is_futures_root_symbol
+from birzha.application.warmup_session_evidence import (
+    WarmupSessionEvidenceOrigin,
+    canonical_expected_d1_dates,
+    warmup_session_evidence_key,
+)
 from birzha.domain.market import CandleSeries, Instrument
 from birzha.providers.moex_calendar import MoexTradingCalendar
 from birzha.storage.historical_store import HistoricalCandleStore, HistoricalCoverage
@@ -361,13 +366,43 @@ class HistoricalDataService:
         )
         if not expected:
             return 0
+        expected = (
+            canonical_expected_d1_dates(expected)
+            if timeframe == "D1"
+            else expected
+        )
+        expected_date_values = tuple(day.isoformat() for day in expected)
+        evidence_key = (
+            warmup_session_evidence_key(
+                secid=instrument.secid,
+                expected_dates=expected,
+                origin=WarmupSessionEvidenceOrigin.CAPTURED_AT_SYNC,
+            )
+            if timeframe == "D1"
+            else None
+        )
         verification_symbol = (
             f"{instrument.secid}#{CONTRACT_WARMUP_VERIFICATION_VERSION}"
         )
+        stored_date_values = (
+            self.store.stored_trade_dates(
+                instrument.secid,
+                timeframe,
+                start.isoformat(),
+                finish.isoformat(),
+            )
+            if timeframe == "D1"
+            else ()
+        )
+        stored_date_set = set(stored_date_values)
         source_dates = tuple(
             day.isoformat()
             for day in expected
-            if self.store.is_verified(
+            if (
+                timeframe != "D1"
+                or day.isoformat() in stored_date_set
+            )
+            and self.store.is_verified(
                 verification_symbol,
                 timeframe,
                 day.isoformat(),
@@ -405,6 +440,37 @@ class HistoricalDataService:
                 timeframe,
                 left.isoformat(),
                 right.isoformat(),
+            )
+        if timeframe == "D1":
+            stored_date_values = self.store.stored_trade_dates(
+                instrument.secid,
+                timeframe,
+                start.isoformat(),
+                finish.isoformat(),
+            )
+            remaining = _missing_session_ranges(expected, stored_date_values)
+            if remaining:
+                compact = ",".join(
+                    left_day.isoformat()
+                    if left_day == right_day
+                    else f"{left_day.isoformat()}..{right_day.isoformat()}"
+                    for left_day, right_day in remaining[:10]
+                )
+                raise HistoricalDataIncompleteError(
+                    f"contract warmup stored candle sequence incomplete for "
+                    f"{instrument.secid} D1: {compact}"
+                )
+            if evidence_key is None:
+                raise RuntimeError("D1 warmup evidence key was not created")
+            self.store.record_sessions(
+                evidence_key,
+                instrument.secid,
+                expected_date_values,
+            )
+            self.store.mark_session_range_verified(
+                evidence_key,
+                expected_date_values[0],
+                expected_date_values[-1],
             )
         return fetched
 
