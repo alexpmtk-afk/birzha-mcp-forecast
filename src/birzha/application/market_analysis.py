@@ -33,13 +33,21 @@ DIRECTION_RU = {
 class MarketAnalysisService:
     history: HistoricalDataService
     journal: ForecastJournalService
+    issuance_policy: str = "legacy_compat"
 
     def run(self, *, now: datetime | None = None) -> dict[str, object]:
         # The combined command refreshes history before issuing forecasts. When
         # no engine is approved, refuse *before* any history/provider operations.
         try:
+            # A real journal must be protected even if a caller constructs
+            # this service with a mismatched permissive policy. Legacy test
+            # stubs lack an issuance_policy attribute; honor our own default.
             assert_forecast_issuance_allowed(
-                ENGINE_VERSION, policy=self.journal.issuance_policy
+                ENGINE_VERSION, policy=self.issuance_policy
+            )
+            assert_forecast_issuance_allowed(
+                ENGINE_VERSION,
+                policy=getattr(self.journal, "issuance_policy", self.issuance_policy),
             )
         except UnapprovedForecastIssuanceError as exc:
             return {**blocked_forecast_result(exc), "requested": len(CORE_SYMBOLS),
