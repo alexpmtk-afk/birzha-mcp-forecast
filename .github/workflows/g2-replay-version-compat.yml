@@ -1,0 +1,21 @@
+name: G2 Replay Version Compatibility
+on:
+  push:
+    branches: [chatgpt/g2-replay-engine-version-compat-20261016]
+  pull_request:
+    branches: [chatgpt/g2-batch-replay-2025-26-integration-20261013]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q -p no:cacheprovider tests/test_g2_forecast_historical_replay.py tests/test_g2_historical_engine_batch.py
+      - run: python -m pytest -q -p no:cacheprovider
+      - run: python scripts/repository_preflight.py
