@@ -1,0 +1,27 @@
+name: G2 Forecast Issuance Guard
+on:
+  push:
+    branches:
+      - chatgpt/g2-issuance-guard-optin-20261016
+  pull_request:
+    branches:
+      - chatgpt/g2-method-disposition-registry-20261016
+permissions:
+  contents: read
+jobs:
+  safe-cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 23
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Negative tests for forecast issuance
+        run: python -m pytest -q -p no:cacheprovider tests/test_forecast_issuance_policy.py tests/test_method_registry.py
+      - name: Full regression
+        run: python -m pytest -q -p no:cacheprovider
+      - name: Preflight
+        run: python scripts/repository_preflight.py
