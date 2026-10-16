@@ -175,7 +175,7 @@ def _archived_h1():
     for idx,c in enumerate(s.candles):
         start = datetime.fromisoformat(c.begin)
         # An archived short interval is flagged False by an obsolete rule.
-        end = (start + timedelta(minutes=54)).isoformat() if idx == 30 else c.end
+        end = (start + timedelta(minutes=54)).isoformat() if idx == 30 else (start + timedelta(seconds=3599)).isoformat()
         bars.append(replace(c, begin=c.begin, end=end,
                             completed=False if idx == 30 else True,
                             available_at=None, observed_at=None,
