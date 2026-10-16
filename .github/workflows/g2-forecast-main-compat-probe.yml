@@ -28,7 +28,7 @@ jobs:
           echo "CURRENT_MAIN_SHA=$(git rev-parse origin/main)"
           echo "FORECAST_HEAD_SHA=$(git rev-parse origin/chatgpt/g2-forecast-v0-horizon-guard-20261016)"
           test "$(git rev-parse origin/main)" = "fcb8ece387085b619d09b043bb1d6a4bc7068662" || { echo "MAIN_CHANGED_RECHECK_REQUIRED"; exit 1; }
-          git merge --no-commit --no-ff origin/chatgpt/g2-forecast-v0-horizon-guard-20261016 || {
+          git -c user.name="Ephemeral CI Probe" -c user.email="ci-probe@users.noreply.github.com" merge --no-commit --no-ff origin/chatgpt/g2-forecast-v0-horizon-guard-20261016 || {
             echo "MERGE_CONFLICTS:"
             git diff --name-only --diff-filter=U
             exit 1
