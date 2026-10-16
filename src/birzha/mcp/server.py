@@ -14,7 +14,11 @@ from starlette.responses import JSONResponse
 
 from birzha.application.calibration import ModelCalibrationService, calibrate_across_symbols
 from birzha.application.flow import MarketFlowService
-from birzha.application.forecast import ForecastService
+from birzha.application.forecast import ENGINE_VERSION, ForecastService
+from birzha.application.forecast_issuance_policy import (
+    UnapprovedForecastIssuanceError, assert_forecast_issuance_allowed,
+    blocked_forecast_result,
+)
 from birzha.application.forecast_input_readiness import ForecastInputReadinessService
 from birzha.application.historical_flow import HistoricalFlowDataService
 from birzha.application.historical_data import HistoricalDataService
@@ -86,7 +90,8 @@ _outcome_contract = OutcomeContractService(
     analytics=_analytics,
 )
 _forecast_input_readiness = ForecastInputReadinessService(market_data=_market)
-_journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store)  # type: ignore[arg-type]
+_journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store,
+                                  issuance_policy=settings.forecast_issuance_policy)  # type: ignore[arg-type]
 _analysis = MarketAnalysisService(history=_history, journal=_journal)
 _outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
 _validator = WalkForwardValidator(
@@ -406,12 +411,19 @@ def data_flow_backfill_causal_availability(dry_run: bool = True) -> dict[str, ob
 
 @mcp.tool(name="forecast.build", description="Build an explainable ex-ante BIRZHA baseline forecast without persistence. Use forecast.create for an operational forecast that must enter the journal.")
 def forecast_build(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
+    try:
+        assert_forecast_issuance_allowed(ENGINE_VERSION, policy=settings.forecast_issuance_policy)
+    except UnapprovedForecastIssuanceError as exc:
+        return blocked_forecast_result(exc)
     return _forecast.build(symbol, as_of_date=as_of_date).to_dict()
 
 
 @mcp.tool(name="forecast.create", description="Create an ex-ante forecast and append it immutably to the configured Forecast Journal. Identical duplicate writes are idempotent; conflicting content is rejected.")
 def forecast_create(symbol: str, as_of_date: str | None = None) -> dict[str, object]:
-    return _journal.create_and_save(symbol, as_of_date=as_of_date)
+    try:
+        return _journal.create_and_save(symbol, as_of_date=as_of_date)
+    except UnapprovedForecastIssuanceError as exc:
+        return blocked_forecast_result(exc)
 
 
 @mcp.tool(name="forecast.get", description="Read one immutable Forecast Record from the Forecast Journal by forecast_id.")
