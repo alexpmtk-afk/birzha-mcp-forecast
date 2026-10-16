@@ -1,0 +1,70 @@
+name: G2 Forecast and 2025-26 Replay Compatibility
+on:
+  push:
+    branches:
+      - chatgpt/g2-main-compat-probe-20261016
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+concurrency:
+  group: g2-replay-compat-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  research-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Merge two research lines in ephemeral runner only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Ephemeral CI Probe"
+          git config user.email "ci-probe@users.noreply.github.com"
+          git fetch --no-tags origin main chatgpt/g2-forecast-v0-horizon-guard-20261016 chatgpt/g2-replay-engine-version-compat-20261016
+          # Reproduce the already reviewed historical code, not a moving main.
+          git cat-file -e "fcb8ece387085b619d09b043bb1d6a4bc7068662^{commit}"
+          git checkout --detach fcb8ece387085b619d09b043bb1d6a4bc7068662
+          echo "PINNED_HISTORICAL_MAIN=$(git rev-parse HEAD)"
+          test "$(git rev-parse origin/chatgpt/g2-forecast-v0-horizon-guard-20261016)" = "2ca728915539c8c939f78376baf36808453e5526" || { echo "FORECAST_MOVED"; exit 1; }
+          test "$(git rev-parse origin/chatgpt/g2-replay-engine-version-compat-20261016)" = "4b261ec420ad0f23b5fd4c367b571ce1d505af7f" || { echo "REPLAY_MOVED"; exit 1; }
+          git merge --no-ff -m "CI_TEMP_FORECAST_DO_NOT_PUSH" origin/chatgpt/g2-forecast-v0-horizon-guard-20261016 || {
+            echo "FORECAST_MERGE_CONFLICT:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          }
+          git merge --no-commit --no-ff origin/chatgpt/g2-replay-engine-version-compat-20261016 || {
+            echo "REPLAY_MERGE_CONFLICT:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          }
+          echo "FORECAST_AND_REPLAY_EPHEMERAL_MERGE=PASS"
+          test -e scripts/g2_historical_engine_batch.py
+          test -e tests/test_g2_historical_engine_batch.py
+      - name: Package combined public source for local offline historical comparison
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          printf "MAIN=fcb8ece387085b619d09b043bb1d6a4bc7068662\\nFORECAST=2ca728915539c8c939f78376baf36808453e5526\\nREPLAY=4b261ec420ad0f23b5fd4c367b571ce1d505af7f\\nSOURCE_ONLY=TRUE\\n" > package/SOURCE_REFS.txt
+          tar -czf package/birzha-g2-source.tar.gz src scripts tests pyproject.toml README.md
+          sha256sum package/birzha-g2-source.tar.gz > package/SOURCE_SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g2-pinned-source-no-data
+          path: package/
+          retention-days: 7
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: Test forecast freeze/assessment research contract
+        run: python -m pytest -q -p no:cacheprovider tests/test_g2_historical_engine_batch.py tests/test_g2_forecast_v0_horizon_guard.py tests/test_baseline_decision_contract.py
+      - name: Full combined test suite
+        run: python -m pytest -q -p no:cacheprovider
+      - run: python scripts/repository_preflight.py

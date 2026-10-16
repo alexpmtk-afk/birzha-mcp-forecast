@@ -1,0 +1,37 @@
+name: G2 Research Source Bundle (No Data)
+on:
+  push:
+    branches: [chatgpt/g2-main-compat-probe-20261016]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assemble pinned source without any dataset
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Ephemeral CI Probe"
+          git config user.email "ci-probe@users.noreply.github.com"
+          git fetch --no-tags origin main chatgpt/g2-forecast-v0-horizon-guard-20261016 chatgpt/g2-replay-engine-version-compat-20261016
+          test "$(git rev-parse origin/main)" = "fcb8ece387085b619d09b043bb1d6a4bc7068662"
+          test "$(git rev-parse origin/chatgpt/g2-forecast-v0-horizon-guard-20261016)" = "2ca728915539c8c939f78376baf36808453e5526"
+          test "$(git rev-parse origin/chatgpt/g2-replay-engine-version-compat-20261016)" = "4b261ec420ad0f23b5fd4c367b571ce1d505af7f"
+          git merge --no-ff -m "CI temporary research" origin/chatgpt/g2-forecast-v0-horizon-guard-20261016
+          git merge --no-commit --no-ff origin/chatgpt/g2-replay-engine-version-compat-20261016
+          mkdir -p package
+          printf "MAIN=fcb8ece387085b619d09b043bb1d6a4bc7068662\nFORECAST=2ca728915539c8c939f78376baf36808453e5526\nREPLAY=4b261ec420ad0f23b5fd4c367b571ce1d505af7f\nCODE_ONLY=TRUE\n" > package/SOURCE_REFS.txt
+          tar -czf package/birzha-g2-source.tar.gz src scripts tests pyproject.toml README.md
+          sha256sum package/birzha-g2-source.tar.gz | tee package/SOURCE_SHA256.txt
+          echo "SOURCE_BUNDLE=PASS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g2-pinned-source-no-data
+          path: package/
+          retention-days: 7
