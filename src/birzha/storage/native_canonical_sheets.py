@@ -154,7 +154,8 @@ class NativeCanonicalSheets:
 
     def read_status(self, symbol: str) -> list[list[object]]:
         rows = self.read_service_rows(symbol,"SYNC_STATUS")
-        if rows and (rows[0] != ["key","value"] or any(not isinstance(r[0],str) or not r[0] for r in rows[1:]) or len({r[0] for r in rows[1:]}) != len(rows)-1):
+        active = [r for r in rows[1:] if any(x != "" for x in r)]
+        if rows and (rows[0] != ["key","value"] or any(not isinstance(r[0],str) or not r[0] for r in active) or len({r[0] for r in active}) != len(active)):
             raise MirrorConflict("invalid or duplicate status keys")
         return rows
 
@@ -164,7 +165,7 @@ class NativeCanonicalSheets:
         self.validate_service_target(symbol,"SYNC_STATUS")
         old=self.read_status(symbol)
         rows=[list(r) for r in old] if old else [["key","value"]]
-        positions={row[0]:index for index,row in enumerate(rows[1:],1)}
+        positions={row[0]:index for index,row in enumerate(rows[1:],1) if row[0] != ""}
         # Preserve superseded configuration as dated evidence before correcting it.
         for key in ("primary_store","persistent_timeframe","intraday_mode","sync_direction"):
             if key in updates and key in positions and rows[positions[key]][1] != updates[key]:

@@ -324,3 +324,9 @@ comparison now normalizes their representation only, preserving raw existing
 rows and scope labels, so an ISO source session does not duplicate an existing
 serial-date session. Distinct evidence scopes remain distinct; a non-midnight
 value cannot be silently converted to a trading date.
+
+
+The actual IMOEX SYNC_STATUS has a fully blank separator at row 20. It is
+preserved at its original position; blank rows are not status keys. Nonempty
+rows with empty keys and repeated nonempty keys still fail before writes.
+Status updates skip separators and retain all older receipts.

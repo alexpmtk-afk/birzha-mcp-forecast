@@ -134,7 +134,7 @@ def test_native_config_requires_explicit_access_owner_auth_revision(monkeypatch,
 def test_native_service_status_updates_only_requested_cells_and_preserves_legacy():
     from birzha.storage.native_canonical_sheets import NativeCanonicalSheets
     from birzha.storage.google_sheets_bridge import INSTRUMENT_TARGETS, INSTRUMENT_FOLDER_IDS
-    target=INSTRUMENT_TARGETS['SBER'];data=[["key","value"],["primary_store","YDB"],["receipt","keep"],["status","OLD"]];posts=[]
+    target=INSTRUMENT_TARGETS['SBER'];data=[["key","value"],["primary_store","YDB"],["receipt","keep"],["",""],["status","OLD"]];posts=[]
     def handler(request):
         if request.url.host=='www.googleapis.com':return httpx.Response(200,json={"id":target.spreadsheet_id,"name":target.spreadsheet_name,"mimeType":"application/vnd.google-apps.spreadsheet","parents":[INSTRUMENT_FOLDER_IDS['SBER']],"trashed":False})
         if request.method=='POST':
@@ -155,6 +155,7 @@ def test_native_service_status_updates_only_requested_cells_and_preserves_legacy
     assert dict(data[1:])['legacy_pre_mirror_v3_primary_store']=='YDB'
     assert dict(data[1:])['primary_store']=='DuckDB'
     assert len(posts)==1
+    assert data[3]==["",""]
 
 
 def test_mcp_mirror_disabled_and_configured_paths(monkeypatch):
@@ -331,3 +332,18 @@ def test_service_serial_dates_reconcile_without_rewriting_or_duplicate_sessions(
     assert append_service(ranges,ranges[0],[["DIFFERENT_SCOPE","SI","D1","2021-01-04","2021-01-05"]])==[["DIFFERENT_SCOPE","SI","D1","2021-01-04","2021-01-05"]]
     with pytest.raises(MirrorConflict,match="service date contains"):
         append_service(sessions,sessions[0],[["SI","SiH1","2021-01-04T12:00:00"]])
+
+
+@pytest.mark.parametrize("rows,allowed",[
+    ([["key","value"],["",""],["receipt","keep"]],True),
+    ([["key","value"],["","orphan-value"]],False),
+    ([["key","value"],["receipt","old"],["receipt","new"]],False),
+])
+def test_blank_status_separator_preserved_but_ambiguous_evidence_refused(rows,allowed):
+    from birzha.storage.native_canonical_sheets import NativeCanonicalSheets
+    transport=NativeCanonicalSheets(lambda:"not-used")
+    transport.read_service_rows=lambda symbol,sheet:deepcopy(rows)
+    if allowed:assert transport.read_status("IMOEX")==rows
+    else:
+        with pytest.raises(MirrorConflict,match="invalid or duplicate status keys"):
+            transport.read_status("IMOEX")
