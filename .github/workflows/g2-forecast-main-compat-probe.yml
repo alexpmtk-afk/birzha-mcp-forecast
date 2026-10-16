@@ -1,0 +1,45 @@
+name: G2 Forecast V0 vs Current Main (Ephemeral)
+on:
+  push:
+    branches:
+      - chatgpt/g2-main-compat-probe-20261016
+permissions:
+  contents: read
+concurrency:
+  group: g2-main-compat-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  merge-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact source ancestry and merge without commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main chatgpt/g2-forecast-v0-horizon-guard-20261016
+          echo "CURRENT_MAIN_SHA=$(git rev-parse origin/main)"
+          echo "FORECAST_HEAD_SHA=$(git rev-parse origin/chatgpt/g2-forecast-v0-horizon-guard-20261016)"
+          test "$(git rev-parse origin/main)" = "fcb8ece387085b619d09b043bb1d6a4bc7068662" || { echo "MAIN_CHANGED_RECHECK_REQUIRED"; exit 1; }
+          git merge --no-commit --no-ff origin/chatgpt/g2-forecast-v0-horizon-guard-20261016 || {
+            echo "MERGE_CONFLICTS:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          }
+          echo "EPHEMERAL_MERGE=PASS"
+          git diff --cached --stat | tail -35
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install development dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Focused forecast and source history regressions
+        run: python -m pytest -q -p no:cacheprovider tests/test_g2_forecast_v0_horizon_guard.py tests/test_baseline_decision_contract.py tests/test_stored_session_series.py tests/test_br_research_repair.py
+      - name: Full isolated regression suite
+        run: python -m pytest -q -p no:cacheprovider
+      - name: Repository preflight
+        run: python scripts/repository_preflight.py
