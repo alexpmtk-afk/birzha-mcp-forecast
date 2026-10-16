@@ -319,3 +319,15 @@ def test_missing_index_volume_is_preserved_never_equated_to_zero(symbol,allowed)
             with pytest.raises(MirrorConflict,match="candle values"):
                 project_source(bundle,"D1",old)
     finally:db.close()
+
+
+def test_service_serial_dates_reconcile_without_rewriting_or_duplicate_sessions():
+    sessions=[["symbol","secid","trade_date"],["Si","SiH1",44200]]
+    before=deepcopy(sessions)
+    assert append_service(sessions,sessions[0],[["SI","SiH1","2021-01-04"]])==[]
+    assert sessions==before
+    ranges=[["scope","symbol","timeframe","from_date","till_date"],["SAME_SCOPE","Si","D1",44200,44201]]
+    assert append_service(ranges,ranges[0],[["SAME_SCOPE","SI","D1","2021-01-04","2021-01-05"]])==[]
+    assert append_service(ranges,ranges[0],[["DIFFERENT_SCOPE","SI","D1","2021-01-04","2021-01-05"]])==[["DIFFERENT_SCOPE","SI","D1","2021-01-04","2021-01-05"]]
+    with pytest.raises(MirrorConflict,match="service date contains"):
+        append_service(sessions,sessions[0],[["SI","SiH1","2021-01-04T12:00:00"]])

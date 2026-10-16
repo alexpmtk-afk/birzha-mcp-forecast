@@ -317,3 +317,10 @@ equal to zero, and no full source-payload match is claimed. The reverse completi
 disagreement, other volume disagreements, OHLC and interval conflicts still fail
 before writes. These rules preserve conservative archive quality, do not certify
 minute coverage, and do not admit any row to Forecast.
+
+
+Actual BR service-sheet samples also contain numeric dates. Service identity
+comparison now normalizes their representation only, preserving raw existing
+rows and scope labels, so an ISO source session does not duplicate an existing
+serial-date session. Distinct evidence scopes remain distinct; a non-midnight
+value cannot be silently converted to a trading date.

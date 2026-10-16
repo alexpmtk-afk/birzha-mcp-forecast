@@ -121,7 +121,17 @@ def append_service(existing: list[list[object]], header: list[str], incoming: li
     before = [list(row) for row in existing] if existing else [header[:]]
     if any(len(row) != len(header) for row in before):
         raise MirrorConflict("nonrectangular service sheet")
-    identity = lambda row: (str(row[0]).upper(), *row[1:]) if header[0] == "symbol" else tuple(row)
+    def identity(row):
+        normalized = list(row)
+        for i, column in enumerate(header):
+            if column == "symbol":
+                normalized[i] = str(row[i]).upper()
+            elif column in {"trade_date", "from_date", "till_date"}:
+                parsed = sheet_timestamp(row[i])
+                if parsed.hour or parsed.minute or parsed.second or parsed.microsecond:
+                    raise MirrorConflict("service date contains a time; no inferred trading date")
+                normalized[i] = parsed.date().isoformat()
+        return tuple(normalized)
     seen = set(identity(row) for row in before[1:])
     if len(seen) != len(before) - 1:
         raise MirrorConflict("duplicate service evidence rows")
