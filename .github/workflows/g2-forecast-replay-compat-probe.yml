@@ -26,16 +26,16 @@ jobs:
           set -euo pipefail
           git config user.name "Ephemeral CI Probe"
           git config user.email "ci-probe@users.noreply.github.com"
-          git fetch --no-tags origin main chatgpt/g2-forecast-v0-horizon-guard-20261016 chatgpt/g2-batch-replay-2025-26-integration-20261013
+          git fetch --no-tags origin main chatgpt/g2-forecast-v0-horizon-guard-20261016 chatgpt/g2-replay-engine-version-compat-20261016
           test "$(git rev-parse origin/main)" = "fcb8ece387085b619d09b043bb1d6a4bc7068662" || { echo "MAIN_MOVED"; exit 1; }
           test "$(git rev-parse origin/chatgpt/g2-forecast-v0-horizon-guard-20261016)" = "2ca728915539c8c939f78376baf36808453e5526" || { echo "FORECAST_MOVED"; exit 1; }
-          test "$(git rev-parse origin/chatgpt/g2-batch-replay-2025-26-integration-20261013)" = "7b1a0e7dc2aac0ca6c4c3fa5165b2abe07d65cd7" || { echo "REPLAY_MOVED"; exit 1; }
+          test "$(git rev-parse origin/chatgpt/g2-replay-engine-version-compat-20261016)" = "4b261ec420ad0f23b5fd4c367b571ce1d505af7f" || { echo "REPLAY_MOVED"; exit 1; }
           git merge --no-ff -m "CI_TEMP_FORECAST_DO_NOT_PUSH" origin/chatgpt/g2-forecast-v0-horizon-guard-20261016 || {
             echo "FORECAST_MERGE_CONFLICT:"
             git diff --name-only --diff-filter=U
             exit 1
           }
-          git merge --no-commit --no-ff origin/chatgpt/g2-batch-replay-2025-26-integration-20261013 || {
+          git merge --no-commit --no-ff origin/chatgpt/g2-replay-engine-version-compat-20261016 || {
             echo "REPLAY_MERGE_CONFLICT:"
             git diff --name-only --diff-filter=U
             exit 1
