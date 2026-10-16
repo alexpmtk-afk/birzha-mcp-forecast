@@ -58,7 +58,8 @@ def test_wilder_atr_true_range_and_prior_volume_median():
     got = build_market_structure_facts(series, t0=t0)["facts"]
     assert got["wilder_atr14"]["status"] == "AVAILABLE"
     assert got["wilder_atr14"]["value"]["atr_price"] == 4.0
-    assert got["wilder_atr14"]["value"]["atr_pct"] == 0.04
+    assert got["wilder_atr14"]["value"]["atr_pct"] == 4.0
+    assert got["wilder_atr14"]["value"]["atr_ratio"] == 0.04
     assert got["relative_volume_prior20"]["value"]["ratio_to_prior_20_median"] == 3.0
     assert got["relative_volume_prior20"]["value"]["prior_20_median_volume"] == 10
 
