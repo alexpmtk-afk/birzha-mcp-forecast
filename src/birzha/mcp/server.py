@@ -92,7 +92,8 @@ _outcome_contract = OutcomeContractService(
 _forecast_input_readiness = ForecastInputReadinessService(market_data=_market)
 _journal = ForecastJournalService(forecasts=_forecast, journal=_journal_store,
                                   issuance_policy=settings.forecast_issuance_policy)  # type: ignore[arg-type]
-_analysis = MarketAnalysisService(history=_history, journal=_journal)
+_analysis = MarketAnalysisService(history=_history, journal=_journal,
+                                  issuance_policy=settings.forecast_issuance_policy)
 _outcomes = OutcomeService(market_data=_market, forecasts=_journal_store, outcomes=_outcome_store)  # type: ignore[arg-type]
 _validator = WalkForwardValidator(
     market_data=_market,
