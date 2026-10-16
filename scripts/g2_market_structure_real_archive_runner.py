@@ -219,7 +219,7 @@ def run(archive: Path, *, reference: Path | None = None) -> dict:
     if row_counts != {
         "d1_research_calculated": 30, "h1_research_calculated": 23,
         "h1_strict_pass": 5, "h1_insufficient": 7,
-        "h1_strict_rejected_with_50_plus": 21, "raw_archived_h1_duration_flags": 933,
+        "h1_strict_rejected_with_50_plus": 23, "raw_archived_h1_duration_flags": 933,
     }:
         # Two GOLD/BR cases with zero/short history may pass validation but have
         # no features. Guard exact status instead of treating a pass as eligibility.
