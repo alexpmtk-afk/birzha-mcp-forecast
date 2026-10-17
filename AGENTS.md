@@ -19,6 +19,10 @@ record the actual source SHA. The owner's current task and scope take precedence
 over generic historical notes. This route selection qualifies any older blanket
 instruction to call history.*; candle and authorisation rules remain mandatory.
 
+## G2 strict/reconstructed boundaries and preregistered pilot (coord-20261017-02)
+
+Before touching candidate methods, read [the actual 30-case report](docs/G2_MARKET_STRUCTURE_ACTUAL_30_CASES_20261017.md), [fixed input identity manifest](scripts/g2_frozen_input_identity_20261017.py), and [predeclared future pilot](docs/G2_FIRST_FORECAST_STRUCTURE_PILOT_PREREG_20261017.md). The frozen archive SHA and inputs SHA are independent of the receipt: verify both *before calculating*, then verify receipt separately. `build_reconstructed_market_structure_facts` does NOT admit historical incomplete flags to strict Forecast. `g2_structure_pilot_plan.py` only writes an exclusive **offline plan**, not source capture. No model weights fitting on already-known 30 cases, no merge/deploy, no first-seen claims. Future candidate rule is D1/H1 concordant HH_HL → UP, LH_LL → DOWN, otherwise ABSTAIN; fixed horizons 5/10/20, paired flat/momentum comparison and missing-data reasons. No release or accuracy claim.
+
 ## Execute ordinary work independently
 
 Within an authorised task, choose bounded batches, inspect existing coverage,
@@ -28,6 +32,14 @@ code/runbook and existing reports before asking another chat or the owner.
 Do not delegate routine investigation back to the owner. After two or three
 failed attempts of the same approach, report the concrete blocker and exact
 manual action if one is needed; do not consume limits repeating the same attempt.
+
+## Исследовательские методы и исторические свечи H1 (17.10.2026)
+
+Перед прогнозным шагом проверять [реестр решений #255](https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/255) и [доказательную ведомость исполнения 30 контекстов](docs/G2_MARKET_STRUCTURE_ACTUAL_30_CASES_20261017.md). По распоряжению владельца 17.10.2026 v0.4/v0.6 ВОЗВРАЩЕНЫ к новым парным исследованиям (v0.4 в main, v0.6 в codex/g2-baseline-decision-contract-20261010), однако нельзя подгонять формулы по известным результатам или выдавать за принятую продакшн-модель; свечной псевдопрофиль объёмов запрещён как фактор направления. V2 Market Structure и six-regime Market State исследовательские; не представлять тех. тесты как predictive PASS.
+
+**Критический контракт:** `build_market_structure_facts` строг: отклоняет любую незавершённую свечу; отдельно выделенный `build_reconstructed_market_structure_facts` разрешён только для исторического описательного исследования на неизменённом ZIP с исходными false, явным московским часовым поясом и неизвестным first receipt. Он не даёт допуск к Forecast/MCP/trading. Укороченная свеча не равна формирующейся; в старом архиве `completed=false` создано правилом duration, а первоначальная полнота источника неизвестна. Не исправлять метки массово.
+
+Для обсуждения процентов ATR: V2 `atr_pct=100*ATR/Close`, отдельный `atr_ratio=ATR/Close`; исторический V1 обозначал долю под именем `atr_pct`, поэтому нельзя молча смешивать версии. Резервный период 2023–24 по-прежнему закрыт; main/HOME не менять без отдельного разрешения.
 
 ## Canonical mechanics
 

@@ -1,0 +1,43 @@
+name: G2 Direct Market Structure Research
+on:
+  push:
+    branches:
+      - chatgpt/g2-reconstructed-direct-execution-20261017
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  actual-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Validate actual Market Structure V2 and H1 strict/reconstructed boundaries
+        run: python -m pytest -q -p no:cacheprovider tests/test_market_structure_facts.py tests/test_market_structure_reconstructed_v2.py tests/test_g2_frozen_input_identity.py tests/test_g2_structure_pilot_plan.py
+      - name: Full repository regression
+        run: python -m pytest -q -p no:cacheprovider
+      - name: Preflight
+        run: python scripts/repository_preflight.py
+      - name: Freeze deterministic pilot schedule offline (no market capture)
+        run: python -m scripts.g2_structure_pilot_plan --output g2_structure_pilot_preflight.json
+      - name: Pack exact source code only for independently reproduced local run
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > SOURCE_SHA.txt
+          tar czf direct-g2-v2-source.tar.gz SOURCE_SHA.txt src/birzha/application/market_structure_facts.py src/birzha/domain/market.py scripts/g2_h1_duration_forensics.py scripts/g2_frozen_input_identity_20261017.py scripts/g2_market_structure_archive_direct.py scripts/g2_structure_pilot_plan.py g2_structure_pilot_preflight.json
+          sha256sum direct-g2-v2-source.tar.gz > SOURCE_TARBALL_SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g2-direct-source-no-user-data
+          path: |
+            direct-g2-v2-source.tar.gz
+            SOURCE_TARBALL_SHA256.txt
+          retention-days: 7
