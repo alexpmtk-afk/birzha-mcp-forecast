@@ -55,6 +55,7 @@ class Settings:
     native_mirror_enabled: bool = False
     native_mirror_credentials_path: str | None = None
     native_mirror_sole_writer: bool = False
+    forecast_issuance_policy: str = "legacy_compat"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -100,6 +101,10 @@ class Settings:
                 "BIRZHA_MARKET_MIRROR_REQUIRED=true requires complete Bridge v1 configuration"
             )
 
+        issuance_policy = os.getenv("BIRZHA_FORECAST_ISSUANCE_POLICY", "legacy_compat").strip().lower()
+        if issuance_policy not in {"legacy_compat", "approved_only"}:
+            raise ValueError("BIRZHA_FORECAST_ISSUANCE_POLICY must be legacy_compat or approved_only")
+
         native_enabled = _bool_env("BIRZHA_NATIVE_MIRROR_ENABLED", False)
         native_credentials = (os.getenv("BIRZHA_NATIVE_MIRROR_CREDENTIALS_PATH") or "").strip() or None
         native_owner = _bool_env("BIRZHA_NATIVE_MIRROR_SOLE_WRITER", False)
@@ -127,4 +132,5 @@ class Settings:
             native_mirror_enabled=native_enabled,
             native_mirror_credentials_path=native_credentials,
             native_mirror_sole_writer=native_owner,
+            forecast_issuance_policy=issuance_policy,
         )

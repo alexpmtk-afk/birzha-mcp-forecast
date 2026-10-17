@@ -9,6 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from birzha.application.forecast import ENGINE_VERSION
+from birzha.application.forecast_issuance_policy import (
+    UnapprovedForecastIssuanceError,
+    assert_forecast_issuance_allowed,
+    blocked_forecast_result,
+)
 from birzha.application.historical_data import HistoricalDataService
 from birzha.application.history_policy import D1_ARCHIVE_START, latest_safe_d1_calendar_date
 from birzha.application.journal import ForecastJournalService
@@ -27,8 +33,25 @@ DIRECTION_RU = {
 class MarketAnalysisService:
     history: HistoricalDataService
     journal: ForecastJournalService
+    issuance_policy: str = "legacy_compat"
 
     def run(self, *, now: datetime | None = None) -> dict[str, object]:
+        # The combined command refreshes history before issuing forecasts. When
+        # no engine is approved, refuse *before* any history/provider operations.
+        try:
+            # A real journal must be protected even if a caller constructs
+            # this service with a mismatched permissive policy. Legacy test
+            # stubs lack an issuance_policy attribute; honor our own default.
+            assert_forecast_issuance_allowed(
+                ENGINE_VERSION, policy=self.issuance_policy
+            )
+            assert_forecast_issuance_allowed(
+                ENGINE_VERSION,
+                policy=getattr(self.journal, "issuance_policy", self.issuance_policy),
+            )
+        except UnapprovedForecastIssuanceError as exc:
+            return {**blocked_forecast_result(exc), "requested": len(CORE_SYMBOLS),
+                    "passed": 0, "failed": 0, "items": [], "history_synced": False}
         observed = now or datetime.now(UTC)
         safe_till = latest_safe_d1_calendar_date(observed)
         recent_from = max(

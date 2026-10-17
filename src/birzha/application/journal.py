@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from birzha.application.forecast import ForecastService
+from birzha.application.forecast import ENGINE_VERSION, ForecastService
+from birzha.application.forecast_issuance_policy import assert_forecast_issuance_allowed
 from birzha.storage.forecast_journal import DuckDBForecastJournal
 
 
@@ -12,9 +13,14 @@ from birzha.storage.forecast_journal import DuckDBForecastJournal
 class ForecastJournalService:
     forecasts: ForecastService
     journal: DuckDBForecastJournal
+    issuance_policy: str = "legacy_compat"
 
     def create_and_save(self, symbol: str, *, as_of_date: str | None = None) -> dict[str, object]:
+        # Refuse before provider calls, model calculation, or any journal write.
+        assert_forecast_issuance_allowed(ENGINE_VERSION, policy=self.issuance_policy)
         record = self.forecasts.build(symbol, as_of_date=as_of_date)
+        # Reject also a dynamically built/calibrated version not matching the declared engine.
+        assert_forecast_issuance_allowed(record.engine_version, policy=self.issuance_policy)
         append = self.journal.append(record)
         return {
             "forecast": record.to_dict(),
