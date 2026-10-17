@@ -1,0 +1,68 @@
+name: G2 Restored V0.4 V0.6 Research Smoke
+on:
+  push:
+    branches:
+      - chatgpt/g2-method-disposition-registry-20261016
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  test-original-versions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: v04
+            pinned_ref: fc2572d174be435647fb6a5ea95a5b1611d3d74a
+            required: BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS
+            test_file: tests/test_forecast_engine.py
+          - id: v06
+            pinned_ref: 126d4fb63ab4c9c031df2487a413cff60e931145
+            required: BIRZHA_FORECAST_BASELINE_V0_6_EVIDENCE_DECISION
+            test_file: tests/test_baseline_decision_contract.py
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: decisions
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.pinned_ref }}
+          path: frozen-engine
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install source-specific dependencies
+        run: python -m pip install -e './frozen-engine[dev]'
+      - name: Verify pinned version is in original source
+        shell: bash
+        run: |
+          cd frozen-engine
+          python - <<'PY'
+          from birzha.application.forecast import ENGINE_VERSION
+          from birzha.application import forecast
+          import os
+          version=os.getenv("EXPECTED_ENGINE")
+          versions={ENGINE_VERSION, getattr(forecast, "FULL_WINDOWS_ENGINE_VERSION", "")}
+          assert version in versions, (version, versions)
+          print("PINNED_RESEARCH_ENGINE=PASS", version)
+          PY
+        env:
+          EXPECTED_ENGINE: ${{ matrix.required }}
+      - name: Run original isolated engine tests
+        run: |
+          cd frozen-engine
+          python -m pytest -q -p no:cacheprovider ${{ matrix.test_file }}
+      - name: Confirm declared research status remains unapproved
+        run: |
+          cd decisions
+          PYTHONPATH=src python - <<'PY'
+          from birzha.application.method_registry import read_method_decisions
+          x=read_method_decisions()
+          assert set(x["active_research_method_ids"]) == {"FORECAST_BASELINE_V0_4","FORECAST_BASELINE_V0_6"}
+          assert x["approved_predictive_methods"] == []
+          print("DUAL_RESEARCH_REINSTATED_NO_DEPLOY=PASS")
+          PY
