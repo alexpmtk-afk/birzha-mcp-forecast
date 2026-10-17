@@ -34,9 +34,12 @@ def test_main_and_research_engine_versions_have_distinct_statuses():
     assert catalog["FORECAST_BASELINE_V0_6"]["source_state"] == "RESEARCH_DRAFT_NOT_IN_MAIN"
     for ident in ("FORECAST_BASELINE_V0_4", "FORECAST_BASELINE_V0_6"):
         row = catalog[ident]
-        assert row["state"] == "HISTORICAL_BASELINE_NOT_APPROVED"
+        assert row["state"] == "ACTIVE_RESEARCH_UNVALIDATED"
         assert row["may_contribute_to_new_directional_model"] is False
-        assert row["decision"] == "STOP_FURTHER_DIRECTIONAL_DEVELOPMENT"
+        assert row["decision"] == "CONTINUE_CONTROLLED_COMPARATIVE_TESTING"
+        assert row["research_eligible"] is True
+        assert row["research_parameters_frozen"] is True
+        assert row["live_operational_issuance_approved"] is False
 
 
 def test_candle_volume_proxy_not_allowed_as_directional_evidence():
@@ -93,7 +96,7 @@ def test_lookups_never_share_mutable_registry_state():
     payload["items"][0]["evidence"].append("FAKE")
     payload["approved_predictive_methods"].append("FAKE")
     assert read_method_decisions()["approved_predictive_methods"] == []
-    assert read_method_decisions("FORECAST_BASELINE_V0_4")["items"][0]["state"] == "HISTORICAL_BASELINE_NOT_APPROVED"
+    assert read_method_decisions("FORECAST_BASELINE_V0_4")["items"][0]["state"] == "ACTIVE_RESEARCH_UNVALIDATED"
     assert "FAKE" not in read_method_decisions("FORECAST_BASELINE_V0_4")["items"][0]["evidence"]
 
 
@@ -108,3 +111,16 @@ def test_specific_single_id_returns_one_item_not_a_write():
     assert len(report["items"]) == 1
     assert report["items"][0]["id"] == "MARKET_STRUCTURE_FACTS_V1"
     assert report["records_and_ohlcv_mutated"] is False
+
+
+def test_owner_reopened_exact_research_versions_without_production_approval():
+    report=read_method_decisions()
+    assert report["owner_decision"] == "2026-10-17_REOPEN_V04_V06_FOR_TESTING_NOT_DEPLOY"
+    assert report["active_research_method_ids"] == [
+        "FORECAST_BASELINE_V0_4", "FORECAST_BASELINE_V0_6"
+    ]
+    a,b=_items()["FORECAST_BASELINE_V0_4"],_items()["FORECAST_BASELINE_V0_6"]
+    assert a["version_source_ref"] == "main"
+    assert b["version_source_ref"] == "codex/g2-baseline-decision-contract-20261010"
+    assert report["approved_predictive_methods"] == []
+    assert report["prospective_independent_validation_proven"] is False
