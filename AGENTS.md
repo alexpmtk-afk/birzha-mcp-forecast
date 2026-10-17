@@ -33,7 +33,7 @@ manual action if one is needed; do not consume limits repeating the same attempt
 
 For any future Forecast/Market State/Control/Route or method comparison, consult [the canonical forecast-method decisions](docs/FORECAST_METHOD_DECISIONS_20261016.md) and the read-only module `src/birzha/application/method_registry.py` **before** proposing a candidate.
 
-- Forecast v0.4 and v0.6: archival baseline only, no new tuning on known 2025-26 outcomes; not approved for production directional predictions.
+- OWNER CORRECTION 2026-10-17: Forecast v0.4 and v0.6 are ACTIVE RESEARCH CANDIDATES again. Continue frozen-version paired tests, never refit on known 2025-26 outcomes, and never label either as approved for production. v0.4 lives in main; v0.6 evidence-aware code lives in codex/g2-baseline-decision-contract-20261010, not automatically installed on HOME.
 - `CANDLE_TYPICAL_PRICE_VOLUME_PROXY_V1` is **prohibited as new directional/Control/Route evidence**. Never quietly replace it by a trades-based profile or relabel historical results.
 - SMA/returns/ER/SMA-TR14: existing descriptive context is not an independently accepted directional edge. Wilder ATR must have its own explicit feature/formula version.
 - PR #200 Market State and PR #254 structure/Wilder/median-volume are research work, not independently accepted predictions. Do not add a second competing classifier or promote their CI success to predictive accuracy.
