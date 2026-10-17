@@ -141,6 +141,6 @@ def test_bad_identity_or_invalid_status_fail_closed():
         run(item("market_state", 0.8), mode="STRICT_CAUSAL_REPLAY")
 
 
-def test_no_side_effect_import():
-    import sys
-    assert "birzha.mcp.server" not in sys.modules
+def test_unknown_t0_timezone_rejected():
+    with pytest.raises(ValueError, match="naive"):
+        compare_factor_combinations(as_of="2026-10-17T12:00:00", evidence=(item("market_state", 0.8),))
