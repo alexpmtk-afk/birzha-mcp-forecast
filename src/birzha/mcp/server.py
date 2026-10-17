@@ -23,6 +23,7 @@ from birzha.application.market_data import MarketDataService
 from birzha.application.market_analysis import MarketAnalysisService
 from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.method_validation import MethodWalkForwardValidator
+from birzha.application.method_registry import read_method_decisions
 from birzha.application.outcome import OutcomeService
 from birzha.application.outcome_contract import OutcomeContractService
 from birzha.application.prediction import PredictionContractService
@@ -154,6 +155,13 @@ def mirror_sync_core(from_date: str, till_date: str, dry_run: bool = True) -> di
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
 def system_version() -> dict[str, str]:
     return {"service": SERVICE_NAME, "version": VERSION, "architecture": ARCHITECTURE_VERSION}
+
+@mcp.tool(
+    name="methods.registry",
+    description="Read research decisions on historical, rejected, unvalidated and contextual forecast methods; no pricing data, journals or model selection are changed.",
+)
+def methods_registry(method_id: str | None = None) -> dict[str, object]:
+    return read_method_decisions(method_id=method_id)
 
 
 @mcp.tool(name="market.resolve_instrument", description="Resolve a directly listed MOEX instrument such as SBER or the current liquid futures contract for a root such as Si.")
