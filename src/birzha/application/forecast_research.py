@@ -99,6 +99,53 @@ def _optional_structure(
     }
 
 
+def _context_inventory(snapshot: MarketSnapshot) -> dict[str, Any]:
+    """Expose all Snapshot inputs as context, never as extra model votes."""
+    flow = snapshot.flow
+    profile = snapshot.volume_profile
+    return {
+        "price_timeframes": {
+            "D1": snapshot.d1.to_dict(), "H1": snapshot.h1.to_dict(),
+            "M15": snapshot.m15.to_dict(),
+        },
+        "normalized_price_and_volume_features": (
+            snapshot.normalized_features.to_dict()
+            if snapshot.normalized_features is not None else None
+        ),
+        "volume_delta_oi_futoi_vwap": {
+            "status": ("PRESENT_REQUIRES_SOURCE_TIME_ATTESTATION" if flow is not None
+                       else "UNAVAILABLE"),
+            "source": flow.source if flow is not None else None,
+            "source_quality": flow.data_quality if flow is not None else None,
+            "delta_ratio": flow.volume_delta_ratio if flow is not None else None,
+            "cumulative_delta": flow.cumulative_delta if flow is not None else None,
+            "open_interest_change": flow.algopack_oi_change if flow is not None else None,
+            "futoi_individuals": (
+                flow.individuals.to_dict() if flow is not None and flow.individuals else None
+            ),
+            "futoi_legal_entities": (
+                flow.legal_entities.to_dict() if flow is not None and flow.legal_entities else None
+            ),
+            "session_vwap": flow.session_vwap if flow is not None else None,
+            "number_of_trades": flow.number_of_trades if flow is not None else None,
+        },
+        "volume_profile": {
+            "method": profile.method if profile is not None else None,
+            "is_exact_according_to_snapshot": (
+                snapshot.normalized_features.profile_is_exact
+                if snapshot.normalized_features is not None else None
+            ),
+            "candidate_levels": (
+                {"poc": profile.poc, "val": profile.val, "vah": profile.vah}
+                if profile is not None else None
+            ),
+            "source_independently_attested": False,
+            "directional_vote": False,
+        },
+        "input_catalog_is_not_model_approval": True,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ForecastResearchService:
     """Opt-in orchestration of installed research engines on *caller-supplied* data."""
@@ -213,6 +260,7 @@ class ForecastResearchService:
             "market_state": state, "control_holding": control,
             "level_route": route, "alignment15": alignment,
             "market_structure_facts": structures,
+            "context_input_inventory": _context_inventory(snapshot),
             "factor_evidence": [
                 {"family": x.family, "status": x.status, "signed_strength": x.signed_strength,
                  "meaning": "RESEARCH_CATEGORICAL_DIRECTION_NOT_PROBABILITY" if x.signed_strength is not None
