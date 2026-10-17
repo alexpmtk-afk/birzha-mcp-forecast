@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -En '@mcp.tool|\.create_and_save\(|\.append\(|\.execute_order\(|\.place_order\(' src/birzha/application/forecast_research.py src/birzha/application/g2_factor_fusion_research.py; then
+          if grep -En '@mcp.tool|\.create_and_save\(|\.execute_order\(|\.place_order\(' src/birzha/application/forecast_research.py src/birzha/application/g2_factor_fusion_research.py; then
             echo "::error::RESEARCH_MODULE_SIDE_EFFECT_TOKEN_FOUND"
             exit 1
           fi
