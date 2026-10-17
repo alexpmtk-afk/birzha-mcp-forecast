@@ -25,6 +25,10 @@ def test_single_snapshot_wires_all_existing_engines_and_preserves_inputs():
     assert output["level_route"]["route_direction"] == "UP"
     assert output["alignment15"]["selected_decision"] == "NO_TRADE"
     assert output["candidate_comparisons"]["models"]["STATE_CONTROL_ROUTE_CONSENSUS"]["operational_decision"] == "NOT_AUTHORIZED"
+    assert set(output["context_input_inventory"]["price_timeframes"]) == {"D1", "H1", "M15"}
+    assert output["context_input_inventory"]["volume_delta_oi_futoi_vwap"]["status"] == "PRESENT_REQUIRES_SOURCE_TIME_ATTESTATION"
+    assert output["context_input_inventory"]["volume_profile"]["directional_vote"] is False
+    assert output["context_input_inventory"]["input_catalog_is_not_model_approval"] is True
     assert output["benchmark_registry"][0]["id"] == "LEGACY_V04"
     assert output["benchmark_registry"][0]["called"] is False
     assert output["benchmark_registry"][1]["id"] == "LEGACY_V06"
