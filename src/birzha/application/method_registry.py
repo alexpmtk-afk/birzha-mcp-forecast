@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-REGISTRY_VERSION = "G2_METHOD_DECISIONS_V1_20261016"
+REGISTRY_VERSION = "G2_METHOD_DECISIONS_V2_20261017"
 _STATES = frozenset({
     "HISTORICAL_BASELINE_NOT_APPROVED",
+    "ACTIVE_RESEARCH_UNVALIDATED",
     "PROHIBITED_AS_DIRECTIONAL_FEATURE",
     "CONTEXT_ONLY_DIRECTION_NOT_VALIDATED",
     "RESEARCH_CANDIDATE_UNVALIDATED",
@@ -22,26 +23,34 @@ _ENTRIES = (
     {
         "id": "FORECAST_BASELINE_V0_4",
         "name": "BIRZHA_FORECAST_BASELINE_V0_4_SCENARIOS",
-        "state": "HISTORICAL_BASELINE_NOT_APPROVED",
-        "decision": "STOP_FURTHER_DIRECTIONAL_DEVELOPMENT",
-        "reason": "In paired reconstructed research, no demonstrated numeric advantage against unchanged-price benchmark on any of three horizons.",
+        "state": "ACTIVE_RESEARCH_UNVALIDATED",
+        "decision": "CONTINUE_CONTROLLED_COMPARATIVE_TESTING",
+        "reason": "17 reconstructed outcomes did not establish an advantage; owner explicitly reinstated this frozen formula for further fair testing, not production approval.",
         "validation": "RECONSTRUCTED_2025_2026_17_OUTCOMES_NOT_INDEPENDENT_OOS",
         "source_state": "LEGACY_IN_MAIN_CODE_HOME_INSTALL_NOT_VERIFIED",
         "evidence": ["https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/231"],
         "score_mae_pp_by_sessions": {"5": 3.7704, "10": 3.3850, "20": 3.6870},
+        "research_eligible": True,
+        "live_operational_issuance_approved": False,
+        "research_parameters_frozen": True,
+        "version_source_ref": "main",
         "may_contribute_to_new_directional_model": False,
     },
     {
         "id": "FORECAST_BASELINE_V0_6",
         "name": "BIRZHA_FORECAST_BASELINE_V0_6_EVIDENCE_DECISION",
-        "state": "HISTORICAL_BASELINE_NOT_APPROVED",
-        "decision": "STOP_FURTHER_DIRECTIONAL_DEVELOPMENT",
-        "reason": "MAE improved vs V0.4 mainly via two additional NEUTRAL predictions; directional superiority unproven; flat-price comparator better at H5/H10.",
+        "state": "ACTIVE_RESEARCH_UNVALIDATED",
+        "decision": "CONTINUE_CONTROLLED_COMPARATIVE_TESTING",
+        "reason": "v0.6 neutrality changes did not establish skill; owner explicitly reinstated its exact evidence-aware branch for side-by-side research without retrospective refitting.",
         "validation": "RECONSTRUCTED_2025_2026_17_OUTCOMES_NOT_INDEPENDENT_OOS",
         "source_state": "RESEARCH_DRAFT_NOT_IN_MAIN",
         "evidence": ["https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/251",
                      "https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/253"],
         "score_mae_pp_by_sessions": {"5": 3.7180, "10": 3.2797, "20": 3.3265},
+        "research_eligible": True,
+        "live_operational_issuance_approved": False,
+        "research_parameters_frozen": True,
+        "version_source_ref": "codex/g2-baseline-decision-contract-20261010",
         "may_contribute_to_new_directional_model": False,
     },
     {
@@ -148,7 +157,7 @@ def read_method_decisions(method_id: str | None = None) -> dict[str, object]:
         selected = list(_ENTRIES)
     return deepcopy({
         "schema": REGISTRY_VERSION,
-        "decision_date": "2026-10-16",
+        "decision_date": "2026-10-17",
         "scope": "METHOD_STATUS_AND_RESEARCH_EVIDENCE_ONLY",
         "canonical_source": "src/birzha/application/method_registry.py",
         "evaluated_markets": ["SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI"],
@@ -159,8 +168,11 @@ def read_method_decisions(method_id: str | None = None) -> dict[str, object]:
         "strict_historical_as_known_at_T0_proven": False,
         "prospective_independent_validation_proven": False,
         "approved_predictive_methods": [],
+        "active_research_method_ids": ["FORECAST_BASELINE_V0_4", "FORECAST_BASELINE_V0_6"],
+        "owner_decision": "2026-10-17_REOPEN_V04_V06_FOR_TESTING_NOT_DEPLOY",
         "runtime_legacy_endpoints_not_disabled": True,
         "home_installation_not_verified": True,
         "records_and_ohlcv_mutated": False,
         "items": selected,
     })
+
