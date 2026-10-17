@@ -176,3 +176,8 @@ PYTHONPATH="src:." python -m scripts.g2_structure_pilot_plan --output g2_structu
 Старый [PR #254 Real MOEX Validation run 38955328330](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38955328330) **FAIL**: UpstreamRateLimited, HTTP 503 на разрешении инструмента, файла результата нет. Новый [PR #259 Real MOEX Validation run 38967674462](https://github.com/alexpmtk-afk/birzha-mcp-forecast/actions/runs/38967674462) **PASS** в собственной области — рабочий ограниченный сетевой вызов/выгрузка результата; это **не** независимое доказательство надёжности Market Structure или будущей точности. Не делались ручные сетевые прогоны «для зелёной отметки». Офлайн CI, security, preflight для текущих изменений — проверяются отдельно по HEAD #259.
 
 **Граница действий:** GitHub Draft #259 и исходные Google Docs/Карта; merge, install, restart, HOME, секреты, production database, Forecast/Outcome records, protected holdout и торговые действия не затрагивались.
+
+
+### Исправление статуса методов 17.10.2026 (после coord-20261017-02)
+
+Владелец **отменил** решение не продолжать исследование прогнозов v0.4/v0.6. Теперь обе точные версии восстановлены в активном **контролируемом парном тестировании** (v0.4 main, v0.6 отдельная исходная ветка). Это не новая разрешённая торговая модель, не установка HOME и не изменение замороженных исторических прогнозов. Полная запись — [Draft PR #255](https://github.com/alexpmtk-afk/birzha-mcp-forecast/pull/255), [карточка сравнения](https://github.com/alexpmtk-afk/birzha-mcp-forecast/blob/chatgpt/g2-method-disposition-registry-20261016/docs/G2_REINSTATED_V04_V06_COMPARISON_20261017.md). Настоящий #259 продолжает отдельное исследование Market Structure V2 без переписывания его плана.
