@@ -94,7 +94,7 @@ def test_no_naive_or_receipt_before_event():
     with pytest.raises(ValueError, match="naive"):
         run(item("market_state", 0.8, observed="2026-10-17T11:05:00"))
     with pytest.raises(ValueError, match="received before"):
-        run(item("market_state", 0.8, observed="2026-10-17T10:05:00"))
+        run(item("market_state", 0.8, observed="2026-10-17T10:05:00Z"))
 
 
 def test_reconstructed_missing_receipt_does_not_become_strict():
