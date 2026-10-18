@@ -102,6 +102,8 @@ def project_source(bundle: dict, timeframe: str, existing: list[list[object]]) -
                   "source_kind": "STORED_DUCKDB", "caveat": "PIT_NOT_ATTESTED;SESSION_UNVERIFIED;SOURCE_FLAGS_PRESERVED;PROVIDER_CLOCK_EUROPE_MOSCOW",
                   "source_capture_label": "stored_observed_at=" + str(candle.get("observed_at") or "UNKNOWN"),
                   "source_file_id": ""}
+        from birzha.application.data_standard import semantic_metadata
+        source.update(semantic_metadata(bundle['symbol'], timeframe, candle))
         unknown = set(header) - set(source)
         if unknown:
             raise MirrorConflict("source projection cannot populate unknown destination columns")

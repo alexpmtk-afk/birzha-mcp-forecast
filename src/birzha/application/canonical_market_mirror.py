@@ -112,6 +112,10 @@ def validate_identity(rows: list[list[object]], symbol: str, timeframe: str, *, 
         valid = bool(re.fullmatch(patterns[symbol], str(code))) if symbol in patterns else code == symbol
         if not valid:
             raise MirrorConflict("wrong instrument / exact contract required")
+        if "secid" in header and row[header.index("secid")] != code:
+            raise MirrorConflict("SECID differs from exact contract")
+        if "timeframe" in header and row[header.index("timeframe")] != timeframe:
+            raise MirrorConflict("timeframe metadata differs from destination")
         key = row[header.index("record_key")]
         parts = key.split("|")
         start_cell = row[header.index("bar_start_time")]
