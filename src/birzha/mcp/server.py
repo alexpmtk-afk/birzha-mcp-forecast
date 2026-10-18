@@ -109,6 +109,7 @@ if settings.native_mirror_enabled:
         _historical_store,
         NativeCanonicalSheets(GoogleRefreshToken(settings.native_mirror_credentials_path)),
         settings.source_sha,
+        flow_source=_historical_flow_store,
     )
 
 
@@ -122,12 +123,12 @@ def mirror_status() -> dict[str, object]:
             "google_access_verified":False,"note":"Local settings are not a live Google authorisation check"}
 
 
-@mcp.tool(name="mirror.sync", description="Read already stored data and reconcile one fixed canonical Google workbook. Dry-run by default; no MOEX requests or source database writes.")
-def mirror_sync(symbol: str, from_date: str, till_date: str, dry_run: bool = True) -> dict[str, object]:
+@mcp.tool(name="mirror.sync", description="Read already stored data and reconcile one fixed canonical Google workbook. Dry-run by default; include_derived opt-in adds versioned indicators and stored partial flow/positions. No MOEX requests or source database writes.")
+def mirror_sync(symbol: str, from_date: str, till_date: str, dry_run: bool = True, include_derived: bool = False) -> dict[str, object]:
     if _native_mirror is None:
         return {"status":"BLOCKED","reason":"background Google mirror is not configured","written":False}
     try:
-        return _native_mirror.sync(symbol=symbol,from_date=from_date,till_date=till_date,dry_run=dry_run,exclusive_workbook_owner=settings.native_mirror_sole_writer)
+        return _native_mirror.sync(symbol=symbol,from_date=from_date,till_date=till_date,dry_run=dry_run,exclusive_workbook_owner=settings.native_mirror_sole_writer,include_derived=include_derived)
     except Exception as exc:
         from birzha.application.canonical_market_mirror import MirrorConflict
         return {"status":"ERROR","symbol":symbol,"error_type":type(exc).__name__,
@@ -135,14 +136,14 @@ def mirror_sync(symbol: str, from_date: str, till_date: str, dry_run: bool = Tru
                 "written":"UNKNOWN_RECONCILE_BEFORE_RETRY" if not dry_run else False}
 
 
-@mcp.tool(name="mirror.sync_core", description="Mirror already stored HOME candles and service evidence into fixed canonical Google books. Dry-run by default; never contacts MOEX or changes source history, Forecast or Outcome.")
-def mirror_sync_core(from_date: str, till_date: str, dry_run: bool = True) -> dict[str, object]:
+@mcp.tool(name="mirror.sync_core", description="Mirror already stored HOME candles and service evidence into fixed canonical Google books. Dry-run by default; optional include_derived reconciles versioned derived tabs. Never contacts MOEX or changes source history, Forecast or Outcome.")
+def mirror_sync_core(from_date: str, till_date: str, dry_run: bool = True, include_derived: bool = False) -> dict[str, object]:
     if _native_mirror is None:
         return {"status":"BLOCKED","reason":"background Google mirror is not configured","written":False}
     results=[]
     for symbol in CORE_HISTORY_SYMBOLS:
         try:
-            result=_native_mirror.sync(symbol=symbol,from_date=from_date,till_date=till_date,dry_run=dry_run,exclusive_workbook_owner=settings.native_mirror_sole_writer)
+            result=_native_mirror.sync(symbol=symbol,from_date=from_date,till_date=till_date,dry_run=dry_run,exclusive_workbook_owner=settings.native_mirror_sole_writer,include_derived=include_derived)
             results.append(result)
         except Exception as exc:
             results.append({"symbol":symbol,"status":"ERROR","error_type":type(exc).__name__})

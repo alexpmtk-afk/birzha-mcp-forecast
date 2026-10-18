@@ -138,6 +138,36 @@ class DuckDBHistoricalFlowStore:
             """, materialized)
         return len(materialized)
 
+    def export_mirror_bundle(self, symbol: str, from_date: str, till_date: str) -> list[dict]:
+        """Read selected stored observations through this existing store/lock only."""
+        from datetime import date
+        canonical={"SBER":"SBER","SI":"Si","BR":"BR","GOLD":"GOLD","IMOEX":"IMOEX","RTSI":"RTSI"}.get(symbol.upper())
+        if canonical is None: raise ValueError("unsupported mirror symbol")
+        first,last=map(date.fromisoformat,(from_date,till_date))
+        if last<first or (last-first).days>366: raise ValueError("bounded mirror date range required")
+        if canonical in {"IMOEX","RTSI"}: return []
+        root={"Si":"Si","BR":"BR","GOLD":"GD"}.get(canonical)
+        pattern=(root+r"[FGHJKMNQUVXZ][0-9]{1,2}") if root else "SBER"
+        futoi_keys={"Si":["Si"],"BR":["BR"],"GOLD":["GOLD","GD"]}.get(canonical,[])
+        with self._lock:
+            rows=self._connection.execute("""
+                SELECT dataset,key_symbol,row_key,trade_date,payload_json,source,
+                       available_at,available_at_confidence,observed_at,revision
+                FROM historical_flow_rows
+                WHERE trade_date>=? AND trade_date<=? AND
+                  ((dataset IN ('TRADESTATS','PUBLIC_TRADES_RAW') AND regexp_full_match(upper(key_symbol),?))
+                   OR (dataset='FUTOI' AND key_symbol IN (SELECT unnest(?))))
+                ORDER BY dataset,key_symbol,trade_date,row_key LIMIT 100001
+            """,[first.isoformat(),last.isoformat(),pattern.upper(),futoi_keys]).fetchall()
+        if len(rows)>100000: raise ValueError("flow mirror source exceeds bounded read; narrow dates")
+        names=['dataset','key_symbol','row_key','trade_date','payload','source','available_at','available_at_confidence','observed_at','revision']
+        result=[]
+        for values in rows:
+            row=dict(zip(names,values));row['payload']=json.loads(row['payload'])
+            if not isinstance(row['payload'],dict): raise ValueError("invalid stored flow payload")
+            result.append(row)
+        return result
+
     def read_rows(self, dataset: str, key: str, from_date: str, till_date: str) -> list[dict[str, object]]:
         with self._lock:
             rows=self._connection.execute("""
