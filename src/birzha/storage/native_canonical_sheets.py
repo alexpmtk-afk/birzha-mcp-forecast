@@ -131,8 +131,9 @@ class NativeCanonicalSheets:
         if len(json_module.dumps(body, ensure_ascii=False, allow_nan=False).encode()) > 1_000_000:
             raise MirrorConflict("append payload exceeds 1 MB; reduce chunk size")
         self._request("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}:batchUpdate", json=body)
-        # Refresh grid bounds: appendCells may expand the allocated sheet.
-        self.validate_target(symbol, timeframe)
+        # Both candle and service appends may expand the allocated sheet.
+        # Keep the public candle-only validator strict; refresh the named target.
+        self._validate_named_target(symbol, timeframe)
 
     def validate_service_target(self, symbol: str, sheet: str) -> None:
         if sheet not in {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
