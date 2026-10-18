@@ -14,9 +14,11 @@ from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 from birzha.storage.native_canonical_sheets import NativeCanonicalSheets
 
 
-def api():
+def api(derived=False):
     target = INSTRUMENT_TARGETS["SBER"]
     names = ["D1", "H1", "M15", "SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"]
+    if derived:
+        names += ["INDICATORS", "FLOW", "POSITIONS"]
     ids = {name: index + 1 for index, name in enumerate(names)}
     state = {"rows": {name: [] for name in names}, "posts": [], "lose_service_response": False}
     state["rows"]["SYNC_STATUS"] = [["key", "value"], ["receipt", "keep"]]
@@ -54,7 +56,7 @@ def api():
             return httpx.Response(200, json={"values": state["rows"][name]})
         return httpx.Response(200, json={"spreadsheetId": target.spreadsheet_id, "sheets": [
             {"properties": {"sheetId": ids[name], "title": name, "sheetType": "GRID",
-                "gridProperties": {"rowCount": 100, "columnCount": 26}}} for name in names]})
+                "gridProperties": {"rowCount": 100, "columnCount": 40 if name in {"INDICATORS","FLOW","POSITIONS"} else 26}}} for name in names]})
 
     return NativeCanonicalSheets(lambda: "test-token", transport=httpx.MockTransport(handler)), state
 

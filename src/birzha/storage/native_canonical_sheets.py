@@ -62,7 +62,7 @@ class NativeCanonicalSheets:
 
     def _validate_named_target(self, symbol: str, timeframe: str) -> None:
         symbol, target = GoogleSheetsBridge.target_for_symbol(symbol)
-        if timeframe not in TIMEFRAMES | {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
+        if timeframe not in TIMEFRAMES | {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS", "INDICATORS", "FLOW", "POSITIONS"}:
             raise MirrorConflict("unsupported canonical sheet")
         meta = self._request("GET", f"https://www.googleapis.com/drive/v3/files/{target.spreadsheet_id}",
                              params={"fields": "id,name,mimeType,parents,trashed"})
@@ -134,6 +134,11 @@ class NativeCanonicalSheets:
         # Both candle and service appends may expand the allocated sheet.
         # Keep the public candle-only validator strict; refresh the named target.
         self._validate_named_target(symbol, timeframe)
+
+    def validate_derived_target(self, symbol: str, sheet: str) -> None:
+        if sheet not in {"INDICATORS", "FLOW", "POSITIONS"}:
+            raise MirrorConflict("unsupported derived sheet")
+        self._validate_named_target(symbol, sheet)
 
     def validate_service_target(self, symbol: str, sheet: str) -> None:
         if sheet not in {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
