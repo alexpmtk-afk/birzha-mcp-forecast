@@ -89,7 +89,11 @@ def scan_m1_confirmed_swings(
         if previous_end is not None and bar.start < previous_end:
             raise ValueError(f"out-of-order or overlapping bars at index {n}")
         previous_end = bar.end
-        if type(bar.is_complete) is not bool:\n            raise ValueError(f"invalid completion flag at index {n}")\n        if bar.source_ref is not None and not isinstance(bar.source_ref, str):\n            raise ValueError(f"invalid source reference at index {n}")\n        if bar.available_at is not None and (
+        if type(bar.is_complete) is not bool:
+            raise ValueError(f"invalid completion flag at index {n}")
+        if bar.source_ref is not None and not isinstance(bar.source_ref, str):
+            raise ValueError(f"invalid source reference at index {n}")
+        if bar.available_at is not None and (
             not _aware(bar.available_at) or bar.available_at < bar.end
         ):
             raise ValueError(f"invalid source availability time at index {n}")
