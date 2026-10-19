@@ -21,6 +21,7 @@ from birzha.application.historical_data import HistoricalDataService
 from birzha.application.journal import ForecastJournalService
 from birzha.application.market_data import MarketDataService
 from birzha.application.market_analysis import MarketAnalysisService
+from birzha.application.model_catalog import model_catalog
 from birzha.application.model_lab import ModelAcceptanceService
 from birzha.application.method_validation import MethodWalkForwardValidator
 from birzha.application.outcome import OutcomeService
@@ -149,6 +150,11 @@ def mirror_sync_core(from_date: str, till_date: str, dry_run: bool = True) -> di
     success="MIRROR_DRY_RUN_READY" if dry_run else "MIRROR_SYNC_PASS"
     passed=sum(x.get("status")==success for x in results)
     return {"status":"PASS" if passed==len(results) else "PARTIAL","dry_run":dry_run,"requested":len(results),"passed":passed,"failed":len(results)-passed,"results":results}
+
+
+@mcp.tool(name="forecast.model_catalog", description="Read authoritative M1–M4 display numbering and paused/design model statuses; does not issue a forecast, alter records or enable models.", annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False))
+def forecast_model_catalog() -> dict[str, object]:
+    return model_catalog()
 
 
 @mcp.tool(name="system.version", description="Return BIRZHA MCP service version metadata.")
