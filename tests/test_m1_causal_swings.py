@@ -174,3 +174,10 @@ def test_short_series_requests_warmup_not_a_fake_pivot():
     assert result["swings"] == []
     assert result["total_complete_windows"] == 0
     assert result["forecast_allowed"] is False
+
+
+def test_invalid_source_reference_type_rejected():
+    bars = _bars()
+    bars[3] = replace(bars[3], source_ref=123)
+    with pytest.raises(ValueError, match="source reference"):
+        _run(bars)
