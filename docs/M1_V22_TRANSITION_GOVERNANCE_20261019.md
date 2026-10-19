@@ -64,3 +64,13 @@ The deterministic `SplitPlan` is an **index-level research audit only**. An auth
 - No permission to use sealed OOS, HOME or production writes.
 
 Next: independent review of these synthetic contracts, then source-grounded finite candidate `parameter_manifest` design and raw-bar causal primitive implementation, with tests against the unchanged governance boundaries. Do not conflate a passing diagnostic preflight with genuine model activation.
+
+## Exact isolated verification command
+
+Use Python 3.12+ in a clean checkout of this exact PR head, with project development dependencies installed:
+
+```sh
+python -m pytest -q tests/test_m1_parameter_manifest.py tests/test_m1_mandatory_chain.py tests/test_m1_research_governance.py
+```
+
+This exercise checks only preflight contracts and synthetic evidence. CI success alone must **not** be reported as historical replay, model selection, OOS quality or HOME acceptance. Record the exact head SHA and GitHub check results separately.
