@@ -33,6 +33,7 @@ class NamedSheetSnapshot:
     schema: NamedSchema
     rows: tuple[tuple[object, ...], ...]
     sheet_id: int
+    physical_rows: tuple[int, ...]
 
     def records(self) -> tuple[dict[str, object], ...]:
         return tuple(read_named_row(self.schema, row) for row in self.rows)
@@ -115,17 +116,19 @@ class M1NamedGoogleSheets:
         if len(schema.fields) > col_count:
             raise SchemaError("SCHEMA_ERROR: header exceeds allocated grid")
         rows: list[tuple[object, ...]] = []
+        physical_rows: list[int] = []
         for first in range(2, row_count + 1, 2000):
             last_row = min(first + 1999, row_count)
             block = self._get_values(f"{quoted}!A{first}:{last}{last_row}")
             if len(block) > last_row-first+1:
                 raise SchemaError("SCHEMA_ERROR: oversized read response")
-            for row in block:
+            for offset, row in enumerate(block):
                 parsed = read_named_row(schema, row)
                 if any(parsed.values()):
                     rows.append(tuple(parsed[field] for field in schema.fields))
+                    physical_rows.append(first + offset - 1)
             # A Google value read may omit empty trailing rows; do not synthesize.
-        return NamedSheetSnapshot(schema, tuple(rows), sheet_id)
+        return NamedSheetSnapshot(schema, tuple(rows), sheet_id, tuple(physical_rows))
 
     def patch_test_copy(
         self, patches: Mapping[str, Mapping[str, object]], *, isolated_copy_approved: bool,
@@ -157,6 +160,7 @@ class M1NamedGoogleSheets:
             if not isinstance(fields, Mapping) or not fields or set(fields)-TEST_PATCH_FIELDS:
                 raise SchemaError("SCHEMA_ERROR: only explicitly allowed status fields")
             idx, prior = positions[key]
+            physical_row = before.physical_rows[idx-1]
             for field, value in fields.items():
                 if not isinstance(value, str) or not value or value.startswith("=") or len(value)>512:
                     raise SchemaError("SCHEMA_ERROR: only bounded literal status")
@@ -166,7 +170,7 @@ class M1NamedGoogleSheets:
                     continue
                 col = before.schema.position(field)
                 requests.append({"updateCells": {
-                    "start": {"sheetId": before.sheet_id, "rowIndex": idx, "columnIndex": col},
+                    "start": {"sheetId": before.sheet_id, "rowIndex": physical_row, "columnIndex": col},
                     "rows": [{"values": [{"userEnteredValue": {"stringValue": value}}]}],
                     "fields": "userEnteredValue",
                 }})
