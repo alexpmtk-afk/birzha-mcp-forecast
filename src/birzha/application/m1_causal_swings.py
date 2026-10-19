@@ -112,7 +112,7 @@ def scan_m1_confirmed_swings(
             or bar.end > t0
             or bar.available_at is None
             or bar.available_at > t0
-            or not bar.source_ref
+            or not bar.source_ref or not bar.source_ref.strip()
             for bar in window
         ):
             blocked_windows += 1
