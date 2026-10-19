@@ -6,7 +6,7 @@ import re
 import httpx
 import pytest
 
-from birzha.application.m1_named_fields import SchemaError
+from birzha.application.m1_named_fields import SchemaError, INDICATOR_FIELDS
 from birzha.storage.google_sheets_bridge import INSTRUMENT_TARGETS
 from birzha.storage.native_canonical_sheets import NativeCanonicalSheets
 from birzha.storage.m1_named_google_sheets import M1NamedGoogleSheets
@@ -20,10 +20,11 @@ HEADERS = [
 
 
 def mock_api(*, canonical=False, shuffled=False, blank_row=False, duplicate=False,
-             partial=False, lost_ack=False, conflicting_read=False, formula=False):
+             partial=False, lost_ack=False, conflicting_read=False, formula=False, full_schema=False):
     title = ("MOEX_HISTDATA_SBER_MCP_CANONICAL" if canonical else "M1 TEST COPY")
     book_id = (INSTRUMENT_TARGETS["SBER"].spreadsheet_id if canonical else "TEST_COPY_NOT_CANONICAL")
-    names = list(reversed(HEADERS)) if shuffled else list(HEADERS)
+    base = sorted(INDICATOR_FIELDS) if full_schema else HEADERS
+    names = list(reversed(base)) if shuffled else list(base)
     if duplicate:
         names.append("record_key")
     def record(k, status):
@@ -41,7 +42,7 @@ def mock_api(*, canonical=False, shuffled=False, blank_row=False, duplicate=Fals
     data = [names, record("A","PENDING"), record("B","PENDING")]
     if blank_row:
         data = [names, record("A","PENDING"), [], record("B","PENDING")]
-    state = {"rows":data,"posts":[], "reads":0}
+    state = {"rows":data,"posts":[], "reads":0,"addresses":[]}
     def handler(request):
         url = str(request.url)
         path = unquote(request.url.path)
@@ -54,6 +55,7 @@ def mock_api(*, canonical=False, shuffled=False, blank_row=False, duplicate=Fals
                 "gridProperties":{"rowCount":max(8,len(state["rows"])+1),"columnCount":len(names)}}}]})
         if request.method == "GET" and "/values/" in path:
             address=path.split("/values/",1)[1]
+            state["addresses"].append(address)
             match=re.fullmatch(r"'D1_INDICATORS'!([A-Z]+)(\d+):([A-Z]+)(\d+)",address)
             assert match, address
             start,end=int(match.group(2)),int(match.group(4))
@@ -208,3 +210,25 @@ def test_partial_requests_never_change_raw_source():
     client.patch_test_copy({"A":{"indicator_status":"VERIFIED"}},isolated_copy_approved=True)
     assert state["rows"][1][state["rows"][0].index("atr_14_wilder")] == before[1][before[0].index("atr_14_wilder")]
     assert state["rows"][2]==before[2]
+
+
+def test_real_54_column_schema_read_and_reordered_patch():
+    client,state=mock_api(full_schema=True,shuffled=True)
+    read=client.read()
+    assert len(read.schema.fields)==54
+    assert read.records()[0]["record_key"]=="A"
+    assert any("BB1" in addr for addr in state["addresses"])
+    result=client.patch_test_copy({"B":{"calendar_status":"UNVERIFIED"}},
+                                  isolated_copy_approved=True)
+    assert result["status"]=="TEST_COPY_BACKREAD_PASS"
+    header=state["rows"][0]
+    assert state["rows"][2][header.index("calendar_status")]=="UNVERIFIED"
+    assert state["rows"][2][header.index("atr_14_wilder")]==5.0
+    assert state["rows"][2][header.index("record_key")]=="B"
+
+
+def test_exact_pit_fields_not_synthesized_from_blank_cells():
+    client,_=mock_api(full_schema=True)
+    records=client.read().records()
+    assert records[0]["available_at"]==""
+    assert records[0]["atr_algorithm_parameters_sha256"]==""
