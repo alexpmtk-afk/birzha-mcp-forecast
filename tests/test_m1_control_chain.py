@@ -289,3 +289,65 @@ def test_t0_must_be_timezone_aware():
 
 def test_repeated_input_is_deterministic():
     assert _run() == _run()
+
+
+
+from birzha.application.m1_causal_anchor import (
+    AnchorParameters, scan_m1_consolidation_anchors,
+)
+from birzha.application.m1_control_chain import bind_m1_research_anchor
+
+
+def _algorithmic_anchor_result():
+    history = [_bar(i - 35, 101, 99, 100) for i in range(20)]
+    history += [
+        _bar(-15, 105, 99, 104),
+        _bar(-14, 106, 103, 105),
+    ]
+    return scan_m1_consolidation_anchors(
+        history, secid="SBER", timeframe="H1", t0=history[-1].available_at,
+        parameters=AnchorParameters(
+            consolidation_windows=(5, 7), er_balance=0.25,
+            range_balance_atr=2.0, breakout_buffer_atr=0.5,
+            confirm_bars=2, reclaim_buffer_atr=0.5,
+        ),
+    )
+
+
+def test_control_binds_actual_causal_anchor_scanner_output():
+    source = _algorithmic_anchor_result()
+    assert source["status"] == "CONFIRMED_RESEARCH_ONLY"
+    binding = bind_m1_research_anchor(source)
+    assert binding.direction == "UP"
+    assert binding.available_at < _bars()[0].start
+    assert binding.evidence_refs == ("synthetic:-15", "synthetic:-14")
+    r = _run(anchor=binding)
+    assert r["control_strength"] == "RETESTED"
+    assert r["anchor_evidence_refs"] == binding.evidence_refs
+    assert r["source_receipts_attested"] is False
+    assert not r["forecast_allowed"]
+
+
+def test_research_anchor_adapter_refuses_pending_anchor():
+    source = _algorithmic_anchor_result()
+    source["status"] = "PENDING"
+    with pytest.raises(ValueError, match="confirmed research"):
+        bind_m1_research_anchor(source)
+
+
+def test_research_anchor_adapter_refuses_missing_causal_refs():
+    source = _algorithmic_anchor_result()
+    candidate = dict(source["confirmed_anchor"])
+    candidate["confirmation_source_refs"] = ()
+    source["confirmed_anchor"] = candidate
+    with pytest.raises(ValueError, match="references"):
+        bind_m1_research_anchor(source)
+
+
+def test_research_anchor_adapter_rejects_future_confirmation_times():
+    source = _algorithmic_anchor_result()
+    candidate = dict(source["confirmed_anchor"])
+    candidate["available_at"] = candidate["confirmed_at"] - timedelta(hours=1)
+    source["confirmed_anchor"] = candidate
+    with pytest.raises(ValueError, match="causal fields"):
+        bind_m1_research_anchor(source)
