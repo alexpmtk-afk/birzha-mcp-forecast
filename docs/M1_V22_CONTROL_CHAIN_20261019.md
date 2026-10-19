@@ -31,3 +31,10 @@ Not implemented: determining a valid D1 regime, official level registry, externa
 Run `python -m pytest -q tests/test_m1_control_chain.py` then full GitHub repository CI. Synthetic cases test direction mirror, unique stage chronology, pending INITIAL, strict RETEST/HOLD, invalidation and re-probe, expiry, exact level/contract, delayed receipt, incomplete bars, future bar invariance, malformed thresholds and deterministic repeatability. Synthetic parameter numbers are **not accepted model parameters**.
 
 Next required step: independently audit strict stage counting, then bind the module to verified anchor/level events from the causal data layer, and only later register a separately versioned M1 research read-only surface. Draft PRs do not authorize merge/install.
+
+
+## Actual algorithm-to-algorithm binding
+
+`bind_m1_research_anchor()` only accepts a `CONFIRMED_RESEARCH_ONLY` result from the prior `scan_m1_consolidation_anchors()` contract. It carries direction, original event/confirmation/availability clocks and the **full breakout confirmation source-ref tuple**, rather than allowing a bare direction flag to stand in for the anchor. It rejects PENDING anchors, missing source chain, nonsensical causal timing and wrong model result. A synthetic integration test now executes **both** independent algorithms sequentially (anchor -> binding -> control).
+
+The level zone is still an independently supplied, pre-confirmed FrozenLevel. This intentionally avoids silently promoting the prior D1 consolidation band into an H1/M15 level or claiming cross-timeframe calendar proof. The adapter is type/causality enforcement, not an authenticating receipt verifier; `source_receipts_attested=False` and `forecast_allowed=False` remain invariant.
