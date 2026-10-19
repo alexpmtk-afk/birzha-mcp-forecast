@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from birzha.application.m1_causal_swings import CausalBar
 
@@ -23,6 +23,7 @@ class AnchorBinding:
     confirmed_at: datetime
     available_at: datetime
     source_ref: str
+    evidence_refs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,7 @@ def scan_m1_control_chain(
         "stage": "SEARCH_PROBE",
         "level_id": level.level_id,
         "anchor_source_ref": anchor.source_ref,
+        "anchor_evidence_refs": anchor.evidence_refs,
         "anchor_time": anchor.confirmed_at,
         "secid": secid, "timeframe": timeframe, "t0": t0,
         "event_times": {},
@@ -235,6 +237,8 @@ def _validate_contract(
         raise ValueError("frozen anchor and level required")
     if anchor.secid != secid or anchor.timeframe not in ("D1", "H1", "M15"):
         raise ValueError("anchor exact SECID/timeframe mismatch")
+    if any(not isinstance(r, str) or not r.strip() for r in anchor.evidence_refs):
+        raise ValueError("anchor: invalid chain provenance")
     if anchor.direction != ("UP" if side == "BUYERS" else "DOWN"):
         raise ValueError("anchor direction contradicts control side")
     if level.secid != secid or level.timeframe != timeframe:
@@ -308,3 +312,41 @@ def _finite(v: object) -> bool:
         return math.isfinite(float(v))
     except (OverflowError, TypeError, ValueError):
         return False
+
+
+
+def bind_m1_research_anchor(result: Mapping[str, object]) -> AnchorBinding:
+    """Convert a CONFIRMED anchor scanner result to a research-only binding.
+
+    This strictly maps immutable event/provenance fields from the isolated
+    upstream algorithm; it does NOT attest raw MOEX receipts or provide a
+    valid H1/M15 frozen level. Level verification remains independent.
+    """
+    if not isinstance(result, Mapping) or result.get("model_id") != "M1_GPT_STRUCTURE_CONTROL":
+        raise ValueError("M1 anchor research result required")
+    if result.get("status") != "CONFIRMED_RESEARCH_ONLY" or result.get("forecast_allowed") is not False:
+        raise ValueError("only non-executable confirmed research anchors accepted")
+    candidate = result.get("confirmed_anchor")
+    if not isinstance(candidate, Mapping):
+        raise ValueError("anchor result missing confirmed candidate")
+    refs = candidate.get("confirmation_source_refs")
+    if (not isinstance(refs, (tuple, list)) or not refs or
+            any(not isinstance(x, str) or not x.strip() for x in refs)):
+        raise ValueError("anchor missing evidence chain references")
+    binding = AnchorBinding(
+        secid=result.get("secid"), timeframe=result.get("timeframe"),
+        direction=candidate.get("direction"),
+        event_time=candidate.get("event_time"),
+        confirmed_at=candidate.get("confirmed_at"),
+        available_at=candidate.get("available_at"),
+        source_ref=refs[-1], evidence_refs=tuple(refs),
+    )
+    # A binding cannot pass _validate_contract without these causal facts.
+    if (not isinstance(binding.secid, str) or not binding.secid.strip()
+            or binding.timeframe not in ("D1", "H1", "M15")
+            or binding.direction not in ("UP", "DOWN")
+            or not all(_aware(t) for t in (
+                binding.event_time, binding.confirmed_at, binding.available_at))
+            or not binding.event_time <= binding.confirmed_at <= binding.available_at):
+        raise ValueError("anchor scanner result has invalid causal fields")
+    return binding
