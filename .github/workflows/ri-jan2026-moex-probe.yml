@@ -1,0 +1,33 @@
+name: RI January 2026 MOEX source probe (isolated)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/ri-jan2026-moex-probe.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify official MOEX historical candles (single completed day)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, urllib.parse, urllib.request, urllib.error
+          base="https://iss.moex.com/iss/engines/futures/markets/forts/boards/rfud/securities/RIH6/candles.json"
+          for interval in (24,60,1):
+              params=urllib.parse.urlencode({"from":"2026-01-12","till":"2026-01-12","interval":interval,"start":0})
+              req=urllib.request.Request(base+"?"+params,headers={"User-Agent":"Birzha-research-readonly/1.0","Accept":"application/json"})
+              try:
+                  with urllib.request.urlopen(req,timeout=25) as resp:
+                      payload=resp.read(3000000)
+                      obj=json.loads(payload)
+                      block=obj.get("candles",{})
+                      print("RI_PROBE="+json.dumps({"interval":interval,"status":resp.status,"url":req.full_url,"columns":block.get("columns"),"rows":len(block.get("data",[])),"sample":block.get("data",[])[:2]},ensure_ascii=False,separators=(",",":")),flush=True)
+              except Exception as exc:
+                  print("RI_PROBE_ERROR="+json.dumps({"interval":interval,"error":str(exc)[:500]},ensure_ascii=False),flush=True)
+                  raise
+          PY
