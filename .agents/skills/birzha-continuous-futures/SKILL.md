@@ -26,8 +26,9 @@ Do not apply to an exact SECID's ordinary **session concatenation**; use the exi
 3. Log switch basis/ratio, decision session, effective trade session and exact provenance. Do not recompute this schedule separately for D1/H1/M15.
 4. Derive requested coordinates **on demand** from immutable exact-contract RAW and **versioned event ledger**; no overwriting accepted source candles.
 5. Profile/VWAP/Delta/OI use exact source contract. Never invent traded volume at price from M1 OHLCV.
-6. If any audit gate fails, return `PARTIAL` or `BLOCKED`, not `PASS`, and give the exact missing evidence; never silently fill missing M15 minutes.
-7. Run the seven acceptance gates listed in the proposed canonical document before suggesting Forecast admission.
+6. Treat interval finality (`completed`), 15-minute source density (`DENSE_15_OBSERVED` vs `SPARSE_M1_UNKNOWN_GAPS`), and PIT availability as **three independent properties**. Retain every observed M1 and its volume; do not invent missing trades or silently discard sparse M15. Native H1 end timestamp shorter than one hour is **not** by itself proof of incomplete H1. Check source OHLCV against M1, and forbid Model №3 admission without a separate input-quality gate.
+7. If any audit gate fails, return `PARTIAL` or `BLOCKED`, not `PASS`, and give the exact missing evidence; never silently fill missing M15 minutes.
+8. Run the seven acceptance gates listed in the proposed canonical document before suggesting Forecast admission.
 
 ## Output
 Return: scope and explicit environment, source manifest/SHAs, exact contract timeline, decisions/effective dates, numerical coordinate checks, D1/H1/M15/session identity, quality exclusions, PIT status, report/PR refs and outstanding gates.
