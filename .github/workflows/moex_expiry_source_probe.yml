@@ -1,0 +1,20 @@
+name: MOEX expiry source probe research only
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - research/inspect_moex_expiry.py
+      - .github/workflows/moex_expiry_source_probe.yml
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Inspect public expired-contract expiry fields only
+        run: python research/inspect_moex_expiry.py
