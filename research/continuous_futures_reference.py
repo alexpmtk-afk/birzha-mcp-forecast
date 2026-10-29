@@ -36,7 +36,7 @@ def _require_available(data: Mapping[str, object], prev: str, secid: str,
     """Require real causal metadata; a guessed publication time never passes."""
     if data.get("is_complete") is not True:
         raise EvidenceError(f"Unfinished prior D1: {prev}/{secid}")
-    if data.get("available_at_confidence") != "VERIFIED":
+    if data.get("available_at_confidence") != "EXACT":
         raise EvidenceError(f"Historical availability unverified: {prev}/{secid}")
     publication = data.get("published_at")
     if publication is None:
