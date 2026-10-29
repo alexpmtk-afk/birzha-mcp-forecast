@@ -56,7 +56,7 @@ The caller **must declare** the purpose/coordinate and `T0`; refuse ambiguous re
 - **M1 OHLCV cannot reconstruct exact traded volume at each price or true aggressor Delta.** Use appropriately qualified trades / order-flow provider for exact volume-by-price or Delta; otherwise mark `UNAVAILABLE`.
 - M15 source density is **not** the same as absence of source trades. Store `observed_m1` (1–15) and `quality` separately. `SPARSE_M1_H1_MATCHED` means OHLCV aggregated from actual recorded M1 and independently reconciled with native H1; it does **not** prove omitted clock minutes contain no trades. Do not fabricate transactions, forward-fill RAW or silently pass a sparse interval into a strict-only model interface.
 - Never discard a source-valid M1 observation only because its 15-min bucket has fewer than 15 minute candles; preserve in the RAW archive and a separately labelled research M15 view. An empty time bucket receives no synthetic candle.
-- Native nonstandard H1 remain RAW even when their nominal duration differs; end-time and trade session must remain distinct from a guessed full clock hour.
+- Native H1 with non-nominal source end must remain RAW, independently of `is_complete`. **Across RI Jan–Apr 402/1,772 native H1 have non-nominal source duration and 163,192 native volume, but all 402 exactly reconcile to observed M1; 306 are followed immediately by the next hour.** The original research collector assigned `is_complete=False` solely from `end-begin`. This mixes observed source span, interval finality, and model admission; these MUST become separate explicitly named quality fields. Do not silently flip accepted flags in canonical storage.
 
 ## 2026 RI evidence and status
 
@@ -79,7 +79,7 @@ The caller **must declare** the purpose/coordinate and `T0`; refuse ambiguous re
 - **G2 calendar:** independently attest `trade_session_date` for all target sessions incl. weekends, holidays, nights, clearnings; do not classify by calendar date alone.
 - **G3 causal:** only D1 completed + available before decision `T0`; negative tests for late publication, missing overlap, missing candidate, expired contract and unstable switch.
 - **G4 mathematics:** numerical identities for OHLC/adjustment/ATR and return coordinates, no arbitrary `0.5 ATR` or 10% agreement thresholds; historical prefix for T0 reproduced using only prefix-known event ledger.
-- **G5 intraday:** H1/M15 use same effective contract by exchange trade session; require source-native H1 = aggregated M1 OHLCV, exact M15 volume conservation, separate strict vs sparse quality labels, and official session mapping. Jan–Apr H1/M1 arithmetic now PASS in research; actual Model №3 admission remains gated.
+- **G5 intraday:** H1/M15 use same effective contract by exchange trade session; require source-native H1 = aggregated M1 OHLCV, exact M15 volume conservation, separate strict vs sparse quality labels, separate `source_span_short` from `closed_at_T0`, and official session mapping. Jan–Apr H1/M1 arithmetic now PASS in research; actual Model №3 admission remains gated.
 - **G6 Model №3:** real, version-pinned signals and absolute-level assumptions compared against genuinely available PIT data; OOS results and criteria defined before comparison.
 - **G7 release:** code review, tests, version/schema migration plan, permissions, explicit authorization to merge, install, change DuckDB/Sheet/skills; readback on actual installed HOME and independent rollback.
 
