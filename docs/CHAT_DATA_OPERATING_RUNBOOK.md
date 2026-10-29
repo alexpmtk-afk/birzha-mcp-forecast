@@ -58,7 +58,7 @@ GitHub main, открытая ветка, исследовательский ф�
 | BR | [MOEX_HISTDATA_BR_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ/edit) |
 | GOLD | [MOEX_HISTDATA_GOLD_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g/edit) |
 | IMOEX | [MOEX_HISTDATA_IMOEX_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg/edit) |
-| RTSI | [MOEX_HISTDATA_RTSI_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY/edit) |
+| RTSI (кассовый индекс) | **Канонический адрес требует независимой проверки; не подменять его фьючерсом RI.** |\n| RI (фьючерс; исследовательская книга) | [MOEX_HISTDATA_RI_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY/edit) |
 
 D1/H1/M15 — свечи своего периода; SESSIONS — сведения о календаре;
 VERIFIED_RANGES — действительно проверенные диапазоны; SYNC_STATUS — результат
@@ -148,6 +148,18 @@ stored_series нужен точный secid каждого контракта. �
     облачную выгрузку, проверку календаря и допуск модели. Успех одного не означает
     успех другого. При отсутствии доступа к Карте подготовить точную запись,
     не заявлять, что она уже внесена.
+
+
+## 4A. Исследовательская склейка разных фьючерсных контрактов — ещё НЕ внедрена
+
+Для перехода между `RIH6→RIM6`, `RIM6→RIU6` и подобными контрактами
+не использовать правило раздела 4 о соединении сессий одного SECID.
+Предложение методики, ограничения и проверки:
+[CONTINUOUS_FUTURES_POLICY_RESEARCH_20261029.md](CONTINUOUS_FUTURES_POLICY_RESEARCH_20261029.md).
+Оно **не является установленным правилом** и не даёт допуск Forecast.
+RAW остаётся по точному SECID; производная непрерывная шкала — отдельно.
+Точный торговый день, история публикации данных и фактическая установка HOME
+должны подтверждаться независимо; нельзя считать всё это PASS только по GitHub/Drive.
 
 ## 5. Маршрут через GitHub без прямого HOME-доступа
 
