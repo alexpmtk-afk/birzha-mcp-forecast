@@ -79,6 +79,6 @@ CI or isolated MCP checks HOME acceptance or forecasting accuracy.
 
 ## Cross-contract futures rollover — draft research, not installed
 
-For requests concerning **different futures SECIDs** (RIH6→RIM6, SiH6→SiM6, etc.), distinguish historical contract rollover from session concatenation within one SECID. Read [the proposed continuous-futures policy](docs/CONTINUOUS_FUTURES_POLICY_RESEARCH_20261029.md) and the [proposed skill](skills/continuous-futures/SKILL.md) as **research instructions only**. Neither document is installed/approved; they do not override the existing accepted session-runbook rules or authorize production changes.
+For requests concerning **different futures SECIDs** (RIH6→RIM6, SiH6→SiM6, etc.), distinguish historical contract rollover from session concatenation within one SECID. Read [the proposed continuous-futures policy](docs/CONTINUOUS_FUTURES_POLICY_RESEARCH_20261029.md) and the [proposed skill](.agents/skills/birzha-continuous-futures/SKILL.md) as **research instructions only**. Neither document is installed/approved; they do not override the existing accepted session-runbook rules or authorize production changes.
 
 Do not conflate **RI** (RTS futures, multiple exact contracts) and **RTSI** (cash index). No adjusted continuous candle can be stored as raw history, and a D1-only readback is not PIT/Forecast admission. Separate approval is required before merging or installing a shared rollover engine.
