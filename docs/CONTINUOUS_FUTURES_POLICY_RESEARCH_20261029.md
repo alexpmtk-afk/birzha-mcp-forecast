@@ -54,7 +54,9 @@ The caller **must declare** the purpose/coordinate and `T0`; refuse ambiguous re
 - Historical RAW volume, trade count, OI, Delta remain tied to exact SECID. Never add two contracts' observed volumes and pretend one contract traded that volume.
 - Session VWAP / POC / VAH / VAL / HVN / LVN must cite exact contract + session + price axis. Research-based transfer of old levels requires explicit transformation & flag; do not market transferred levels as executable RAW levels.
 - **M1 OHLCV cannot reconstruct exact traded volume at each price or true aggressor Delta.** Use appropriately qualified trades / order-flow provider for exact volume-by-price or Delta; otherwise mark `UNAVAILABLE`.
-- Short H1 or M15 made from <15 observed M1 are tagged as low-confidence/partial. Do not fill no-trade minutes as real trades, or drop them without recording the bias and denominator.
+- M15 source density is **not** the same as absence of source trades. Store `observed_m1` (1–15) and `quality` separately. `SPARSE_M1_H1_MATCHED` means OHLCV aggregated from actual recorded M1 and independently reconciled with native H1; it does **not** prove omitted clock minutes contain no trades. Do not fabricate transactions, forward-fill RAW or silently pass a sparse interval into a strict-only model interface.
+- Never discard a source-valid M1 observation only because its 15-min bucket has fewer than 15 minute candles; preserve in the RAW archive and a separately labelled research M15 view. An empty time bucket receives no synthetic candle.
+- Native nonstandard H1 remain RAW even when their nominal duration differs; end-time and trade session must remain distinct from a guessed full clock hour.
 
 ## 2026 RI evidence and status
 
@@ -65,7 +67,10 @@ The caller **must declare** the purpose/coordinate and `T0`; refuse ambiguous re
 - Strict M15 retained 21,840/37,168 source minutes (**58.76%**) and **87.58% of observed M1 volume**. Excluded M1 records ≠ proven missing trades. Independently recomputed 1,456 M15 OHLCV with no differences. There are 1,774 non-strict M15 buckets.
 - Official MOEX 2026 weekend/holiday schedules: https://www.moex.com/n95564 and https://www.moex.com/n96571 . Weekend calendars in the three sampled windows map to the **next trade session**, including June 12 holiday. Sampled D1/H1/M15 effective contract identity aligned **in scope**, not general archive proof.
 - Independently rederived Wilder ATR14 on Additive vs Forward: maximal absolute difference **0** on the 188 D1 selected observations. At 3 rollover boundaries both adjusted methods match new contract's same-contract point change; ratio matches its percentage change.
-- Research documentation: https://github.com/alexpmtk-afk/msp-server-bridge/pull/734.
+- Whole Jan–Apr exact-contract archive: **1,772/1,772 native H1 OHLCV match M1 exactly**. M1=78,666 and observed M1 volume=4,678,402. Existing strict M15=3,408 with 4,104,068 volume; **3,316 additional nonempty sparse M15** contain 27,546 observed M1 and **574,334 volume (12.2763%)** absent from strict-only M15. Research representation preserves all observed M1 volume. These are contract-volume units, not monetary profit.
+- Research reconstruction and quality test: https://github.com/alexpmtk-afk/msp-server-bridge/blob/chatgpt/ri-rollover-d1-research-20261029/research/ri_m15_sparse_reconcile.py ; results in https://github.com/alexpmtk-afk/msp-server-bridge/pull/734.
+- Current research decision code now separates **decision_ledger()**, which cannot inspect target-day bars, from ex-post `schedule()` used only for outcome verification. Strict PIT also rejects inferred source availability and incomplete prior D1.
+- Model №3 context (29.10.26): **closed H1** is the primary spread/volume/progress/retention evidence; **D1** is context; **M15** is optional refinement. A sparse-M15 recovery does NOT by itself establish forecasting benefit. The production Model №3 engine and 54-field compatibility remain unverified. Source: https://drive.google.com/file/d/1thGHst8JKqzjU9-FTMPHbuV2zl9nEN-c/view .
 - **All source PIT/first_seen unavailable historically; strict replay attribution is NOT PASS.**
 
 ## Mandatory acceptance gates (future, not done)
@@ -74,7 +79,7 @@ The caller **must declare** the purpose/coordinate and `T0`; refuse ambiguous re
 - **G2 calendar:** independently attest `trade_session_date` for all target sessions incl. weekends, holidays, nights, clearnings; do not classify by calendar date alone.
 - **G3 causal:** only D1 completed + available before decision `T0`; negative tests for late publication, missing overlap, missing candidate, expired contract and unstable switch.
 - **G4 mathematics:** numerical identities for OHLC/adjustment/ATR and return coordinates, no arbitrary `0.5 ATR` or 10% agreement thresholds; historical prefix for T0 reproduced using only prefix-known event ledger.
-- **G5 intraday:** H1/M15 use same effective contract by exchange trade session, preserve RAW volume; M15 sparsity quality independently assessed.
+- **G5 intraday:** H1/M15 use same effective contract by exchange trade session; require source-native H1 = aggregated M1 OHLCV, exact M15 volume conservation, separate strict vs sparse quality labels, and official session mapping. Jan–Apr H1/M1 arithmetic now PASS in research; actual Model №3 admission remains gated.
 - **G6 Model №3:** real, version-pinned signals and absolute-level assumptions compared against genuinely available PIT data; OOS results and criteria defined before comparison.
 - **G7 release:** code review, tests, version/schema migration plan, permissions, explicit authorization to merge, install, change DuckDB/Sheet/skills; readback on actual installed HOME and independent rollback.
 
