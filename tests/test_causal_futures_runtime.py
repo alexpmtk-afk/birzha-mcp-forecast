@@ -183,6 +183,29 @@ class UniversalCausalFutureSelection(unittest.TestCase):
         )
         self.assertEqual([d.isoformat() for d, _ in result], ["2026-03-20", "2026-03-21"])
 
+    def test_expired_contract_uses_official_description_lsttrade(self):
+        class MetadataClient:
+            def _request(self, path, params):
+                if "/history/" in path:
+                    return _Response([])
+                if path.endswith("/GDM6.json") and "/boards/rfud/" in path:
+                    return _Response({"securities": []})
+                if path.endswith("/GDM6.json"):
+                    return _Response({"description": [
+                        {"name": "SECID", "value": "GDM6"},
+                        {"name": "LSTTRADE", "value": "2026-06-19"},
+                        {"name": "LSTDELDATE", "value": "2026-06-19"},
+                    ]})
+                raise AssertionError(f"Unexpected upstream request: {path}")
+
+            @staticmethod
+            def _table(payload, table):
+                return payload["_rows"][table]
+
+        resolver = MoexHistoricalFutureResolver(MetadataClient())
+        self.assertEqual(resolver._official_expiry("GDM6"), "2026-06-19")
+        self.assertEqual(resolver._official_expiry("GDM6"), "2026-06-19")
+
 
 if __name__ == "__main__":
     unittest.main()
