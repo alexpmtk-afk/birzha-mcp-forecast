@@ -5,6 +5,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from birzha.providers.continuous_futures import (
+    ContinuousFuturesEvidenceError,
+    select_completed_session_volume,
+    _OUTRIGHT,
+)
+
 from birzha.domain.market import Instrument
 from birzha.providers.moex_iss import MoexIssClient, MoexIssError
 from birzha.providers.moex_instrument_contract import (
@@ -16,96 +22,154 @@ from birzha.providers.moex_instrument_contract import (
 
 
 class MoexHistoricalFutureResolver:
+    """One T-1 volume-based decision policy for historical futures roots.
+
+    ISS historical rows are reconstructed after the fact; their first
+    availability timestamp is NOT attested. This resolver must not be used to
+    claim strict as-of-source publication without a separate evidence gate.
+    """
+
     def __init__(self, client: MoexIssClient) -> None:
         self._client = client
-        self._timeline_cache: dict[tuple[str, date], Instrument | None] = {}
+        self._day_cache: dict[tuple[str, date], list[dict[str, Any]]] = {}
+        self._decision_cache: dict[tuple[str, date], Instrument] = {}
+        self._expiry_cache: dict[str, str] = {}
 
-    def resolve(self, root_symbol: str, as_of: date) -> Instrument:
-        root = root_symbol.strip()
-        if not root:
-            raise ValueError("root_symbol must be non-empty")
-        payload = self._client._request(  # noqa: SLF001 - provider-internal collaboration
-            "/history/engines/futures/markets/forts/securities.json",
-            {
-                "iss.meta": "off",
-                "iss.only": "history",
-                "history.columns": (
-                    "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
-                    "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,"
-                    "LASTTRADEDATE,LASTDELDATE,MINSTEP,STEPPRICE,LOTVOLUME,CURRENCYID"
-                ),
-                "date": as_of.isoformat(),
-                "assetcode": root,
-            },
-        ).json()
-        rows = self._client._table(payload, "history")  # noqa: SLF001
-        return _pick_instrument(root, as_of, rows)
+    def _official_expiry(self, secid: str) -> str:
+        """Look up documented exact-contract last trade date; never infer."""
+        if secid in self._expiry_cache:
+            return self._expiry_cache[secid]
+        requests = (
+            (f"/engines/futures/markets/forts/boards/rfud/securities/{secid}.json",
+             {"iss.meta": "off", "iss.only": "securities"}, "securities"),
+            (f"/securities/{secid}.json",
+             {"iss.meta": "off", "iss.only": "description"}, "description"),
+        )
+        for path, params, table_name in requests:
+            try:
+                response = self._client._request(path, params)  # noqa: SLF001
+                rows = self._client._table(response.json(), table_name)  # noqa: SLF001
+            except (MoexIssError, KeyError, ValueError):
+                continue
+            for row in rows:
+                if table_name == "securities":
+                    if _text(row, "SECID").casefold() != secid.casefold():
+                        continue
+                    raw = _text(row, "LASTTRADEDATE")
+                else:
+                    if _text(row, "name").upper() not in ("LSTTRADE", "LASTTRADEDATE"):
+                        continue
+                    raw = _text(row, "value")
+                try:
+                    expiry = date.fromisoformat(raw[:10]).isoformat()
+                except ValueError:
+                    continue
+                self._expiry_cache[secid] = expiry
+                return expiry
+        raise MoexIssError(f"No authoritative LASTTRADEDATE for {secid}; refusing rollover")
 
-    def timeline(self, root_symbol: str, from_date: date, till_date: date) -> tuple[tuple[date, Instrument], ...]:
-        """Resolve the real liquid contract separately for each historical weekday.
+    def _with_expiries(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = []
+        for row in rows:
+            if not _OUTRIGHT.fullmatch(_text(row, "SECID")):
+                result.append(row)
+                continue
+            if _text(row, "LASTTRADEDATE"):
+                result.append(row)
+                continue
+            amended = dict(row)
+            amended["LASTTRADEDATE"] = self._official_expiry(_text(row, "SECID"))
+            result.append(amended)
+        return result
 
-        MOEX futures history treats ``date`` as the historical selector; ranged
-        ``from/till`` parameters do not provide a multi-day contract timeline.
-        Weekends are skipped before requesting and exchange holidays naturally
-        return no matching rows. All requests still pass through the shared
-        provider governor, so long backfills remain rate-limited and bounded.
-        """
-        root = root_symbol.strip()
-        if not root:
-            raise ValueError("root_symbol must be non-empty")
-        if from_date > till_date:
-            raise ValueError("from_date must not be after till_date")
-
-        days: list[date] = []
-        cursor = from_date
-        while cursor <= till_date:
-            if cursor.weekday() < 5:
-                days.append(cursor)
-            cursor += timedelta(days=1)
-        if not days:
-            return ()
-
-        root_key = root.lower()
-        missing_days = [day for day in days if (root_key, day) not in self._timeline_cache]
-        path = "/history/engines/futures/markets/forts/securities.json"
-        requests = [
-            (
-                path,
+    def _day_rows(self, root: str, day: date) -> list[dict[str, Any]]:
+        key = (root.casefold(), day)
+        if key not in self._day_cache:
+            response = self._client._request(  # noqa: SLF001
+                "/history/engines/futures/markets/forts/securities.json",
                 {
                     "iss.meta": "off",
                     "iss.only": "history",
                     "history.columns": (
                         "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
                         "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,"
-                        "LASTTRADEDATE,LASTDELDATE"
+                        "LASTTRADEDATE,LASTDELDATE,MINSTEP,STEPPRICE,LOTVOLUME,CURRENCYID"
                     ),
                     "date": day.isoformat(),
                     "assetcode": root,
                 },
             )
-            for day in missing_days
-        ]
-        responses = self._client._request_many(requests) if requests else []  # noqa: SLF001
-        for day, response in zip(missing_days, responses, strict=True):
             payload = response.json()
-            rows = self._client._table(payload, "history")  # noqa: SLF001
-            exact_rows = []
-            for row in rows:
-                raw = _text(row, "TRADEDATE")
-                if raw and raw[:10] != day.isoformat():
-                    continue
-                asset = _text(row, "ASSETCODE")
-                secid = _text(row, "SECID")
-                if asset.lower() == root.lower() or (not asset and secid.lower().startswith(root.lower())):
-                    exact_rows.append(row)
-            self._timeline_cache[(root_key, day)] = (
-                _pick_instrument(root, day, exact_rows) if exact_rows else None
-            )
-        return tuple(
-            (day, instrument)
-            for day in days
-            if (instrument := self._timeline_cache.get((root_key, day))) is not None
+            source = self._client._table(payload, "history")  # noqa: SLF001
+            self._day_cache[key] = self._with_expiries([
+                row for row in source
+                if _text(row, "TRADEDATE")[:10] == day.isoformat()
+                and _text(row, "ASSETCODE").casefold() == root.casefold()
+            ])
+        return self._day_cache[key]
+
+    def _previous_observed_session(self, root: str, target: date) -> tuple[date, list[dict[str, Any]]]:
+        """Only previous dates; neither same-day VALUE nor future volume used."""
+        for lag in range(1, 22):
+            prior = target - timedelta(days=lag)
+            rows = self._day_rows(root, prior)
+            if rows:
+                return prior, rows
+        raise MoexIssError(
+            f"No completed prior ISS trade-session evidence within 21 days for {root} {target}"
         )
+
+    def resolve(self, root_symbol: str, as_of: date) -> Instrument:
+        root = root_symbol.strip()
+        if not root:
+            raise ValueError("root_symbol must be non-empty")
+        key = (root.casefold(), as_of)
+        if key not in self._decision_cache:
+            prior, rows = self._previous_observed_session(root, as_of)
+            try:
+                decision = select_completed_session_volume(
+                    root,
+                    decision_session=prior,
+                    effective_session=as_of,
+                    decision_rows=rows,
+                )
+            except ContinuousFuturesEvidenceError as exc:
+                raise MoexIssError(
+                    f"Historical futures T-1 selection blocked: {root} {as_of}: {exc}"
+                ) from exc
+            matching = [r for r in rows if _text(r, "SECID") == decision.secid]
+            if len(matching) != 1:
+                raise MoexIssError("Selected contract must have one unique source row")
+            instrument = _pick_instrument(root, as_of, matching)
+            self._decision_cache[key] = Instrument(
+                **{
+                    **instrument.to_dict(),
+                    "source": "MOEX_ISS_HISTORY_T_MINUS_1_RECONSTRUCTED",
+                    "roll_policy": decision.roll_policy,
+                }
+            )
+        return self._decision_cache[key]
+
+    def timeline(
+        self, root_symbol: str, from_date: date, till_date: date
+    ) -> tuple[tuple[date, Instrument], ...]:
+        """Retrospective timeline on *observed exchange TRADEDATE* dates only.
+
+        Do not remove weekends blindly. MOEX extra-session mapping to official
+        trade day MUST be verified externally; no calendar-day false attribution.
+        """
+        root = root_symbol.strip()
+        if not root:
+            raise ValueError("root_symbol must be non-empty")
+        if from_date > till_date:
+            raise ValueError("from_date must not be after till_date")
+        rows = []
+        day = from_date
+        while day <= till_date:
+            if self._day_rows(root, day):
+                rows.append((day, self.resolve(root, day)))
+            day += timedelta(days=1)
+        return tuple(rows)
 
 
 def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Instrument:

@@ -14,7 +14,7 @@ from birzha.providers.moex_resolver import MoexDirectInstrumentResolver
 
 
 MOEX_TIMEZONE = ZoneInfo("Europe/Moscow")
-MOEX_FUTURES_ROOT_SYMBOLS = frozenset({"SI", "BR", "GOLD"})
+MOEX_FUTURES_ROOT_SYMBOLS = frozenset({"SI", "BR", "GOLD", "RI"})
 
 
 def is_futures_root_symbol(symbol: str) -> bool:
