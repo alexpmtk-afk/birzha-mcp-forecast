@@ -200,7 +200,7 @@ class UniversalCausalFutureSelection(unittest.TestCase):
 
             @staticmethod
             def _table(payload, table):
-                return payload["rows"][table]
+                return payload["_rows"][table]
 
         resolver = MoexHistoricalFutureResolver(MetadataClient())
         self.assertEqual(resolver._official_expiry("GDM6"), "2026-06-19")
