@@ -8,6 +8,7 @@ from typing import Any
 from birzha.providers.continuous_futures import (
     ContinuousFuturesEvidenceError,
     select_completed_session_volume,
+    _OUTRIGHT,
 )
 
 from birzha.domain.market import Instrument
@@ -32,6 +33,54 @@ class MoexHistoricalFutureResolver:
         self._client = client
         self._day_cache: dict[tuple[str, date], list[dict[str, Any]]] = {}
         self._decision_cache: dict[tuple[str, date], Instrument] = {}
+        self._expiry_cache: dict[str, str] = {}
+
+    def _official_expiry(self, secid: str) -> str:
+        """Look up documented exact-contract last trade date; never infer."""
+        if secid in self._expiry_cache:
+            return self._expiry_cache[secid]
+        requests = (
+            (f"/engines/futures/markets/forts/boards/rfud/securities/{secid}.json",
+             {"iss.meta": "off", "iss.only": "securities"}, "securities"),
+            (f"/securities/{secid}.json",
+             {"iss.meta": "off", "iss.only": "description"}, "description"),
+        )
+        for path, params, table_name in requests:
+            try:
+                response = self._client._request(path, params)  # noqa: SLF001
+                rows = self._client._table(response.json(), table_name)  # noqa: SLF001
+            except (MoexIssError, KeyError, ValueError):
+                continue
+            for row in rows:
+                if table_name == "securities":
+                    if _text(row, "SECID").casefold() != secid.casefold():
+                        continue
+                    raw = _text(row, "LASTTRADEDATE")
+                else:
+                    if _text(row, "name").upper() != "LASTTRADEDATE":
+                        continue
+                    raw = _text(row, "value")
+                try:
+                    expiry = date.fromisoformat(raw[:10]).isoformat()
+                except ValueError:
+                    continue
+                self._expiry_cache[secid] = expiry
+                return expiry
+        raise MoexIssError(f"No authoritative LASTTRADEDATE for {secid}; refusing rollover")
+
+    def _with_expiries(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result = []
+        for row in rows:
+            if not _OUTRIGHT.fullmatch(_text(row, "SECID")):
+                result.append(row)
+                continue
+            if _text(row, "LASTTRADEDATE"):
+                result.append(row)
+                continue
+            amended = dict(row)
+            amended["LASTTRADEDATE"] = self._official_expiry(_text(row, "SECID"))
+            result.append(amended)
+        return result
 
     def _day_rows(self, root: str, day: date) -> list[dict[str, Any]]:
         key = (root.casefold(), day)
@@ -52,11 +101,11 @@ class MoexHistoricalFutureResolver:
             )
             payload = response.json()
             source = self._client._table(payload, "history")  # noqa: SLF001
-            self._day_cache[key] = [
+            self._day_cache[key] = self._with_expiries([
                 row for row in source
                 if _text(row, "TRADEDATE")[:10] == day.isoformat()
                 and _text(row, "ASSETCODE").casefold() == root.casefold()
-            ]
+            ])
         return self._day_cache[key]
 
     def _previous_observed_session(self, root: str, target: date) -> tuple[date, list[dict[str, Any]]]:
