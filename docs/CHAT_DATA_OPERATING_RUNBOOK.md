@@ -58,7 +58,8 @@ GitHub main, открытая ветка, исследовательский ф�
 | BR | [MOEX_HISTDATA_BR_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ/edit) |
 | GOLD | [MOEX_HISTDATA_GOLD_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g/edit) |
 | IMOEX | [MOEX_HISTDATA_IMOEX_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg/edit) |
-| RTSI (кассовый индекс) | **Канонический адрес требует независимой проверки; не подменять его фьючерсом RI.** |\n| RI (фьючерс; исследовательская книга) | [MOEX_HISTDATA_RI_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY/edit) |
+| RTSI (кассовый индекс) | **Канонический адрес требует независимой проверки; не подменять его фьючерсом RI.** |
+| RI (фьючерс; исследовательская книга) | [MOEX_HISTDATA_RI_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY/edit) |
 
 D1/H1/M15 — свечи своего периода; SESSIONS — сведения о календаре;
 VERIFIED_RANGES — действительно проверенные диапазоны; SYNC_STATUS — результат
