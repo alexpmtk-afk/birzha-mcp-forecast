@@ -12,7 +12,7 @@ def r(close, volume, *, published_at=None):
     if published_at is not None:
         row["published_at"] = published_at
         row["is_complete"] = True
-        row["available_at_confidence"] = "VERIFIED"
+        row["available_at_confidence"] = "EXACT"
     return row
 
 
@@ -57,7 +57,7 @@ class TestRIContinuousFuturesReference(unittest.TestCase):
                 d1: {"RIH6": r(100, 100)}}
         for row in data[d0].values():
             row["is_complete"] = True
-            row["available_at_confidence"] = "VERIFIED"
+            row["available_at_confidence"] = "EXACT"
         with self.assertRaisesRegex(EvidenceError, "Publication time unknown"):
             schedule([d0, d1], data,
                      {"RIH6": "2026-03-19", "RIM6": "2026-06-18"},
@@ -181,6 +181,17 @@ class TestRIContinuousFuturesReference(unittest.TestCase):
                     dates[1]: "2026-03-19T09:50:00+03:00",
                     dates[2]: "2026-03-20T09:50:00+03:00",
                 },
+            )
+
+
+    def test_documented_not_exact_is_not_a_verified_historical_first_seen(self):
+        d0, d1 = "2026-03-18", "2026-03-19"
+        data = {d0: {"RIH6": r(100, 200, published_at="2026-03-18T22:00:00+03:00")}}
+        data[d0]["RIH6"]["available_at_confidence"] = "DOCUMENTED"
+        with self.assertRaisesRegex(EvidenceError, "Historical availability unverified"):
+            decision_ledger(
+                [d0, d1], data, {"RIH6": d1}, strict_pit=True,
+                decision_cutoffs={d1: "2026-03-19T09:50:00+03:00"},
             )
 
 
