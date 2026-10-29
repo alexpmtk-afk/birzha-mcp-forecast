@@ -32,3 +32,17 @@
 - Official MOEX historical full-tape products are separate from free candles; paid/trade-source use **not authorized**: https://www.moex.com/a2863
 
 **Next safe implementation step:** full scoped `trade_session_date` mapping and test Matrix for M15 source gaps, then pin Model №3 input contract. No automatic continuous-series/Forecast activation until strict-PIT evidence is available or the owner explicitly approves a separate clearly-labeled reconstructed-only research regime.
+
+
+## Регрессионная защита качества свечей (новое исправление, draft)
+
+В `src/birzha/providers/moex_iss.py` расчёт M15 теперь **сохраняет фактический наблюдавшийся объём всех минут**, но не объявляет разреженную свечу 15/15 полной:
+- `observed_m1_count` / `expected_m1_count=15`;
+- `observation_quality=DENSE_15_OBSERVED | SPARSE_M1_UNKNOWN_GAPS | MISSING_SOURCE_VOLUME | MISSING_SOURCE_OHLC`;
+- `completed` означает, что закончился номинальный 15-минутный интервал, **не** что все 15 M1 существуют и **не** что историческое `available_at` доказано;
+- дубли и неисправимое время M1 вызывают ошибку, недостающий source volume остаётся `null`, не превращаясь в частичную сумму;
+- для остальных таймфреймов новые M15-поля отсутствуют в сериализации, чтобы не менять их существующий контракт.
+
+Автоматические регрессионные тесты находятся в `tests/test_m15_observation_quality.py`. Изолированное архивирование обновлено отдельно в **PR #733**: `research/ri_contract_month_capture.py` содержит `derived_quality_research`, а старые проверенные строки M15 не перезаписываются. Для H1 `is_complete` в новом исследовательском выводе означает прошедший полный номинальный час **на момент получения архива**, а не полноту записанных минут и не доказательство исторической доступности на T0. Перед изменением существующих H1-клеток таблицы нужна отдельная миграция, проверка ключей и обратное чтение.
+
+Эти исправления в PR **ещё не являются installed HOME** и не дают автоматического разрешения Модели №3 использовать sparse M15. Для каждого аналитического признака нужен явный допуск по quality и доступности данных. Дополнительных финансовых результатов из арифметической защиты данных не следует.
