@@ -57,7 +57,7 @@ class MoexHistoricalFutureResolver:
                         continue
                     raw = _text(row, "LASTTRADEDATE")
                 else:
-                    if _text(row, "name").upper() != "LASTTRADEDATE":
+                    if _text(row, "name").upper() not in ("LSTTRADE", "LASTTRADEDATE"):
                         continue
                     raw = _text(row, "value")
                 try:
