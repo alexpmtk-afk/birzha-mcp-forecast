@@ -6,6 +6,7 @@
 - `src/birzha/providers/moex_history.py`: actual historical resolver requests previous observed session, not current-day `VALUE`/OI/volume. It labels `source=MOEX_ISS_HISTORY_T_MINUS_1_RECONSTRUCTED` and `roll_policy=MOEX_T_MINUS_1_VOLUME_EXPIRY_V1`. It queries all calendar dates for source `TRADEDATE` instead of assuming Monday–Friday.
 - Exact expiry metadata is fetched from MOEX official security specifications. For expired GDM6, public `/iss/securities/GDM6.json` gives `description.name=LSTTRADE` with `2026-06-19`; the board-specific active-security endpoint correctly returns no row. Use `LSTTRADE`, not presumed `LASTTRADEDATE`, for expired-security description. Never infer expiry from tickers or an arbitrary 'third Thursday' rule.
 - Tests: `tests/test_causal_futures_runtime.py` and updated `tests/test_historical_contract_resolution.py`; RI March/June/September, Si/BR/GOLD, no same-day leakage, expiry, spread rejection, weekend source, fail-closed missing data, exact archived security metadata.
+- After main PR #279, historical root verification markers are generation-pinned to `ROLLING_HISTORY_V3_T_MINUS_1_EXPIRY`; previous `ROLLING_HISTORY_V2_PREWARM` markers cannot certify the new contract-switch schedule. Both CI and real MOEX validation passed in GitHub. This is a source-code acceptance result, not HOME readback.
 
 ## Still NOT guaranteed by this change
 

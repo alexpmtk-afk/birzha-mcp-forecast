@@ -1,12 +1,12 @@
 ---
 name: birzha-continuous-futures
-description: Proposed research-only skill for MOEX exact-contract rollover and analytical coordinates; not installed.
-status: proposed-not-installed
+description: Audit and route MOEX exact-contract futures rollover, T−1 source selection and derived coordinate requests; distinguish GitHub source from HOME runtime.
+status: source-available-home-unverified
 ---
 
-# Futures rollover analyst — proposal, not installed
+# Futures rollover — versioned source rules and research gates
 
-Before any action, read `AGENTS.md`, `docs/CHAT_DATA_OPERATING_RUNBOOK.md` and `docs/CONTINUOUS_FUTURES_POLICY_RESEARCH_20261029.md`. Never treat this proposed skill as live policy or evidence of access to HOME.
+Before any action, read `AGENTS.md`, `docs/CHAT_DATA_OPERATING_RUNBOOK.md` and `docs/CONTINUOUS_FUTURES_POLICY_RESEARCH_20261029.md`. The GitHub T−1 resolver is implemented, but never claim installed HOME, strict PIT, or derived multi-contract OHLCV without verified runtime evidence.
 
 ## Trigger
 Use for a request to combine historical sessions across multiple futures **contracts**, audit contract-selection schedule, compare Additive/Forward/Ratio, or feed cross-contract history into a forecasting model.
@@ -22,7 +22,7 @@ Do not apply to an exact SECID's ordinary **session concatenation**; use the exi
 
 ## Analysis
 1. Inspect available tools, installed code SHA, historical contract coverage and the active project map; do not claim production access just because GitHub is connected.
-2. Use a **single T-1 causal effective-contract schedule** for every timeframe, with expiry and historical-finality safeguards.
+2. Reuse the **single GitHub runtime T−1 selector** in `src/birzha/providers/continuous_futures.py` for contract selection. The current historical resolver `moex_history.py` is wired to it. Do not reintroduce same-day volume or treat V2 verification markers as valid after `ROLLING_HISTORY_V3_T_MINUS_1_EXPIRY`. Use one effective-contract ledger for every timeframe with expiry and historical-finality safeguards.
 3. Log switch basis/ratio, decision session, effective trade session and exact provenance. Do not recompute this schedule separately for D1/H1/M15.
 4. Derive requested coordinates **on demand** from immutable exact-contract RAW and **versioned event ledger**; no overwriting accepted source candles.
 5. Profile/VWAP/Delta/OI use exact source contract. Never invent traded volume at price from M1 OHLCV.
@@ -34,4 +34,4 @@ Do not apply to an exact SECID's ordinary **session concatenation**; use the exi
 Return: scope and explicit environment, source manifest/SHAs, exact contract timeline, decisions/effective dates, numerical coordinate checks, D1/H1/M15/session identity, quality exclusions, PIT status, report/PR refs and outstanding gates.
 
 ## Authorization
-Research, read-only verification and draft PR are not approval to merge, deploy, alter HOME/DuckDB, change Google canonical raw cells, install skills or enable trade execution. Those require separate owner authorization.
+This GitHub skill and T−1 source policy are versioned in main; no installed HOME readback has been obtained. Do not imply source changes are deployed or that strict historical PIT is proven. Never mutate production DuckDB, canonical Google source cells, secrets or execution behavior without scope and independent checks.
