@@ -1,0 +1,21 @@
+name: Continuous futures research-only reference checks
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - research/continuous_futures_reference.py
+      - tests/test_continuous_futures_reference.py
+      - .github/workflows/continuous_futures_research_reference.yml
+permissions:
+  contents: read
+jobs:
+  isolated-reference-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify research-only rollover reference (no source download)
+        run: python -m unittest discover -s tests -p test_continuous_futures_reference.py -v
