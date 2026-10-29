@@ -288,21 +288,42 @@ class MoexIssClient:
     def _aggregate_m15(
         candles: tuple[Candle, ...], *, as_of: datetime | None = None
     ) -> tuple[Candle, ...]:
+        """Aggregate each observed M1 exactly once, flag sparse source coverage.
+
+        `completed` means the nominal 15-minute interval has elapsed;
+        `observation_quality` separately says whether all 15 M1 were observed.
+        Missing source minutes are UNKNOWN, never implied zero-volume trades.
+        """
         cutoff = as_of or datetime.now(MOEX_TIMEZONE)
         buckets: dict[str, list[Candle]] = {}
+        observed: set[datetime] = set()
         for candle in candles:
             try:
-                dt = datetime.fromisoformat(candle.begin.replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            minute = (dt.minute // 15) * 15
-            bucket_dt = dt.replace(minute=minute, second=0, microsecond=0)
-            key = bucket_dt.isoformat()
-            buckets.setdefault(key, []).append(candle)
+                minute_time = datetime.fromisoformat(
+                    candle.begin.replace("Z", "+00:00")
+                )
+            except (ValueError, TypeError) as exc:
+                raise MoexIssError(
+                    f"Invalid M1 begin in M15 aggregation: {candle.begin!r}"
+                ) from exc
+            if minute_time.second or minute_time.microsecond:
+                raise MoexIssError(
+                    f"Non-minute-aligned M1 begin: {candle.begin!r}"
+                )
+            if minute_time in observed:
+                raise MoexIssError(
+                    f"Duplicate M1 timestamp in M15 aggregation: {candle.begin}"
+                )
+            observed.add(minute_time)
+            bucket_dt = minute_time.replace(
+                minute=(minute_time.minute // 15) * 15,
+                second=0, microsecond=0,
+            )
+            buckets.setdefault(bucket_dt.isoformat(), []).append(candle)
 
         result: list[Candle] = []
         for key in sorted(buckets):
-            group = sorted(buckets[key], key=lambda candle: candle.begin)
+            group = sorted(buckets[key], key=lambda c: c.begin)
             bucket_start = datetime.fromisoformat(key)
             bucket_end = bucket_start + timedelta(minutes=15) - timedelta(seconds=1)
             comparable_cutoff = cutoff
@@ -312,21 +333,47 @@ class MoexIssClient:
                 comparable_cutoff = cutoff.replace(tzinfo=MOEX_TIMEZONE).astimezone(bucket_start.tzinfo)
             elif bucket_start.tzinfo is not None and cutoff.tzinfo is not None:
                 comparable_cutoff = cutoff.astimezone(bucket_start.tzinfo)
+            expected = [
+                bucket_start + timedelta(minutes=i)
+                for i in range(15)
+            ]
+            actual = [
+                datetime.fromisoformat(c.begin.replace("Z", "+00:00"))
+                for c in group
+            ]
+            dense = actual == expected
             highs = [c.high for c in group if c.high is not None]
             lows = [c.low for c in group if c.low is not None]
-            values = [c.value for c in group if c.value is not None]
-            volumes = [c.volume for c in group if c.volume is not None]
+            values = [c.value for c in group]
+            volumes = [c.volume for c in group]
+            ohlc_missing = (
+                group[0].open is None
+                or group[-1].close is None
+                or len(highs) != len(group)
+                or len(lows) != len(group)
+            )
+            if ohlc_missing:
+                quality = "MISSING_SOURCE_OHLC"
+            elif any(v is None for v in volumes):
+                quality = "MISSING_SOURCE_VOLUME"
+            elif dense:
+                quality = "DENSE_15_OBSERVED"
+            else:
+                quality = "SPARSE_M1_UNKNOWN_GAPS"
             result.append(
                 Candle(
                     open=group[0].open,
                     close=group[-1].close,
                     high=max(highs) if highs else None,
                     low=min(lows) if lows else None,
-                    value=sum(values) if values else None,
-                    volume=sum(volumes) if volumes else None,
+                    value=sum(values) if all(v is not None for v in values) else None,
+                    volume=sum(volumes) if all(v is not None for v in volumes) else None,
                     begin=key,
                     end=bucket_end.isoformat(),
                     completed=bucket_end <= comparable_cutoff,
+                    observed_m1_count=len(group),
+                    expected_m1_count=15,
+                    observation_quality=quality,
                 )
             )
         return tuple(result)
