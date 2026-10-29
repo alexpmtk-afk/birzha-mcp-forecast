@@ -57,9 +57,19 @@ class Candle:
     observed_at: str | None = None
     revision: str | None = None
     source: str | None = None
+    # M15-only source-observation quality. None on other candle periods keeps
+    # their existing public serialization unchanged. These fields describe
+    # observed M1 coverage, NOT historic availability or interval finality.
+    observed_m1_count: int | None = None
+    expected_m1_count: int | None = None
+    observation_quality: str | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return asdict(self)
+        result = asdict(self)
+        for key in ("observed_m1_count", "expected_m1_count", "observation_quality"):
+            if result[key] is None:
+                del result[key]
+        return result
 
 
 @dataclass(frozen=True, slots=True)
