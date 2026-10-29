@@ -2,7 +2,7 @@
 import unittest
 
 from research.continuous_futures_reference import (
-    EvidenceError, coordinates, schedule,
+    EvidenceError, coordinates, schedule, decision_ledger,
 )
 
 
@@ -11,6 +11,8 @@ def r(close, volume, *, published_at=None):
            "close": close, "volume": volume}
     if published_at is not None:
         row["published_at"] = published_at
+        row["is_complete"] = True
+        row["available_at_confidence"] = "VERIFIED"
     return row
 
 
@@ -53,7 +55,7 @@ class TestRIContinuousFuturesReference(unittest.TestCase):
         d0, d1 = "2026-03-18", "2026-03-19"
         data = {d0: {"RIH6": r(100, 100), "RIM6": r(102, 50)},
                 d1: {"RIH6": r(100, 100)}}
-        with self.assertRaisesRegex(EvidenceError, "Publication time unknown"):
+        with self.assertRaisesRegex(EvidenceError, "Historical availability unverified"):
             schedule([d0, d1], data,
                      {"RIH6": "2026-03-19", "RIM6": "2026-06-18"},
                      strict_pit=True,
@@ -115,6 +117,68 @@ class TestRIContinuousFuturesReference(unittest.TestCase):
                            {"RIH6": "2026-03-19", "RIM6": "2026-06-18"},
                            strict_pit=False)
         self.assertEqual(rows[0]["secid"], "RIH6")
+
+
+    def test_ex_ante_choice_does_not_read_target_bar_or_target_volume(self):
+        d0, d1 = "2026-03-18", "2026-03-19"
+        prior = {"RIH6": r(100, 300), "RIM6": r(105, 100)}
+        without_today, _ = decision_ledger(
+            [d0, d1], {d0: prior},
+            {"RIH6": "2026-03-19", "RIM6": "2026-06-18"},
+            strict_pit=False,
+        )
+        # Even if today's new contract has 100000x volume, that has no
+        # bearing on yesterday's selection at today's decision cutoff.
+        with_today, _ = decision_ledger(
+            [d0, d1], {d0: prior, d1: {"RIM6": r(110, 10000000)}},
+            {"RIH6": "2026-03-19", "RIM6": "2026-06-18"},
+            strict_pit=False,
+        )
+        self.assertEqual(without_today, with_today)
+        self.assertEqual(without_today[0]["secid"], "RIH6")
+
+    def test_strict_pit_rejects_inferred_availability(self):
+        d0, d1 = "2026-03-18", "2026-03-19"
+        data = {d0: {"RIH6": r(100, 200, published_at="2026-03-18T22:00:00+03:00")},
+                d1: {"RIH6": r(101, 1)}}
+        data[d0]["RIH6"]["available_at_confidence"] = "INFERRED"
+        with self.assertRaisesRegex(EvidenceError, "Historical availability unverified"):
+            decision_ledger(
+                [d0, d1], data, {"RIH6": d1}, strict_pit=True,
+                decision_cutoffs={d1: "2026-03-19T09:50:00+03:00"},
+            )
+
+    def test_strict_pit_rejects_unfinished_previous_day(self):
+        d0, d1 = "2026-03-18", "2026-03-19"
+        data = {d0: {"RIH6": r(100, 200, published_at="2026-03-18T22:00:00+03:00")}}
+        data[d0]["RIH6"]["is_complete"] = False
+        with self.assertRaisesRegex(EvidenceError, "Unfinished prior D1"):
+            decision_ledger(
+                [d0, d1], data, {"RIH6": d1}, strict_pit=True,
+                decision_cutoffs={d1: "2026-03-19T09:50:00+03:00"},
+            )
+
+    def test_strict_pit_switch_basis_must_have_old_publication(self):
+        dates = ["2026-03-18", "2026-03-19", "2026-03-20"]
+        before = "2026-03-18T22:00:00+03:00"
+        today = "2026-03-19T22:00:00+03:00"
+        data = {
+            dates[0]: {"RIH6": r(100, 300, published_at=before),
+                       "RIM6": r(104, 80, published_at=before)},
+            dates[1]: {"RIH6": r(99, 400, published_at=today),
+                       "RIM6": r(105, 800, published_at=today)}
+        }
+        data[dates[1]]["RIH6"]["available_at_confidence"] = "INFERRED"
+        with self.assertRaisesRegex(EvidenceError, "Historical availability unverified"):
+            decision_ledger(
+                dates, data,
+                {"RIH6": "2026-03-19", "RIM6": "2026-06-18"},
+                strict_pit=True,
+                decision_cutoffs={
+                    dates[1]: "2026-03-19T09:50:00+03:00",
+                    dates[2]: "2026-03-20T09:50:00+03:00",
+                },
+            )
 
 
 if __name__ == "__main__":
