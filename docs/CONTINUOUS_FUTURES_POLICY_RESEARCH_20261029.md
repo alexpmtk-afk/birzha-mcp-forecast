@@ -20,7 +20,7 @@ The runbook previously linked the RI research Sheet under a `RTSI` label. Do not
 - Official exchange `trade_session_date` for each source candle (not calendar begin date).
 - Source immutable OHLCV + interval + completeness + revision + provenance / source hash.
 - D1 volume for all eligible listed overlapping contracts on every possible decision session, and access to same-session close for both sides of any switch.
-- A timestamp for each datum's **observed_at / available_at** and confidence. For strict historical PIT claims, missing source-first-seen is **UNKNOWN** and must fail the strict gate.
+- A timestamp for each datum's **observed_at / available_at** and confidence. Use the **existing** `Candle.available_at_confidence` enum: `EXACT`, `DOCUMENTED`, `INFERRED`, `UNKNOWN` (do not invent `VERIFIED`). Strict source-first-seen replay requires `EXACT` with an auditable timestamp; mere documentation or inferred timestamps do not qualify. Missing source-first-seen is **UNKNOWN** and must fail the strict gate.
 - Same pre-approved decision ledger used for D1, H1, M15; never independently pick three contracts.
 
 ## Baseline selection (RESEARCH, NOT UNIVERSAL APPROVAL)
