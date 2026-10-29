@@ -55,7 +55,10 @@ class TestRIContinuousFuturesReference(unittest.TestCase):
         d0, d1 = "2026-03-18", "2026-03-19"
         data = {d0: {"RIH6": r(100, 100), "RIM6": r(102, 50)},
                 d1: {"RIH6": r(100, 100)}}
-        with self.assertRaisesRegex(EvidenceError, "Historical availability unverified"):
+        for row in data[d0].values():
+            row["is_complete"] = True
+            row["available_at_confidence"] = "VERIFIED"
+        with self.assertRaisesRegex(EvidenceError, "Publication time unknown"):
             schedule([d0, d1], data,
                      {"RIH6": "2026-03-19", "RIM6": "2026-06-18"},
                      strict_pit=True,
