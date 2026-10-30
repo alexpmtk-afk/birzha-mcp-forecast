@@ -513,3 +513,9 @@ transport_security = TransportSecuritySettings(
 app = mcp.streamable_http_app(json_response=True, transport_security=transport_security)
 if settings.mcp_bearer_token:
     app.add_middleware(McpBearerAuthMiddleware, token=settings.mcp_bearer_token)
+
+
+@mcp.tool(name="market.continuous_series", description="Read-only RI multi-contract coordinates from supplied exact-contract bars and T-1 ledger evidence. No source fetching, storage writes, calendar/PIT attestation or forecast admission.")
+def market_continuous_series(payload: dict[str, object]) -> dict[str, object]:
+    from birzha.application.continuous_series import build_continuous_series
+    return build_continuous_series(payload)
