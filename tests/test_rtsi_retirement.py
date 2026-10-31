@@ -36,3 +36,15 @@ def test_published_rules_point_to_ri_and_never_to_rtsi_index():
     assert "RTSI" in rules["retired_index_symbols"]
     assert rules["canonical_drive_folder_ids"]["RI"] == "1v0ZYWbxp5vuH8WIuQtTcg6qBfX1b69Ez"
     assert rules["active_instruments"][-1] == "RI"
+
+
+def test_authorized_ydb_backfill_no_longer_accepts_rtsi():
+    import argparse
+    import scripts.run_authorized_ydb_backfill as backfill
+
+    assert "RI" in backfill.CORE_SYMBOLS
+    assert "RTSI" not in backfill.CORE_SYMBOLS
+    assert backfill._active_symbols("SBER, RI") == ("SBER", "RI")
+    for excluded in ("RTSI", "SBER,rtsi"):
+        with pytest.raises(argparse.ArgumentTypeError, match="retired"):
+            backfill._active_symbols(excluded)

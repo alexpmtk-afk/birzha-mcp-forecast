@@ -2,6 +2,8 @@
 
 Protocol ID: `M23_HISTORICAL_GOVERNED_V1`
 
+> **Historical protocol notice (2026-10-31):** The original six-market M23 protocol below is a frozen historical specification, including the now-retired RTSI cash index. It is not an active permitted instrument list. Current BIRZHA operations use **RI RTS futures** with exact contract IDs instead. Do not silently replace RTSI with RI inside this already-frozen protocol or reuse its sealed holdout; any RI validation needs a separately declared and approved new protocol and fresh independent evidence.
+
 ## Purpose
 
 Provide one pre-declared historical test of the shared six-market forecast configuration without tuning dates, data or acceptance thresholds after seeing model performance.

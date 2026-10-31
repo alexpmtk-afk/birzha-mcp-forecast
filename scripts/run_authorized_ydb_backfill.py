@@ -14,7 +14,7 @@ from birzha.storage.ydb_historical_store import YdbHistoricalCandleStore
 from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 
 
-CORE_SYMBOLS = ("SBER", "GOLD", "IMOEX", "RTSI", "Si", "BR")
+CORE_SYMBOLS = ("SBER", "GOLD", "IMOEX", "RI", "Si", "BR")
 RETRY_DELAYS = (0, 5, 15)
 
 
@@ -23,6 +23,13 @@ def _csv(value: str) -> tuple[str, ...]:
     if not items:
         raise argparse.ArgumentTypeError("value must contain at least one item")
     return items
+
+
+def _active_symbols(value: str) -> tuple[str, ...]:
+    symbols = _csv(value)
+    if any(symbol.upper() == "RTSI" for symbol in symbols):
+        raise argparse.ArgumentTypeError("RTSI index is retired; use RI futures")
+    return symbols
 
 
 def _token() -> str:
@@ -37,7 +44,7 @@ def main() -> int:
     parser.add_argument("--connection-string", required=True)
     parser.add_argument("--from-date", required=True)
     parser.add_argument("--till-date", required=True)
-    parser.add_argument("--symbols", type=_csv, default=CORE_SYMBOLS)
+    parser.add_argument("--symbols", type=_active_symbols, default=CORE_SYMBOLS)
     parser.add_argument("--timeframes", type=_csv, default=("D1", "H1", "M15"))
     args = parser.parse_args()
 
