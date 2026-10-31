@@ -129,7 +129,7 @@ if _native_mirror is not None:
     )
 
 
-@mcp.tool(name="archive.update", description="Unified instrument Google archive; registered shared indicator sets are calculated independently of forecasts. RI: reconcile existing D1/H1/M15 and their INDICATORS tabs, restore missing M15 from configured saved M1, compute missing/dependent versioned Purnov research features, repair chronological row order, create local backup and verify all writes. Dry-run by default. Optional source sync reuses history.sync; no new books, paid source or Forecast admission.",
+@mcp.tool(name="archive.update", description="Unified instrument Google archive; registered shared indicator sets are calculated independently of forecasts. RI: reconcile existing D1/H1/M15 and their INDICATORS tabs, restore missing M15 from configured saved M1, compute missing/dependent versioned Purnov research features, repair chronological row order, create local backup and verify all writes. Dry-run by default. Source collection is a separate archive.collect command; no new books, paid source or Forecast admission.",
           annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
 def archive_update(from_date: str, till_date: str, dry_run: bool = True,
                    repair_dependent: bool = False, symbol: str = "RI") -> dict[str, object]:
