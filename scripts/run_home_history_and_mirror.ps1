@@ -1,7 +1,8 @@
 ﻿param(
     [string]$QueueRoot = 'C:\ProgramData\ChatGPT-PK\BirzhaControlQueue',
     [int]$IntervalSeconds = 3600,
-    [int]$InitialDelaySeconds = 45
+    [int]$InitialDelaySeconds = 45,
+    [string]$McpHelperPath = ""
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,7 +12,8 @@ $ExpectedUserSuffix = '\Win10_Game_OS'
 $Repo = 'C:\MCP-HOME\projects\birzha-mcp-forecast'
 $VenvPython = Join-Path $Repo '.venv\Scripts\python.exe'
 $PolicyRoot = Split-Path -Parent $PSCommandPath
-$McpHelper = Join-Path $PolicyRoot 'birzha_mcp_client.py'
+$RefreshScriptPath = $PSCommandPath
+$McpHelper = if($McpHelperPath){$McpHelperPath}else{Join-Path $env:LOCALAPPDATA 'ChatGPT-PK\BirzhaControl\birzha_mcp_client.py'}
 $LogRoot = 'C:\MCP-HOME\logs\birzha'
 $LogPath = Join-Path $LogRoot 'auto-history-refresh.log'
 $PidPath = Join-Path $QueueRoot 'history-refresh.pid'
@@ -31,7 +33,7 @@ function Write-RefreshLog {
 }
 
 function Enter-RefreshLease {
-    param([string]$Name = 'Local\BirzhaHistoryAndMirrorRefresh')
+    param([string]$Name = 'Global\BirzhaHistoryAndMirrorRefresh')
     $lease = [Threading.Mutex]::new($false, $Name)
     try {
         try { $acquired = $lease.WaitOne(0) }
@@ -49,77 +51,80 @@ function Get-SafeTill {
     return $moscow.Date.AddDays(-$lagDays)
 }
 
-function Invoke-HistoryWindow {
-    param(
-        [string]$Timeframe,
-        [int]$LookbackDays,
-        [DateTime]$Till
-    )
-    $from=$Till.AddDays(-$LookbackDays)
-    $request=[ordered]@{
-        action='call'
-        tool='history.sync_batch'
-        args=[ordered]@{
-            symbols=@('SBER','Si','BR','GOLD','IMOEX','RI')
-            timeframes=@($Timeframe)
-            from_date=$from.ToString('yyyy-MM-dd')
-            till_date=$Till.ToString('yyyy-MM-dd')
-        }
-        timeout_seconds=1800
-    }
-    $requestPath=Join-Path $TempRoot ('history-refresh-'+$Timeframe+'-'+[Guid]::NewGuid().ToString('N')+'.json')
+function Invoke-RefreshMcp {
+    param([object]$Request)
+    $requestPath=Join-Path $TempRoot ('refresh-'+[Guid]::NewGuid().ToString('N')+'.json')
     try {
-        $request | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $requestPath -Encoding UTF8
+        $Request | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $requestPath -Encoding UTF8
         $output=@(& $VenvPython $McpHelper --request $requestPath 2>&1)
-        $exitCode=$LASTEXITCODE
+        $helperExit=$LASTEXITCODE
         $last=@($output | Where-Object {-not [string]::IsNullOrWhiteSpace([string]$_)} | Select-Object -Last 1)
-        if($last.Count -eq 0){
-            throw "history refresh helper returned no JSON for $Timeframe"
-        }
+        if($helperExit -ne 0 -or $last.Count -eq 0){throw 'MCP_HELPER_FAILED'}
         $payload=([string]$last[0]) | ConvertFrom-Json
-        $toolStatus=[string]$payload.result.status
-        $requested=[int]($payload.result.requested)
-        $passed=[int]($payload.result.passed)
-        $failed=[int]($payload.result.failed)
-        if($exitCode -ne 0 -or [string]$payload.status -ne 'PASS' -or $toolStatus -ne 'PASS'){
-            throw ("history refresh $Timeframe failed exit=$exitCode wrapper=$([string]$payload.status) tool=$toolStatus requested=$requested passed=$passed failed=$failed")
-        }
-        Write-RefreshLog ("REFRESH_PASS timeframe=$Timeframe from=$($from.ToString('yyyy-MM-dd')) till=$($Till.ToString('yyyy-MM-dd')) requested=$requested passed=$passed failed=$failed")
+        if($payload.status -ne 'PASS'){throw 'MCP_REQUEST_FAILED'}
+        return $payload
+    } finally {Remove-Item -LiteralPath $requestPath -Force -ErrorAction SilentlyContinue}
+}
+
+function Assert-RefreshReadiness {
+    # Repository update alone does not replace the registered external runtime copy.
+    $canonical=Join-Path $Repo 'scripts\run_home_history_and_mirror.ps1'
+    if(-not(Test-Path -LiteralPath $canonical -PathType Leaf)){throw 'REFRESH_SOURCE_MISSING'}
+    if((Get-FileHash -LiteralPath $canonical -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $RefreshScriptPath -Algorithm SHA256).Hash){throw 'REFRESH_RUNTIME_SOURCE_MISMATCH'}
+    $sha=[string](& git -C $Repo rev-parse HEAD)
+    if($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$'){throw 'REFRESH_REVISION_UNKNOWN'}
+    $listing=Invoke-RefreshMcp @{action='list_tools';timeout_seconds=30}
+    foreach($tool in @('history.sync_batch','mirror.status','mirror.sync','archive.collect')){
+        if($tool -notin $listing.tools){throw 'REFRESH_REQUIRED_TOOL_MISSING'}
     }
-    finally {
-        Remove-Item -LiteralPath $requestPath -Force -ErrorAction SilentlyContinue
+    $status=(Invoke-RefreshMcp @{action='call';tool='mirror.status';args=@{};timeout_seconds=30}).result
+    if($status.source_sha -ne $sha){throw 'REFRESH_SERVER_REVISION_MISMATCH'}
+    if($status.enabled -ne $true -or $status.configured_in_process -ne $true -or $status.credentials_file_present -ne $true -or $status.single_writer_declared -ne $true){throw 'REFRESH_MIRROR_NOT_READY'}
+    # This proves configuration, never actual Google authorisation or candle coverage.
+}
+
+function Invoke-HistoryWindow {
+    param([string]$Timeframe,[int]$LookbackDays,[DateTime]$Till)
+    $from=$Till.AddDays(-$LookbackDays)
+    $payload=Invoke-RefreshMcp @{action='call';tool='history.sync_batch';args=@{
+        symbols=@('SBER','Si','BR','GOLD','IMOEX','RI');timeframes=@($Timeframe)
+        from_date=$from.ToString('yyyy-MM-dd');till_date=$Till.ToString('yyyy-MM-dd')
+    };timeout_seconds=1800}
+    $r=$payload.result
+    if($r.status -ne 'PASS' -or $r.requested -ne 6 -or $r.passed -ne 6 -or $r.failed -ne 0){throw 'REFRESH_SOURCE_INCOMPLETE'}
+    Write-RefreshLog ("REFRESH_PASS timeframe=$Timeframe from=$($from.ToString('yyyy-MM-dd')) till=$($Till.ToString('yyyy-MM-dd')) requested=6 passed=6 failed=0")
+}
+
+function Assert-MirrorResult {
+    param([string]$Symbol,[object]$Result)
+    # RI mirror.sync delegates to archive.update; its readback receipt differs.
+    $expected=if($Symbol -eq 'RI'){'MODEL3_ARCHIVE_READBACK_PASS'}else{'MIRROR_SYNC_PASS'}
+    if($Result.status -ne $expected){throw 'REFRESH_MIRROR_READBACK_NOT_PROVEN'}
+    if($Symbol -eq 'RI'){
+        if($Result.written -ne $true){throw 'REFRESH_MIRROR_READBACK_NOT_PROVEN'}
+    }else{
+        if($Result.symbol -ne $Symbol -or $Result.source_backend -ne 'DuckDB'){throw 'REFRESH_MIRROR_IDENTITY_MISMATCH'}
+        foreach($tf in @('D1','H1','M15')){
+            if($Result.sheets.$tf.sha256 -notmatch '^[0-9a-f]{64}$'){throw 'REFRESH_MIRROR_READBACK_NOT_PROVEN'}
+        }
     }
 }
 
 function Invoke-RefreshCycle {
+    Assert-RefreshReadiness
     $till=Get-SafeTill
     Write-RefreshLog ("CYCLE_START safe_till=$($till.ToString('yyyy-MM-dd'))")
     Invoke-HistoryWindow -Timeframe 'D1' -LookbackDays 120 -Till $till
     Invoke-HistoryWindow -Timeframe 'H1' -LookbackDays 95 -Till $till
     Invoke-HistoryWindow -Timeframe 'M15' -LookbackDays 35 -Till $till
-    # Source refresh success is separate from verified Google mirror success.
     Write-RefreshLog ("SOURCE_CYCLE_PASS safe_till=$($till.ToString('yyyy-MM-dd'))")
     foreach($symbol in @('SBER','Si','BR','GOLD','IMOEX','RI')){
-        $mirrorRequest=[ordered]@{
-            action='call'; tool='mirror.sync'; args=[ordered]@{
-                symbol=$symbol; from_date=$till.AddDays(-120).ToString('yyyy-MM-dd');
-                till_date=$till.ToString('yyyy-MM-dd'); dry_run=$false
-            }; timeout_seconds=1800
-        }
-        $mirrorRequestPath=Join-Path $TempRoot ('mirror-refresh-'+[Guid]::NewGuid().ToString('N')+'.json')
-        try {
-            $mirrorRequest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $mirrorRequestPath -Encoding UTF8
-            $mirrorOutput=@(& $VenvPython $McpHelper --request $mirrorRequestPath 2>&1)
-            $mirrorExit=$LASTEXITCODE
-            $mirrorLast=@($mirrorOutput | Where-Object {-not [string]::IsNullOrWhiteSpace([string]$_)} | Select-Object -Last 1)
-            if($mirrorLast.Count -eq 0){throw 'Mirror helper returned no structured result'}
-            $mirrorResult=([string]$mirrorLast[0]) | ConvertFrom-Json
-            if($mirrorExit -ne 0 -or [string]$mirrorResult.status -ne 'PASS' -or [string]$mirrorResult.result.status -ne 'MIRROR_SYNC_PASS'){
-                throw ("Mirror did not pass symbol=$symbol helper_exit=$mirrorExit wrapper_status=$([string]$mirrorResult.status) mirror_status=$([string]$mirrorResult.result.status)")
-            }
-            Write-RefreshLog ("MIRROR_PASS symbol=$symbol safe_till=$($till.ToString('yyyy-MM-dd'))")
-        }
-        finally {Remove-Item -LiteralPath $mirrorRequestPath -Force -ErrorAction SilentlyContinue}
+        $result=(Invoke-RefreshMcp @{action='call';tool='mirror.sync';args=@{
+            symbol=$symbol;from_date=$till.AddDays(-120).ToString('yyyy-MM-dd')
+            till_date=$till.ToString('yyyy-MM-dd');dry_run=$false
+        };timeout_seconds=1800}).result
+        Assert-MirrorResult -Symbol $symbol -Result $result
+        Write-RefreshLog ("MIRROR_PASS symbol=$symbol safe_till=$($till.ToString('yyyy-MM-dd'))")
     }
     Write-RefreshLog ("CYCLE_PASS source_and_six_mirrors_verified safe_till=$($till.ToString('yyyy-MM-dd'))")
 }
@@ -153,7 +158,7 @@ try {
             Invoke-RefreshCycle
         }
         catch {
-            Write-RefreshLog ("CYCLE_ERROR type=$($_.Exception.GetType().Name) message=$($_.Exception.Message)")
+            Write-RefreshLog 'CYCLE_ERROR check_readiness_or_operation_result' # never log arbitrary upstream text
         }
         Start-Sleep -Seconds $IntervalSeconds
     }
