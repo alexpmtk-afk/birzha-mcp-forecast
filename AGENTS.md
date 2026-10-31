@@ -21,6 +21,36 @@ record the actual source SHA. The owner's current task and scope take precedence
 over generic historical notes. This route selection qualifies any older blanket
 instruction to call history.*; candle and authorisation rules remain mandatory.
 
+## RI canonical workbook: README_STATUS retired (owner decision, 31.10.2026)
+
+For the **RI futures** workbook `MOEX_HISTDATA_RI_MCP_CANONICAL`
+(`1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY`), the
+`README_STATUS` tab (former sheetId `2101800019`) was intentionally
+**deleted** on 31.10.2026. It has no required runtime role and must **not**
+be created, recreated, copied from a backup, required by schema validation,
+or silently restored by a chat, local Codex, Apps Script or MCP workflow.
+Treat its absence as the **expected** RI schema, not as missing data.
+
+This later, explicit owner decision **supersedes** older RI tab inventories
+and generic `README_STATUS` requirements in the Drive originals
+`docs/DATA_TABLE_FORMAT.md`, `docs/DATA_UPDATE_POLICY.md`, research plans,
+backup books and handoff messages. When those sources differ, never repair
+the RI book to match the old list: report the stale reference and update the
+original instruction instead. Historical copies remain evidence only.
+For the proposed future unified template, do not introduce a
+`README_STATUS` tab by default. **Do not delete or change tabs in the other
+five canonical books under this RI-specific decision.**
+
+Use existing `SYNC_STATUS` for operational synchronization evidence,
+`QUALITY_AUDIT` for quality checks, and project documentation for
+methods and policy. Do not invent new status sheets or migrate historical
+notes automatically. Any tool needing `README_STATUS` should fail closed,
+name the exact caller/dependency, and request a separately authorized design
+change; it must never perform implicit `addSheet`/restore/replacement.
+Preserve all existing candle, indicator and service sheets, accepted OHLCV
+and existing formulas. This change does not authorize HOME deployment,
+database writes, or changes to RI/RTSI routing.
+
 ## Execute ordinary work independently
 
 Within an authorised task, choose bounded batches, inspect existing coverage,
