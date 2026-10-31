@@ -50,6 +50,6 @@ def test_analysis_updates_recent_daily_history_before_forecast_and_reports_each_
     assert tuple(call[0] for call in history.calls) == CORE_SYMBOLS
     assert all(call[1] == "D1" for call in history.calls)
     assert all(call[2] == "2026-08-24" and call[3] == "2026-09-23" for call in history.calls)
-    assert journal.calls == ["SBER", "Si", "GOLD", "IMOEX", "RTSI"]
+    assert journal.calls == ["SBER", "Si", "GOLD", "IMOEX", "RI"]
     assert report["items"][2]["stage"] == "history"
     assert report["items"][3]["stage"] == "forecast"

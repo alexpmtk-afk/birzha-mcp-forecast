@@ -62,7 +62,7 @@ def test_health_requires_stable_release_root_project_and_capabilities(monkeypatc
     assert exc.value.code == "BRIDGE_RELEASE_MISMATCH"
 
 
-@pytest.mark.parametrize("symbol", ["Si", "BR", "GOLD", "IMOEX", "RTSI", "SBER"])
+@pytest.mark.parametrize("symbol", ["Si", "BR", "GOLD", "IMOEX", "RI", "SBER"])
 def test_ensure_archive_uses_fixed_id_without_path_search(monkeypatch, symbol):
     from birzha.storage.google_sheets_bridge import INSTRUMENT_TARGETS
     b = bridge()
@@ -96,7 +96,8 @@ def test_canonical_replacement_blocked_before_network(monkeypatch):
 
 
 def test_unregistered_instrument_has_no_creation_path():
-    with pytest.raises(ValueError): bridge().ensure_archive(symbol="TATN")
+    for retired_or_unknown in ("TATN", "RTSI"):
+        with pytest.raises(ValueError): bridge().ensure_archive(symbol=retired_or_unknown)
 
 
 def test_replace_snapshot_orders_stage_chunks_verify_commit_inspect(monkeypatch):

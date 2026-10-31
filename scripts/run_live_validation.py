@@ -25,7 +25,7 @@ INSTRUMENT_CONTRACT_CASES = {
     "BR": "future",
     "GOLD": "future",
     "IMOEX": "index",
-    "RTSI": "index",
+    "RI": "future",
 }
 
 

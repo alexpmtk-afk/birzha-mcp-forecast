@@ -171,7 +171,7 @@ def test_mcp_mirror_disabled_and_configured_paths(monkeypatch):
     assert server.mirror_sync('SBER','2026-10-12','2026-10-12')['status']=='MIRROR_DRY_RUN_READY'
     assert server.mirror_sync_core('2026-10-12','2026-10-12')['passed']==6
     assert all(call['dry_run'] is True for call in calls)
-@pytest.mark.parametrize('root,secid', [('Si','SiZ6'),('BR','BRV6'),('GOLD','GDZ6')])
+@pytest.mark.parametrize('root,secid', [('Si','SiZ6'),('BR','BRV6'),('GOLD','GDZ6'),('RI','RIZ6')])
 def test_stored_future_root_exact_contract_and_versioned_session_keys(root,secid):
     db=DuckDBHistoricalCandleStore()
     instrument=Instrument(symbol=secid,secid=secid,root_symbol=root,board='RFUD',engine='futures',market='forts',asset_class='future')
@@ -303,7 +303,7 @@ def test_stricter_archive_completion_is_retained_and_reported_not_promoted():
     finally:db.close()
 
 
-@pytest.mark.parametrize("symbol,allowed",[("RTSI",True),("IMOEX",True),("SBER",False)])
+@pytest.mark.parametrize("symbol,allowed",[("IMOEX",True),("SBER",False)])
 def test_missing_index_volume_is_preserved_never_equated_to_zero(symbol,allowed):
     db=store(symbol);bundle=db.export_mirror_bundle(symbol,"2026-10-12","2026-10-12")
     old,_=project_source(bundle,"D1",[]);old[1][13]=""

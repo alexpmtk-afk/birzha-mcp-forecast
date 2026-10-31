@@ -61,7 +61,7 @@ def project_source(bundle: dict, timeframe: str, existing: list[list[object]]) -
             for column, key in (("open","open"),("high","high"),("low","low"),("close","close"),("volume","volume")):
                 value = candle[key]
                 prior = old[header.index(column)]
-                if (column == "volume" and bundle["symbol"] in {"IMOEX", "RTSI"}
+                if (column == "volume" and bundle["symbol"] == "IMOEX"
                         and prior == "" and value == 0 and not isinstance(value, bool)):
                     # Preserve explicitly missing index volume; never call NULL
                     # equal to zero or replace it with the provider placeholder.

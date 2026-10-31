@@ -4,7 +4,7 @@ This document describes the M23 operator path for honest six-market historical v
 
 ## Goal
 
-Validate the core universe `SBER`, `Si`, `BR`, `GOLD`, `IMOEX`, `RTSI` on durable YDB history without weakening causal or statistical gates.
+Validate the core universe `SBER`, `Si`, `BR`, `GOLD`, `IMOEX`, `RI` on durable YDB history without weakening causal or statistical gates.
 
 Required price timeframes: `D1`, `H1`, `M15`.
 

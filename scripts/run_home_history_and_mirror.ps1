@@ -60,7 +60,7 @@ function Invoke-HistoryWindow {
         action='call'
         tool='history.sync_batch'
         args=[ordered]@{
-            symbols=@('SBER','Si','BR','GOLD','IMOEX','RTSI')
+            symbols=@('SBER','Si','BR','GOLD','IMOEX','RI')
             timeframes=@($Timeframe)
             from_date=$from.ToString('yyyy-MM-dd')
             till_date=$Till.ToString('yyyy-MM-dd')
@@ -99,7 +99,7 @@ function Invoke-RefreshCycle {
     Invoke-HistoryWindow -Timeframe 'M15' -LookbackDays 35 -Till $till
     # Source refresh success is separate from verified Google mirror success.
     Write-RefreshLog ("SOURCE_CYCLE_PASS safe_till=$($till.ToString('yyyy-MM-dd'))")
-    foreach($symbol in @('SBER','Si','BR','GOLD','IMOEX','RTSI')){
+    foreach($symbol in @('SBER','Si','BR','GOLD','IMOEX','RI')){
         $mirrorRequest=[ordered]@{
             action='call'; tool='mirror.sync'; args=[ordered]@{
                 symbol=$symbol; from_date=$till.AddDays(-120).ToString('yyyy-MM-dd');

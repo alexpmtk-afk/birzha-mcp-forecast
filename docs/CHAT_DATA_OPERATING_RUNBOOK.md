@@ -1,6 +1,6 @@
 # Единый порядок работы чатов с рыночными данными
 
-Дата: 15.10.2026. Инструменты: SBER / Si / BR / GOLD / IMOEX / RTSI.
+Дата: 15.10.2026. Активные инструменты: SBER / Si / BR / GOLD / IMOEX / RI. Индекс RTSI исключён по решению владельца 31.10.2026.
 Этот документ задаёт маршрут выполнения. Правила самих свечей находятся в
 [STORED_SESSION_SERIES_20261015.md](STORED_SESSION_SERIES_20261015.md).
 Текущее поручение пользователя определяет разрешённый объём работы.
@@ -58,7 +58,7 @@ GitHub main, открытая ветка, исследовательский ф�
 | BR | [MOEX_HISTDATA_BR_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ/edit) |
 | GOLD | [MOEX_HISTDATA_GOLD_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g/edit) |
 | IMOEX | [MOEX_HISTDATA_IMOEX_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg/edit) |
-| RTSI (кассовый индекс) | **Канонический адрес требует независимой проверки; не подменять его фьючерсом RI.** |
+| RI (фьючерс РТС, точные контракты RIH6/RIM6/RIU6/RIZ6/RIH7) | **Канон: MOEX_HISTDATA_RI_MCP_CANONICAL. Индекс RTSI не активен.** |
 | RI (фьючерс; исследовательская книга) | [MOEX_HISTDATA_RI_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY/edit) |
 
 D1/H1/M15 — свечи своего периода; SESSIONS — сведения о календаре;
@@ -77,11 +77,11 @@ installed_source_sha с нужной версией; опубликованны�
 Пример чтения, которое само не загружает MOEX:
 
 ```json
-{"tool":"history.coverage","arguments":{"secid":"RTSI","timeframe":"H1"}}
+{"tool":"history.coverage","arguments":{"secid":"RIH7","timeframe":"H1"}}
 ```
 
 ```json
-{"tool":"history.stored_series","arguments":{"secid":"RTSI","timeframe":"H1","from_date":"2026-10-09","till_date":"2026-10-14"}}
+{"tool":"history.stored_series","arguments":{"secid":"RIH7","timeframe":"H1","from_date":"2026-10-09","till_date":"2026-10-14"}}
 ```
 
 Форма выше — имя и аргументы MCP-вызова, не команда shell и не HTTP-адрес.
@@ -93,7 +93,7 @@ installed_source_sha с нужной версией; опубликованны�
 Только если установлены недостающие диапазоны и их сбор разрешён:
 
 ```json
-{"tool":"history.sync","arguments":{"symbol":"RTSI","timeframe":"H1","from_date":"2026-10-12","till_date":"2026-10-14"}}
+{"tool":"history.sync","arguments":{"symbol":"RI","timeframe":"H1","from_date":"2026-10-12","till_date":"2026-10-14"}}
 ```
 
 Это пример формы, не поручение заново загрузить указанные даты. history.sync
@@ -247,7 +247,7 @@ runner не видит HOME и не обновляет его без отдел�
 
 15.10.2026 принята установка #245 SHA035735f83a76bc932391109f046b20a05db80afb:
 38команд, чтение SBER09–14.10 D1/H1/M15=4/72/276 и одинаковые повторы.
-Это датированное доказательство чтения SBER, не полнота RTSI и не вечная
+Это датированное доказательство чтения SBER, не полнота RI и не вечная
 гарантия состояния сервера. #244 облачной выгрузки отдельно не установлен.
 
 Работай самостоятельно в доступной среде, используя эти правила. Не спрашивай

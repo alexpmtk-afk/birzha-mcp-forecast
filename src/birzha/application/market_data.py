@@ -55,6 +55,8 @@ class MarketDataService:
         if an exact SECID with the same text exists. Historical dates use the
         causal MOEX ISS history resolver; current dates use the active contract.
         """
+        if symbol.strip().upper() == "RTSI":
+            raise ValueError("RTSI cash index is retired; use RI futures instead")
         is_root = is_futures_root_symbol(symbol)
         if self.direct_resolver is not None and not is_root:
             direct = self.direct_resolver.resolve(symbol)

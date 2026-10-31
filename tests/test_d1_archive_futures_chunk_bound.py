@@ -20,9 +20,10 @@ def test_futures_roots_use_shorter_d1_archive_chunks_than_direct_markets() -> No
     si = [a for a in sync if a.payload["symbol"] == "Si"]
     br = [a for a in sync if a.payload["symbol"] == "BR"]
     gold = [a for a in sync if a.payload["symbol"] == "GOLD"]
+    ri = [a for a in sync if a.payload["symbol"] == "RI"]
 
     assert max(_days(str(a.payload["from_date"]), str(a.payload["till_date"])) for a in sber) <= 366
-    for root_actions in (si, br, gold):
+    for root_actions in (si, br, gold, ri):
         assert root_actions
         assert max(
             _days(str(a.payload["from_date"]), str(a.payload["till_date"]))
@@ -37,7 +38,7 @@ def test_each_market_finalizer_references_exactly_its_own_chunks() -> None:
         "2024-12-31",
         "deadbeef",
     )
-    for symbol in ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI"):
+    for symbol in ("SBER", "Si", "BR", "GOLD", "IMOEX", "RI"):
         chunks = [
             [a.payload["from_date"], a.payload["till_date"]]
             for a in actions

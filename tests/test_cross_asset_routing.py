@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from birzha.application.market_data import MarketDataService
 from birzha.domain.market import Instrument
 from birzha.providers.moex_analytics import MoexAnalyticsError, _algopack_market_code
@@ -213,8 +215,8 @@ class FakeIndexIssClient:
         return [dict(zip(table["columns"], row, strict=False)) for row in table["data"]]
 
 
-def test_direct_resolver_maps_core_indices_from_official_board_semantics() -> None:
-    for symbol, board in (("IMOEX", "SNDX"), ("RTSI", "RTSI")):
+def test_direct_resolver_maps_active_imoex_index_from_official_board_semantics() -> None:
+    for symbol, board in (("IMOEX", "SNDX"),):
         resolver = MoexDirectInstrumentResolver(FakeIndexIssClient(symbol, board))  # type: ignore[arg-type]
 
         instrument = resolver.resolve(symbol)
@@ -225,3 +227,9 @@ def test_direct_resolver_maps_core_indices_from_official_board_semantics() -> No
         assert instrument.engine == "stock"
         assert instrument.market == "index"
         assert instrument.asset_class == "index"
+
+
+def test_retired_rtsi_is_not_resolved_by_active_market_service() -> None:
+    service = MarketDataService(provider=object())  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="retired"):
+        service.resolve("RTSI")

@@ -34,7 +34,7 @@ class FakeHistory:
 def test_session_capacity_checks_development_and_holdout_for_all_markets() -> None:
     counts = {
         ("development", "GOLD"): 390,
-        ("holdout", "RTSI"): 395,
+        ("holdout", "RI"): 395,
     }
     capacity, shortfall = prepare._session_capacity(
         FakeHistory(counts),  # type: ignore[arg-type]
@@ -49,7 +49,7 @@ def test_session_capacity_checks_development_and_holdout_for_all_markets() -> No
     assert set(capacity["development"]) == set(prepare.CORE_VALIDATION_SYMBOLS)
     assert set(capacity["holdout"]) == set(prepare.CORE_VALIDATION_SYMBOLS)
     assert shortfall["development"]["GOLD"]["20"] < 20
-    assert shortfall["holdout"]["RTSI"]["20"] < 20
+    assert shortfall["holdout"]["RI"]["20"] < 20
     assert "SBER" not in shortfall["development"]
     assert "SBER" not in shortfall["holdout"]
 

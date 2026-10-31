@@ -65,4 +65,4 @@ def test_contract_registry_is_data_not_forecast():
     assert c["source_cache_is_not_canonical"] is True
     assert c["forecast_admission"]=="NOT_GRANTED_BY_ARCHIVE"
     assert len(c["indicator_sets"][0]["outputs"])==55
-    with pytest.raises(ValueError,match="conflicts"):archive_contract("RTSI")
+    with pytest.raises(ValueError,match="retired"):archive_contract("RTSI")

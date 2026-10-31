@@ -15,7 +15,7 @@ from birzha.application.historical_data import HistoricalDataService
 from birzha.application.history_policy import D1_ARCHIVE_START, PERSISTENT_PRICE_TIMEFRAMES
 
 
-CORE_VALIDATION_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
+CORE_VALIDATION_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RI")
 PRICE_LOOKBACK_DAYS = (("D1", 300),)
 
 

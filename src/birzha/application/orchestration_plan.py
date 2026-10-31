@@ -14,7 +14,7 @@ from birzha.application.market_data import is_futures_root_symbol
 from birzha.domain.orchestration import WorkflowAction, WorkflowStage
 
 
-CORE_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI")
+CORE_SYMBOLS = ("SBER", "Si", "BR", "GOLD", "IMOEX", "RI")
 CORE_TIMEFRAMES = PERSISTENT_PRICE_TIMEFRAMES
 HISTORY_CHUNK_DAYS = 92
 D1_ARCHIVE_CHUNK_DAYS = 366
