@@ -44,13 +44,15 @@ class InstrumentArchiveTarget:
 
 # Existing files pinned after the 2026-10-14 archive revision. Names are labels;
 # no fallback to path search or implicit file creation is allowed.
+# RI is the RTS *futures* family. Its existing Drive folder name is a legacy
+# label; the immutable folder ID and canonical sheet ID identify the RI archive.
+# Do not rename the folder here without a controlled Drive-path migration.
 INSTRUMENT_TARGETS: dict[str, InstrumentArchiveTarget] = {
     "RI": InstrumentArchiveTarget("RTS - Индекс РТС", "RI", "1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY", "MOEX_HISTDATA_RI_MCP_CANONICAL"),
     "SI": InstrumentArchiveTarget("Si - Доллар-рубль", "Si", "1gqYoZ04887U6btTyj0diHPGq3oZVrk9QNKT9PJ6W0ss", "MOEX_HISTDATA_Si_MCP_CANONICAL"),
     "BR": InstrumentArchiveTarget("BR - Brent", "BR", "1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ", "MOEX_HISTDATA_BR_MCP_CANONICAL"),
     "GOLD": InstrumentArchiveTarget("GOLD - Золото", "GOLD", "1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g", "MOEX_HISTDATA_GOLD_MCP_CANONICAL"),
     "IMOEX": InstrumentArchiveTarget("MIX_MX - Индекс МосБиржи", "IMOEX", "1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg", "MOEX_HISTDATA_IMOEX_MCP_CANONICAL"),
-    "RTSI": InstrumentArchiveTarget("RTS - Индекс РТС", "RTSI", "1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY", "MOEX_HISTDATA_RTSI_MCP_CANONICAL"),
     "SBER": InstrumentArchiveTarget("SBER - Сбербанк", "SBER", "1DQojm2mzeXC41mHX1oH8xMv0d43TSz7U7o-ciK9lgoQ", "MOEX_HISTDATA_SBER_MCP_CANONICAL"),
 }
 
@@ -60,7 +62,6 @@ INSTRUMENT_FOLDER_IDS = {
     "BR": "1X9BbkWE-OeISlXKuPQ1SW6uT593pHwot",
     "GOLD": "1mpXF423F5Y7oiSKSSGf5YmmbFZMcXohx",
     "IMOEX": "1gDvLdbPe1vdrpP5hFUTNNetmxhkzIJYF",
-    "RTSI": "1v0ZYWbxp5vuH8WIuQtTcg6qBfX1b69Ez",
     "SBER": "14WYHet60gDRUtxlLAJ-BX_8_dyKiPjh0",
 }
 

@@ -303,7 +303,7 @@ def test_stricter_archive_completion_is_retained_and_reported_not_promoted():
     finally:db.close()
 
 
-@pytest.mark.parametrize("symbol,allowed",[("RTSI",True),("IMOEX",True),("SBER",False)])
+@pytest.mark.parametrize("symbol,allowed",[("IMOEX",True),("RI",False),("SBER",False)])
 def test_missing_index_volume_is_preserved_never_equated_to_zero(symbol,allowed):
     db=store(symbol);bundle=db.export_mirror_bundle(symbol,"2026-10-12","2026-10-12")
     old,_=project_source(bundle,"D1",[]);old[1][13]=""

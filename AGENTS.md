@@ -1,5 +1,7 @@
 # AGENTS.md — autonomous market-data work
 
+> **Owner decision 2026-10-31:** retire the `RTSI` cash index from all active workflows and archive routing. Work with `RI` RTS futures only, resolving exact contracts by session. `MOEX_HISTDATA_RI_MCP_CANONICAL` is an RI futures book, never an RTSI book. Preserve historical index data and immutable price rows; do not rewrite/delete history or assume GitHub edits are deployed to HOME.
+
 ## Start here
 
 For any candle download, storage, continuation or session-concatenation task,

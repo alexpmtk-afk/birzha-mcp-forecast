@@ -43,7 +43,7 @@ from birzha.storage.ydb_rate_gate import YdbSlotPacingGate
 from birzha.storage.ydb_state import YdbForecastJournal, YdbOutcomeJournal, YdbRuntime
 from birzha.version import ARCHITECTURE_VERSION, SERVICE_NAME, VERSION
 
-CORE_HISTORY_SYMBOLS = ["SBER", "Si", "BR", "GOLD", "IMOEX", "RTSI"]
+CORE_HISTORY_SYMBOLS = ["SBER", "Si", "BR", "GOLD", "IMOEX", "RI"]
 CORE_HISTORY_TIMEFRAMES = ["D1", "H1", "M15"]
 
 settings = Settings.from_env()

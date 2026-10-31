@@ -35,3 +35,8 @@ Return: scope and explicit environment, source manifest/SHAs, exact contract tim
 
 ## Authorization
 This GitHub skill and T−1 source policy are versioned in main; no installed HOME readback has been obtained. Do not imply source changes are deployed or that strict historical PIT is proven. Never mutate production DuckDB, canonical Google source cells, secrets or execution behavior without scope and independent checks.
+
+
+## Active RTS routing (owner decision 2026-10-31)
+
+Use **RI**, the RTS futures family, and exact quarterly SECIDs (RIH6/RIM6/RIU6/RIZ6/RIH7) as applicable. The cash-index ticker **RTSI is retired** from the active BIRZHA universe; never resolve, collect, mirror, validate or forecast RTSI on behalf of an RI request. The RI Google archive is `MOEX_HISTDATA_RI_MCP_CANONICAL` (ID `1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY`). Historical RTSI data, if present, is read-only legacy evidence. Do not delete/relabel existing rows or auto-merge the index into RI. Keep exact-contract/calendar/PIT admission gates.

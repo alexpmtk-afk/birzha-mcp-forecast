@@ -17,10 +17,9 @@ INDICATOR_SETS = (IndicatorSet("bar_volume_structure_v1",("P3_PURNOV_BAR_RESEARC
 
 def archive_contract(symbol):
     key=symbol.strip().upper()
+    if key=="RTSI":raise ValueError("RTSI index retired; use RI futures contracts instead")
     if key not in INSTRUMENT_TARGETS:raise ValueError("instrument has no approved archive/template")
     target=INSTRUMENT_TARGETS[key]
-    if key=="RTSI" and target.spreadsheet_id==INSTRUMENT_TARGETS["RI"].spreadsheet_id:
-        raise ValueError("RTSI canonical address conflicts with RI; verify index book before writes")
     return {"symbol":key,"canonical_storage":"GOOGLE_SHEETS","spreadsheet_id":target.spreadsheet_id,
         "spreadsheet_name":target.spreadsheet_name,"candle_sheets":["D1","H1","M15"],
         "indicator_sheets":["D1_INDICATORS","H1_INDICATORS","M15_INDICATORS"],

@@ -1,5 +1,7 @@
 # Canonical market mirror correction — 2026-10-14
 
+> **Current routing update (2026-10-31):** RTSI references below describe dated legacy/index evidence, not an active supported market. The active RTS market is the RI futures family and its separate `MOEX_HISTDATA_RI_MCP_CANONICAL` book. Do not re-enable RTSI or map its data into RI.
+
 ## Scope and evidence
 
 Base: origin/main b6c085db18d1811f46077a447e6a2251b2df85f0.
