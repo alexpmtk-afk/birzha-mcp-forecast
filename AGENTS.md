@@ -2,6 +2,20 @@
 
 > **Owner decision 2026-10-31:** retire the `RTSI` cash index from all active workflows and archive routing. Work with `RI` RTS futures only, resolving exact contracts by session. `MOEX_HISTDATA_RI_MCP_CANONICAL` is an RI futures book, never an RTSI book. Preserve historical index data and immutable price rows; do not rewrite/delete history or assume GitHub edits are deployed to HOME.
 
+## Единый M1 OHLCV архив по каждому инструменту (правило v1)
+
+Перед задачами по хранению/обновлению свечей читай
+[общий контракт исходников и структуры Drive](docs/MARKET_ARCHIVE_STORAGE_STANDARD_V1.md).
+Он задаёт одну каноническую книгу, папку `01_M1_SOURCE` с минутными ценами
+**и реальным объёмом** по точному SECID/месяцу, и
+`02_LEGACY_AND_RECOVERY` для старых материалов. Никаких автоматических копий
+ZIP с другим названием, синтетических M1, подмены RAW скорректированной
+ценой или смешения объёмов разных фьючерсных контрактов.
+RI реализован на Google Drive (каталог `M1_SOURCE_INDEX`); для других
+инструментов это пока целевой формат, а не выполненная миграция.
+GitHub-документация не означает установки HOME: код и права записи проверять
+отдельно; этот пункт не разрешает merge/deploy/массовый сбор или удаление.
+
 ## Start here
 
 For any candle download, storage, continuation or session-concatenation task,
