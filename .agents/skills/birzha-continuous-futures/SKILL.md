@@ -33,5 +33,17 @@ Do not apply to an exact SECID's ordinary **session concatenation**; use the exi
 ## Output
 Return: scope and explicit environment, source manifest/SHAs, exact contract timeline, decisions/effective dates, numerical coordinate checks, D1/H1/M15/session identity, quality exclusions, PIT status, report/PR refs and outstanding gates.
 
+## RI archive layout guard (31.10.2026)
+
+The owner retired `README_STATUS` in the existing RI Google workbook
+(`1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY`).
+Do not ask for it, recreate it, backfill it from old RTSI/RI copies, or
+interpret its absence as a failed source/mirror operation. Old Google Drive
+`DATA_TABLE_FORMAT.md` and `DATA_UPDATE_POLICY.md` still contain historical
+tab lists; follow the newer explicit rule in `AGENTS.md` and the runbook.
+Use the existing `SYNC_STATUS`, `QUALITY_AUDIT`, and project documentation
+instead. This exception concerns RI only and never authorizes edits to
+other canonical workbooks.
+
 ## Authorization
 This GitHub skill and T−1 source policy are versioned in main; no installed HOME readback has been obtained. Do not imply source changes are deployed or that strict historical PIT is proven. Never mutate production DuckDB, canonical Google source cells, secrets or execution behavior without scope and independent checks.
