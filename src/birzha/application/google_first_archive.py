@@ -85,7 +85,7 @@ class GoogleFirstArchive:
             if exact_secid is not None and instrument.secid!=exact_secid:raise MirrorConflict('EXACT_CONTRACT_NOT_T_MINUS_1_SELECTION')
             secid=instrument.secid;identity(symbol,secid,timeframe)
             existing=[r for r in old[1:] if r[h.index('contract_code')]==secid and stamp(r[h.index('bar_start_time')]).date()==target]
-            
+
             # A day receipt is committed only after the bounded full response was read back.
             # Never re-download a populated unproven intraday window.
             if existing and timeframe!='M15' and not (receipt and receipt.get('phase')=='PREPARED'):
