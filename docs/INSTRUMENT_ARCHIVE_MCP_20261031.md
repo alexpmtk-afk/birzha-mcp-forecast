@@ -99,3 +99,6 @@
 - Сохранённые реальные MOEX-переходы20марта(+2570),19июня(−2830),18сентября(−710):253выбранных бара,1012скорректированных цен,0расхождений; исходные свечи сохранены. Повтор без изменений данных.
 - Сравнение выполнялось на местном стенде с проверкой записи и обратного чтения. Это не запуск новой команды на установленном HOME и не запись новых столбцов в рабочую Google-книгу.
 - Запись проверяет ограниченные участки вместо полного перечитывания архива для каждой порции; итоговые таблицы читаются полностью. Потерянный ответ не вызывает слепого повтора записи.
+
+
+**2026-10-31 RI routing:** `archive.contract("RI")` returns the exact canonical Google spreadsheet ID, the pinned Drive folder ID/URL, a `CONTRACTS` tab pointer and an `RTS_FUTURES_EXACT_CONTRACTS` identity. The physical Drive folder still has a legacy name. Its renaming is deferred pending Windows Drive path dependency checks; folder ID is the durable locator. `RTSI` remains rejected.

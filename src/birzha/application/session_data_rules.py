@@ -55,6 +55,14 @@ def session_data_rules() -> dict:
         "retired_index_symbols": ["RTSI"],
         "rts_futures_identity": "RI exact contract family (RIH6/RIM6/RIU6/RIZ6/RIH7), not RTSI cash index",
         "canonical_google_books": {'SBER': {'spreadsheet_id': '1DQojm2mzeXC41mHX1oH8xMv0d43TSz7U7o-ciK9lgoQ', 'name': 'MOEX_HISTDATA_SBER_MCP_CANONICAL'}, 'Si': {'spreadsheet_id': '1gqYoZ04887U6btTyj0diHPGq3oZVrk9QNKT9PJ6W0ss', 'name': 'MOEX_HISTDATA_Si_MCP_CANONICAL'}, 'BR': {'spreadsheet_id': '1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ', 'name': 'MOEX_HISTDATA_BR_MCP_CANONICAL'}, 'GOLD': {'spreadsheet_id': '1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g', 'name': 'MOEX_HISTDATA_GOLD_MCP_CANONICAL'}, 'IMOEX': {'spreadsheet_id': '1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg', 'name': 'MOEX_HISTDATA_IMOEX_MCP_CANONICAL'}, 'RI': {'spreadsheet_id': '1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY', 'name': 'MOEX_HISTDATA_RI_MCP_CANONICAL'}},
+        "canonical_drive_folder_ids": {
+            "SBER": "14WYHet60gDRUtxlLAJ-BX_8_dyKiPjh0",
+            "Si": "1c_WRQl2pPfsDSnwcR1l2dGyr0jwQVoNF",
+            "BR": "1X9BbkWE-OeISlXKuPQ1SW6uT593pHwot",
+            "GOLD": "1mpXF423F5Y7oiSKSSGf5YmmbFZMcXohx",
+            "IMOEX": "1gDvLdbPe1vdrpP5hFUTNNetmxhkzIJYF",
+            "RI": "1v0ZYWbxp5vuH8WIuQtTcg6qBfX1b69Ez",
+        },
         "canonical_tabs": {
             "D1": "daily candles", "H1": "hourly candles", "M15": "15-minute candles",
             "SESSIONS": "calendar evidence, not inferred weekdays",
