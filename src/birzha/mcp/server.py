@@ -71,7 +71,11 @@ else:
     _historical_store = DuckDBHistoricalCandleStore(settings.historical_store_path)
     _historical_flow_store = DuckDBHistoricalFlowStore(settings.historical_store_path)
 
-_market = MarketDataService.default(control_plane=_upstream_control)
+_minute_capture = None
+if settings.model3_minute_archive_dir:
+    from birzha.storage.model3_minute_archive import MinuteArchiveCapture
+    _minute_capture = MinuteArchiveCapture(settings.model3_minute_archive_dir)
+_market = MarketDataService.default(control_plane=_upstream_control, minute_observer=_minute_capture)
 _history = HistoricalDataService(market_data=_market, store=_historical_store)
 _analytics = MoexAnalyticsClient(control_plane=_upstream_control)
 _historical_flow = HistoricalFlowDataService(market_data=_market, analytics=_analytics, store=_historical_flow_store)
@@ -112,6 +116,83 @@ if settings.native_mirror_enabled:
     )
 
 
+_model3_archive = None
+if _native_mirror is not None:
+    from birzha.application.model3_archive import Model3ArchiveUpdater
+    _model3_archive = Model3ArchiveUpdater(
+        transport=_native_mirror.transport,
+        minute_archive_dir=settings.model3_minute_archive_dir,
+        audit_dir=settings.model3_audit_dir,
+        source=_historical_store,
+        source_sha=settings.source_sha or "UNKNOWN",
+        lock=_native_mirror._lock,
+    )
+
+
+@mcp.tool(name="archive.update", description="Unified instrument Google archive; registered shared indicator sets are calculated independently of forecasts. RI: reconcile existing D1/H1/M15 and their INDICATORS tabs, restore missing M15 from configured saved M1, compute missing/dependent versioned Purnov research features, repair chronological row order, create local backup and verify all writes. Dry-run by default. Optional source sync reuses history.sync; no new books, paid source or Forecast admission.",
+          annotations=ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=True))
+def archive_update(from_date: str, till_date: str, dry_run: bool = True,
+                   repair_dependent: bool = False, symbol: str = "RI") -> dict[str, object]:
+    from birzha.application.instrument_archive_registry import archive_contract
+    try:
+        contract=archive_contract(symbol)
+    except ValueError as exc:
+        return {"status":"BLOCKED","reason":str(exc),"written":False}
+    if contract["symbol"] != "RI":
+        return {"status":"BLOCKED","reason":"indicator/archive policy not yet accepted for this instrument",
+                "contract":contract,"written":False}
+    if _model3_archive is None:
+        return {"status":"BLOCKED","reason":"existing authenticated native mirror is not configured","written":False}
+    try:
+        from datetime import date as _date
+        left,right=_date.fromisoformat(from_date),_date.fromisoformat(till_date)
+        if not 0 <= (right-left).days < 367:
+            raise ValueError("bounded exact date range required")
+        return _model3_archive.update(from_date=from_date,till_date=till_date,dry_run=dry_run,
+            repair_dependent=repair_dependent,exclusive_workbook_owner=settings.native_mirror_sole_writer)
+    except Exception as exc:
+        from birzha.application.canonical_market_mirror import MirrorConflict
+        return {"status":"ERROR","reason":str(exc)[:200] if isinstance(exc,(MirrorConflict,ValueError)) else "SOURCE_OR_RUNTIME_FAILURE",
+                "written":"UNKNOWN_RECONCILE_BEFORE_RETRY" if not dry_run else False}
+
+
+@mcp.tool(name="archive.collect", description="Model-independent Google-first collection for one exact contract and timeframe, at most three civil days. Reuse matching source receipts; refuse to re-download populated unproven windows. Existing governor, native D1/H1 and existing M1-to-M15 aggregator. Preview by default.",
+          annotations=ToolAnnotations(read_only_hint=False,destructive_hint=False,idempotent_hint=True,open_world_hint=True))
+def archive_collect(symbol: str, exact_secid: str, timeframe: str, from_date: str, till_date: str, dry_run: bool = True) -> dict[str, object]:
+    if _native_mirror is None:
+        return {"status":"BLOCKED","reason":"authenticated Google archive writer is not configured","written":False}
+    from birzha.application.archive_collection import ArchiveCollector
+    try:
+        return ArchiveCollector(_native_mirror.transport,_market,settings.model3_audit_dir,_native_mirror._lock).collect(
+            symbol=symbol,exact_secid=exact_secid,timeframe=timeframe,from_date=from_date,till_date=till_date,
+            dry_run=dry_run,exclusive_workbook_owner=settings.native_mirror_sole_writer)
+    except Exception as exc:
+        return {"status":"ERROR","reason":str(exc)[:200],"written":False if dry_run else "UNKNOWN_RECONCILE_BEFORE_RETRY"}
+
+
+@mcp.tool(name="archive.contract_plan", description="Use the existing historical futures resolver to plan exact contracts for a bounded range. No candles, Google writes or model predictions.",
+          annotations=ToolAnnotations(read_only_hint=True,destructive_hint=False,idempotent_hint=True,open_world_hint=True))
+def archive_contract_plan(symbol: str, from_date: str, till_date: str) -> dict[str, object]:
+    from datetime import date
+    from birzha.application.instrument_archive_registry import archive_contract
+    try:
+        archive_contract(symbol)
+        a,b=date.fromisoformat(from_date),date.fromisoformat(till_date)
+        if not 0 <= (b-a).days < 367:raise ValueError("date range exceeds 367 days")
+        segments=_history._segments(symbol,a,b)
+        return {"symbol":symbol,"contracts":[{"secid":i.secid,"from_date":left.isoformat(),"till_date":right.isoformat()} for i,left,right in segments],
+            "selection":"EXISTING_HISTORICAL_RESOLVER_T_MINUS_1","historical_first_available":"UNVERIFIED","written":False}
+    except Exception as exc:return {"status":"ERROR","reason":str(exc)[:200],"written":False}
+
+
+@mcp.tool(name="archive.contract", description="Read the fixed instrument Google archive, candle routes and registered shared indicator sets; no network or writes.",
+          annotations=ToolAnnotations(read_only_hint=True,destructive_hint=False,idempotent_hint=True,open_world_hint=False))
+def archive_contract_tool(symbol: str) -> dict[str, object]:
+    from birzha.application.instrument_archive_registry import archive_contract
+    try:return archive_contract(symbol)
+    except ValueError as exc:return {"status":"BLOCKED","reason":str(exc)}
+
+
 @mcp.tool(name="mirror.status", description="Read local mirror activation settings without reading credentials or calling Google/MOEX.")
 def mirror_status() -> dict[str, object]:
     from pathlib import Path
@@ -124,6 +205,8 @@ def mirror_status() -> dict[str, object]:
 
 @mcp.tool(name="mirror.sync", description="Read already stored data and reconcile one fixed canonical Google workbook. Dry-run by default; no MOEX requests or source database writes.")
 def mirror_sync(symbol: str, from_date: str, till_date: str, dry_run: bool = True) -> dict[str, object]:
+    if symbol.strip().upper() == "RI":
+        return archive_update(from_date,till_date,dry_run=dry_run,symbol="RI")
     if _native_mirror is None:
         return {"status":"BLOCKED","reason":"background Google mirror is not configured","written":False}
     try:

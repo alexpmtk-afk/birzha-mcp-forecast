@@ -86,3 +86,11 @@ Distinguish three different operations: (1) join successive trading **sessions o
 Read [the research and acceptance policy](docs/CONTINUOUS_FUTURES_POLICY_RESEARCH_20261029.md), [the source runtime contract](docs/FUTURES_RUNTIME_RESOLVER_STATUS_20261029.md), and [the GitHub agent skill](.agents/skills/birzha-continuous-futures/SKILL.md). GitHub source availability **does not mean** the skill or binary is installed on HOME. Preserve RAW, original per-SECID volume, OHLCV, gaps and historical confidence; forbid exact volume-profile/Delta reconstruction from M1 OHLCV alone. **RI** (RTS futures) must not be confused with **RTSI** (cash index).
 
 Local rollout remains tracked in [issue #277](https://github.com/alexpmtk-afk/birzha-mcp-forecast/issues/277); do not call it complete based only on CI and main merge.
+
+## Единое хранилище данных — решение владельца 31.10.2026
+
+Основной архив каждого инструмента — его существующая Google Таблица. Свечи и расчётные показатели принадлежат инструменту и доступны всем прогнозным моделям; не создавать архивы по номерам моделей. Локальная база может служить источником/кэшем наблюдений для сверки, но отсутствие строк в ней не разрешает повторно скачивать заполненный Google-архив. Ранее допущенный оперативный источник Forecast и исследовательская таблица не взаимозаменяемы; обратный импорт в production и допуск прогноза остаются отдельными решениями.
+
+Перед архивной задачей читать docs/INSTRUMENT_ARCHIVE_MCP_20261031.md. Реальные интерфейсы: archive.contract, archive.contract_plan, archive.collect, archive.update. Действующий общий загрузчик и M1-to-M15 агрегатор переиспользуются. Расчёт показателей выбирается из зарегистрированных наборов; новые требования моделей добавляются в общий набор, а не в параллельные книги.
+
+Команды считаются установленными только после отдельного подтверждения source SHA и tools/list работающего сервера. Наличие этого раздела или кода в ветке не является HOME-приёмкой. При неизвестной полноте существующего окна не скачивать его заново и не выдумывать нулевые интервалы. При конфликте адресов RI/RTSI блокировать запись до установления верного адреса индекса.

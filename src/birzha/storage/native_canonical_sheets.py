@@ -62,7 +62,7 @@ class NativeCanonicalSheets:
 
     def _validate_named_target(self, symbol: str, timeframe: str) -> None:
         symbol, target = GoogleSheetsBridge.target_for_symbol(symbol)
-        if timeframe not in TIMEFRAMES | {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
+        if timeframe not in TIMEFRAMES | {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS", "D1_INDICATORS", "H1_INDICATORS", "M15_INDICATORS"}:
             raise MirrorConflict("unsupported canonical sheet")
         meta = self._request("GET", f"https://www.googleapis.com/drive/v3/files/{target.spreadsheet_id}",
                              params={"fields": "id,name,mimeType,parents,trashed"})
@@ -78,7 +78,7 @@ class NativeCanonicalSheets:
             raise MirrorConflict("existing timeframe tab missing; no implicit creation")
         props = matches[0]
         grid = props.get("gridProperties", {})
-        if props.get("sheetType", "GRID") != "GRID" or not 1 <= grid.get("rowCount", 0) <= MAX_ROWS or not 1 <= grid.get("columnCount", 0) <= MAX_COLUMNS:
+        if props.get("sheetType", "GRID") != "GRID" or not 1 <= grid.get("rowCount", 0) <= MAX_ROWS or not 1 <= grid.get("columnCount", 0) <= (160 if timeframe.endswith("_INDICATORS") else MAX_COLUMNS):
             raise MirrorConflict("unsupported native grid bounds")
         self._sheets[(symbol, timeframe)] = props
 
@@ -90,7 +90,10 @@ class NativeCanonicalSheets:
         grid = props["gridProperties"]
         count = grid["columnCount"]
         # A..AN (40): bounded native grid; column letters derived without library dependency.
-        end_column = chr(64 + count) if count <= 26 else "A" + chr(64 + count - 26)
+        end_column = ""
+        while count:
+            count, remainder = divmod(count - 1, 26)
+            end_column = chr(65 + remainder) + end_column
         result = []
         for offset in range(0, grid["rowCount"], 2000):
             range_name = f"'{timeframe}'!A{offset + 1}:{end_column}{min(offset + 2000, grid['rowCount'])}"
@@ -132,7 +135,7 @@ class NativeCanonicalSheets:
             raise MirrorConflict("append payload exceeds 1 MB; reduce chunk size")
         self._request("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}:batchUpdate", json=body)
         # Refresh grid bounds: appendCells may expand the allocated sheet.
-        self.validate_target(symbol, timeframe)
+        self._validate_named_target(symbol, timeframe)
 
     def validate_service_target(self, symbol: str, sheet: str) -> None:
         if sheet not in {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
@@ -198,3 +201,66 @@ class NativeCanonicalSheets:
             self.validate_service_target(symbol,"SYNC_STATUS")
         if digest(self.read_status(symbol)) != digest(rows):
             raise MirrorConflict("status post-write readback mismatch")
+
+    def validate_model3_target(self, symbol: str, sheet: str) -> None:
+        if symbol != "RI" or sheet not in TIMEFRAMES | {"D1_INDICATORS", "H1_INDICATORS", "M15_INDICATORS"}:
+            raise MirrorConflict("Model3 archive is limited to existing RI tabs")
+        self._validate_named_target(symbol, sheet)
+
+    def model3_write_cells(self, symbol: str, sheet: str, edits: list[tuple[int, int, object]]) -> None:
+        """Literal missing-field/approved defect patch; no formula or value-only row replacement."""
+        self.validate_model3_target(symbol, sheet)
+        props=self._sheets[(symbol,sheet)]; grid=props["gridProperties"]
+        if not edits or len(edits)>2000:raise MirrorConflict("bounded cell patch required")
+        if any(not isinstance(r,int) or not isinstance(c,int) or r<0 or c<0 or r>=MAX_ROWS or c>=160 for r,c,v in edits):
+            raise MirrorConflict("cell patch outside existing-tab bounds")
+        def cell(v):
+            if v is None or v=="":return {}
+            if isinstance(v,bool):return {"userEnteredValue":{"boolValue":v}}
+            if isinstance(v,(int,float)) and math.isfinite(v):return {"userEnteredValue":{"numberValue":v}}
+            if isinstance(v,str) and len(v)<=45000 and not v.startswith("="):return {"userEnteredValue":{"stringValue":v}}
+            raise MirrorConflict("unsupported literal patch")
+        rows=max(grid["rowCount"],max(r for r,c,v in edits)+1);cols=max(grid["columnCount"],max(c for r,c,v in edits)+1)
+        requests=[]
+        if (rows,cols)!=(grid["rowCount"],grid["columnCount"]):
+            requests.append({"updateSheetProperties":{"properties":{"sheetId":props["sheetId"],"gridProperties":{"rowCount":rows,"columnCount":cols}},"fields":"gridProperties.rowCount,gridProperties.columnCount"}})
+        for r,c,v in edits:
+            requests.append({"updateCells":{"start":{"sheetId":props["sheetId"],"rowIndex":r,"columnIndex":c},"rows":[{"values":[cell(v)]}],"fields":"userEnteredValue"}})
+        body={"requests":requests}
+        if len(json_module.dumps(body,ensure_ascii=False,allow_nan=False).encode())>650000:raise MirrorConflict("cell patch exceeds transfer bound")
+        self._request("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{GoogleSheetsBridge.target_for_symbol(symbol)[1].spreadsheet_id}:batchUpdate",json=body)
+        self._validate_named_target(symbol,sheet)
+
+    def model3_order_rows(self, symbol: str, sheet: str, permutation: list[int]) -> None:
+        """Move complete native rows, including styles/notes; never rewrite source cells."""
+        if sheet in TIMEFRAMES:self.validate_target(symbol,sheet)
+        else:self.validate_model3_target(symbol,sheet)
+        if len(permutation)>MAX_ROWS-1 or sorted(permutation)!=list(range(len(permutation))):
+            raise MirrorConflict("invalid row permutation")
+        props=self._sheets[(symbol,sheet)]
+        rows=self.read_rows(symbol,sheet)
+        from birzha.application.home_market_mirror import _stamp
+        header=rows[0]
+        time_col=header.index("begin" if sheet.endswith("_INDICATORS") else "bar_start_time")
+        sec_col=header.index("secid" if sheet.endswith("_INDICATORS") else "contract_code")
+        values=[row[time_col] for row in rows[1:]]
+        if len(values)!=len(permutation):raise MirrorConflict("row count changed before ordering")
+        # Fixed Moscow ISO strings have the same lexical and chronological order.
+        # One native sort is much smaller than thousands of single-row moves.
+        if values and all(isinstance(v,str) and v==_stamp(v).isoformat() for v in values):
+            self._request("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{GoogleSheetsBridge.target_for_symbol(symbol)[1].spreadsheet_id}:batchUpdate",
+                json={"requests":[{"sortRange":{"range":{"sheetId":props["sheetId"],"startRowIndex":1,"endRowIndex":len(rows),"startColumnIndex":0,"endColumnIndex":props["gridProperties"]["columnCount"]},
+                    "sortSpecs":[{"dimensionIndex":time_col,"sortOrder":"ASCENDING"},{"dimensionIndex":sec_col,"sortOrder":"ASCENDING"}]}}]})
+            return
+        current=list(range(len(permutation)));requests=[]
+        for destination,wanted in enumerate(permutation):
+            position=current.index(wanted,destination)
+            if position==destination:continue
+            end=position+1
+            while end<len(current) and destination+end-position<len(permutation) and current[end]==permutation[destination+end-position]:
+                end+=1
+            requests.append({"moveDimension":{"source":{"sheetId":props["sheetId"],"dimension":"ROWS","startIndex":position+1,"endIndex":end+1},"destinationIndex":destination+1}})
+            block=current[position:end];del current[position:end];current[destination:destination]=block
+        if len(requests)>5000:raise MirrorConflict("row ordering operation bound")
+        for offset in range(0,len(requests),200):
+            self._request("POST",f"https://sheets.googleapis.com/v4/spreadsheets/{GoogleSheetsBridge.target_for_symbol(symbol)[1].spreadsheet_id}:batchUpdate",json={"requests":requests[offset:offset+200]})

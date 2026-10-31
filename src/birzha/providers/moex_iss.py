@@ -58,9 +58,11 @@ class MoexIssClient:
         opener=urlopen,
         timeout_seconds: float = 20.0,
         require_distributed_gate: bool = False,
+        minute_observer=None,
     ) -> None:
         self._control_plane = control_plane or ProcessUpstreamControlPlane()
         self._opener = opener
+        self._minute_observer = minute_observer
         self._timeout_seconds = timeout_seconds
         self._http_client = (
             httpx.Client(timeout=timeout_seconds, follow_redirects=True, headers=MOEX_HTTP_HEADERS)
@@ -282,6 +284,9 @@ class MoexIssClient:
                 )
             )
         candles.sort(key=lambda candle: candle.begin)
+        observer=getattr(self,"_minute_observer",None)
+        if interval == 1 and observer is not None:
+            observer(instrument,tuple(candles),from_date,till_date)
         return tuple(candles)
 
     @staticmethod

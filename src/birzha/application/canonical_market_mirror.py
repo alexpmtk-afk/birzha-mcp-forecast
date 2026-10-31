@@ -106,7 +106,7 @@ def sheet_timestamp(value: object) -> datetime:
 def validate_identity(rows: list[list[object]], symbol: str, timeframe: str, *, incoming: bool) -> None:
     import re
     header = rows[0]
-    patterns = {"SI": r"Si[A-Z]\d{1,2}", "BR": r"BR[A-Z]\d{1,2}", "GOLD": r"GD[A-Z]\d{1,2}"}
+    patterns = {"RI": r"RI[FGHJKMNQUVXZ]\d{1,2}", "SI": r"Si[A-Z]\d{1,2}", "BR": r"BR[A-Z]\d{1,2}", "GOLD": r"GD[A-Z]\d{1,2}"}
     for row in rows[1:]:
         code = row[header.index("contract_code")]
         valid = bool(re.fullmatch(patterns[symbol], str(code))) if symbol in patterns else code == symbol
@@ -136,7 +136,7 @@ def validate_identity(rows: list[list[object]], symbol: str, timeframe: str, *, 
                 raise MirrorConflict("is_complete must retain a boolean source flag")
             if "research_status" in header:
                 status = str(row[header.index("research_status")])
-                if status not in {"RECONSTRUCTED_RESEARCH", "INDIVIDUAL_BAR_VALID_SESSION_UNCERTIFIED"} and not status.startswith("RESEARCH_ONLY_"):
+                if status not in {"RECONSTRUCTED_RESEARCH", "RECONSTRUCTED_RESEARCH_ONLY", "INDIVIDUAL_BAR_VALID_SESSION_UNCERTIFIED"} and not status.startswith("RESEARCH_ONLY_"):
                     raise MirrorConflict("historical intraday must remain explicitly research-only")
             confidence = row[header.index("available_at_confidence")]
             available = row[header.index("available_at")]
