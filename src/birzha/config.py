@@ -55,6 +55,8 @@ class Settings:
     native_mirror_enabled: bool = False
     native_mirror_credentials_path: str | None = None
     native_mirror_sole_writer: bool = False
+    model3_minute_archive_dir: str | None = None
+    model3_audit_dir: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -127,4 +129,6 @@ class Settings:
             native_mirror_enabled=native_enabled,
             native_mirror_credentials_path=native_credentials,
             native_mirror_sole_writer=native_owner,
+            model3_minute_archive_dir=(os.getenv("BIRZHA_MODEL3_MINUTE_ARCHIVE_DIR") or "").strip() or None,
+            model3_audit_dir=(os.getenv("BIRZHA_MODEL3_AUDIT_DIR") or "").strip() or None,
         )

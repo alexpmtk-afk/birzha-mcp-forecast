@@ -38,9 +38,10 @@ class MarketDataService:
         cls,
         *,
         control_plane: ProcessUpstreamControlPlane | None = None,
+        minute_observer=None,
     ) -> "MarketDataService":
         shared_control = control_plane or ProcessUpstreamControlPlane()
-        provider = MoexIssClient(control_plane=shared_control)
+        provider = MoexIssClient(control_plane=shared_control, minute_observer=minute_observer)
         return cls(
             provider=provider,
             direct_resolver=MoexDirectInstrumentResolver(provider),

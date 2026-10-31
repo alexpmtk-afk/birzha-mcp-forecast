@@ -397,7 +397,7 @@ class DuckDBHistoricalCandleStore:
         columns = ["secid", "timeframe", "begin", "end_time", "open", "high", "low", "close", "volume", "value", "completed", "source", "available_at", "available_at_confidence", "observed_at", "revision"]
         # GOLD also names a stock-market security; it is not the GD futures root.
         # A canonical futures book must never combine those identities.
-        future_pattern = {"SI": r"Si[A-Z]\d{1,2}", "BR": r"BR[A-Z]\d{1,2}", "GOLD": r"GD[A-Z]\d{1,2}"}.get(key)
+        future_pattern = {"RI": r"RI[FGHJKMNQUVXZ]\d{1,2}", "SI": r"Si[A-Z]\d{1,2}", "BR": r"BR[A-Z]\d{1,2}", "GOLD": r"GD[A-Z]\d{1,2}"}.get(key)
         candle_scope = " AND engine='futures' AND market='forts' AND regexp_full_match(secid,?) " if future_pattern else " "
         session_scope = " AND regexp_full_match(secid,?) " if future_pattern else " "
         scope_params = [future_pattern] if future_pattern else []

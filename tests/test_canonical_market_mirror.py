@@ -12,7 +12,7 @@ HEADER = D1_COLUMNS + ["research_status", "caveat"]
 def rows(day="2025-01-03", symbol="SBER", tf="H1", complete=True):
     start = f"{day}T10:00:00+03:00"
     end = f"{day}T10:59:59+03:00"
-    code = {"SI": "SiH5", "BR": "BRH5", "GOLD": "GDH5"}.get(symbol, symbol)
+    code = {"RI": "RIH5", "SI": "SiH5", "BR": "BRH5", "GOLD": "GDH5"}.get(symbol, symbol)
     return [HEADER[:], [f"{symbol}|{tf}|{code}|{start}",day,"","",start,end,"","UNKNOWN",code,100,102,99,101,10,"","",complete,"H1",1,"MOEX_ISS","RECONSTRUCTED_RESEARCH","PIT_NOT_ATTESTED"]]
 
 class Memory:

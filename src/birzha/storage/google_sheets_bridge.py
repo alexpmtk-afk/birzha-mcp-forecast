@@ -45,6 +45,7 @@ class InstrumentArchiveTarget:
 # Existing files pinned after the 2026-10-14 archive revision. Names are labels;
 # no fallback to path search or implicit file creation is allowed.
 INSTRUMENT_TARGETS: dict[str, InstrumentArchiveTarget] = {
+    "RI": InstrumentArchiveTarget("RTS - Индекс РТС", "RI", "1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY", "MOEX_HISTDATA_RI_MCP_CANONICAL"),
     "SI": InstrumentArchiveTarget("Si - Доллар-рубль", "Si", "1gqYoZ04887U6btTyj0diHPGq3oZVrk9QNKT9PJ6W0ss", "MOEX_HISTDATA_Si_MCP_CANONICAL"),
     "BR": InstrumentArchiveTarget("BR - Brent", "BR", "1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ", "MOEX_HISTDATA_BR_MCP_CANONICAL"),
     "GOLD": InstrumentArchiveTarget("GOLD - Золото", "GOLD", "1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g", "MOEX_HISTDATA_GOLD_MCP_CANONICAL"),
@@ -54,6 +55,7 @@ INSTRUMENT_TARGETS: dict[str, InstrumentArchiveTarget] = {
 }
 
 INSTRUMENT_FOLDER_IDS = {
+    "RI": "1v0ZYWbxp5vuH8WIuQtTcg6qBfX1b69Ez",
     "SI": "1c_WRQl2pPfsDSnwcR1l2dGyr0jwQVoNF",
     "BR": "1X9BbkWE-OeISlXKuPQ1SW6uT593pHwot",
     "GOLD": "1mpXF423F5Y7oiSKSSGf5YmmbFZMcXohx",
