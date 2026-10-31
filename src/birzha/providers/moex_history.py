@@ -92,7 +92,7 @@ class MoexHistoricalFutureResolver:
                     "iss.only": "history",
                     "history.columns": (
                         "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
-                        "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,"
+                        "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,CLOSE,"
                         "LASTTRADEDATE,LASTDELDATE,MINSTEP,STEPPRICE,LOTVOLUME,CURRENCYID"
                     ),
                     "date": day.isoformat(),

@@ -15,7 +15,7 @@ import uuid
 
 from birzha.application.canonical_market_mirror import MirrorConflict, digest, rectangular, index_rows, validate_identity
 from birzha.application.home_market_mirror import _stamp, project_source
-from birzha.application.model3_features import COLUMNS, BASE_COLUMNS, VERSION, research_features, sha
+from birzha.application.model3_features import COLUMNS, BASE_COLUMNS, LEGACY_COLUMNS, VERSION, research_features, sha
 from birzha.application.model3_minutes import load_minutes, minute_groups, aggregate, profiles, clock
 
 FRAMES=("D1","H1","M15")
@@ -125,7 +125,7 @@ class Model3ArchiveUpdater:
                 raw=rectangular(before[tf]);_validate_candles(raw,tf)
                 candles[tf]=raw
                 h=before[tf+"_INDICATORS"][0]
-                if h not in (BASE_COLUMNS,COLUMNS):raise MirrorConflict("existing 54/109 indicator header required")
+                if h not in (BASE_COLUMNS,LEGACY_COLUMNS,COLUMNS):raise MirrorConflict("existing approved indicator header required")
                 old_features[tf]=_rect(before[tf+"_INDICATORS"],len(h))
                 ids=[r[0] for r in old_features[tf][1:]]
                 if any(not isinstance(k,str) or not k for k in ids) or len(set(ids))!=len(ids):
@@ -183,7 +183,7 @@ class Model3ArchiveUpdater:
             plans={};changes=0;repairs=0
             ignore_compare={"calculated_at","source_window_sha256","source_record_sha256","atr_source_hashes_json"}
             for tf in FRAMES:
-                old=old_features[tf];desired=_rect([COLUMNS]+[r+[""]*(109-len(r)) for r in old[1:]],109)
+                old=old_features[tf];desired=_rect([COLUMNS]+[r+[""]*(len(COLUMNS)-len(r)) for r in old[1:]],len(COLUMNS))
                 source_index={r[6]:i for i,r in enumerate(desired[1:],1)}
                 for row in generated[tf]:
                     if row[6] not in source_index:
@@ -252,24 +252,40 @@ class Model3ArchiveUpdater:
                 at=index[row[0]]
                 for j,new in enumerate(row):
                     if not _same(expected[at][j],new):edits.append((at,j,new))
-        for offset in range(0,len(edits),300):
-            if digest(self.transport.read_rows("RI",sheet))!=digest([r[:len(before[0])] if i==0 and len(before[0])<width and offset==0 else r for i,r in enumerate(expected)]):
-                # Native values omit trailing blanks; rectangular comparison below handles width growth.
-                current=self.transport.read_rows("RI",sheet)
-                if _rect(current,len(current[0]))!=[r[:len(current[0])] for r in expected]:raise MirrorConflict("changed before cell patch")
-            part=edits[offset:offset+300]
+        def window(start,stop):
+            method=getattr(self.transport,"model3_read_window",None)
+            if method is not None:return method("RI",sheet,start,stop,width)
+            data=self.transport.read_rows("RI",sheet)
+            return [r+[""]*(width-len(r)) for r in data[start:stop]]+[[""]*width for _ in range(max(0,stop-max(start,len(data))))]
+        chunks=[];part=[];size=0
+        for edit in edits:
+            cost=len(json.dumps(edit,ensure_ascii=False).encode())+220
+            if part and (len(part)>=2000 or size+cost>450000):chunks.append(part);part=[];size=0
+            part.append(edit);size+=cost
+        if part:chunks.append(part)
+        for part in chunks:
+            # A sparse edit may span far-apart rows: split the *read* into bounded
+            # windows, never re-read the entire archive for every cell batch.
+            touched=sorted({r for r,c,v in part});windows=[]
+            for row in touched:
+                if not windows or row-windows[-1][0]>=2000:windows.append([row,row+1])
+                else:windows[-1][1]=row+1
+            for start,stop in windows:
+                if window(start,stop)!=expected[start:stop]:raise MirrorConflict("changed before cell patch")
             self.transport.model3_write_cells("RI",sheet,part)
             for r,c,v in part:expected[r][c]=v
-            actual=self.transport.read_rows("RI",sheet)
-            if _rect(actual,len(actual[0]))!=[r[:len(actual[0])] for r in expected]:raise MirrorConflict("cell patch readback mismatch")
+            for start,stop in windows:
+                if window(start,stop)!=expected[start:stop]:raise MirrorConflict("cell patch readback mismatch")
         old_ids=set(index)
         additions=[r for r in after[1:] if r[0] not in old_ids]
         # Native encoding bounds borrowed from the existing derived-update PR263 design.
         for offset in range(0,len(additions),100):
             part=additions[offset:offset+100]
-            if _rect(self.transport.read_rows("RI",sheet),width)!=expected:raise MirrorConflict("changed before append")
+            tail=max(0,len(expected)-1)
+            if window(tail,len(expected)+1)!=[expected[-1],[""]*width]:raise MirrorConflict("changed before append")
+            start=len(expected)
             self.transport.append_rows("RI",sheet,part);expected+=part
-            if _rect(self.transport.read_rows("RI",sheet),width)!=expected:raise MirrorConflict("append readback mismatch; reconcile before retry")
+            if window(start,len(expected))!=part:raise MirrorConflict("append readback mismatch; reconcile before retry")
         ordered,permutation=_ordered(expected,sheet.endswith("_INDICATORS"))
         if ordered!=after:raise MirrorConflict("planned content/order mismatch")
         if permutation!=list(range(len(permutation))):

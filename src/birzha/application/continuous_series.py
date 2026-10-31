@@ -68,7 +68,11 @@ def build_continuous_series(payload):
             ids.add(secid)
             if _stamp(row["completed_at"]) > decision_cutoff:
                 raise ValueError("forming decision candle")
-            if _stamp(row["available_at"]) > decision_cutoff:
+            availability=row.get("available_at")
+            if availability is None:
+                if payload.get("evidence_mode")!="RECONSTRUCTED_RESEARCH":
+                    raise ValueError("unknown decision availability")
+            elif _stamp(availability) > decision_cutoff:
                 raise ValueError("late decision evidence")
             digest = row.get("source_sha256")
             if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -142,8 +146,12 @@ def build_continuous_series(payload):
                            **{k:v*scale+shift for k,v in prices.items()},
                            coordinate=coordinate))
         coverage.setdefault(day,set()).add(tf)
-    # This endpoint requests aligned D1/H1/M15 evidence, not three independently selected contracts.
-    if any(coverage.get(day) != {"D1","H1","M15"} for day in mapping):
+    # A prefix ledger may anchor coordinates before the requested bar window.
+    required = payload.get("required_sessions", list(mapping))
+    if (not isinstance(required, list) or not required or len(set(required))!=len(required)
+            or any(day not in mapping for day in required)):
+        raise ValueError("invalid required session subset")
+    if any(coverage.get(day) != {"D1","H1","M15"} for day in required):
         raise ValueError("missing selected-contract timeframe/session")
     output.sort(key=lambda x:(x["timeframe"],_stamp(x["begin"])))
     canonical = json.dumps(payload,sort_keys=True,separators=(",",":"),allow_nan=False).encode()

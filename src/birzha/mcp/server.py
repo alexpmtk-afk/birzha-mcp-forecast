@@ -156,6 +156,24 @@ def archive_update(from_date: str, till_date: str, dry_run: bool = True,
                 "written":"UNKNOWN_RECONCILE_BEFORE_RETRY" if not dry_run else False}
 
 
+@mcp.tool(name="archive.sync", description="RI 2026 unified Google-first archive: reuse saved candles/M1, official T-1 candidate ledger, fetch only wholly missing exact-contract day/timeframe windows with shared governor, shared indicators, fixed-anchor FORWARD_SPREAD continuous columns in existing INDICATORS, immutable RAW and readback. Preview default. Bounded source budget returns PARTIAL; repeat same arguments to resume. Historical research only; no Forecast admission or new sheets.",
+          annotations=ToolAnnotations(read_only_hint=False,destructive_hint=False,idempotent_hint=True,open_world_hint=True))
+def archive_sync(symbol: str, from_date: str, till_date: str, dry_run: bool = True,
+                 repair_dependent: bool = False, max_source_windows: int = 6) -> dict[str, object]:
+    if _native_mirror is None or _model3_archive is None:
+        return {"status":"BLOCKED","reason":"authenticated Google archive writer is not configured","written":False}
+    from birzha.application.archive_sync import ArchiveSync
+    try:
+        return ArchiveSync(_native_mirror.transport,_market,_model3_archive,
+            settings.model3_audit_dir,_native_mirror._lock).sync(
+                symbol=symbol,from_date=from_date,till_date=till_date,dry_run=dry_run,
+                repair_dependent=repair_dependent,max_source_windows=max_source_windows,
+                exclusive_workbook_owner=settings.native_mirror_sole_writer)
+    except Exception as exc:
+        return {"status":"ERROR","reason":str(exc)[:200] if isinstance(exc,(ValueError,RuntimeError)) else "SOURCE_OR_RUNTIME_FAILURE",
+                "written":False if dry_run else "UNKNOWN_RECONCILE_BEFORE_RETRY"}
+
+
 @mcp.tool(name="archive.collect", description="Model-independent Google-first collection for one exact contract and timeframe, at most three civil days. Reuse matching source receipts; refuse to re-download populated unproven windows. Existing governor, native D1/H1 and existing M1-to-M15 aggregator. Preview by default.",
           annotations=ToolAnnotations(read_only_hint=False,destructive_hint=False,idempotent_hint=True,open_world_hint=True))
 def archive_collect(symbol: str, exact_secid: str, timeframe: str, from_date: str, till_date: str, dry_run: bool = True) -> dict[str, object]:

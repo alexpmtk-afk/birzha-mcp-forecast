@@ -107,6 +107,30 @@ class NativeCanonicalSheets:
             result.pop()
         return result
 
+    def model3_read_window(self, symbol: str, sheet: str, start: int, stop: int, width: int) -> list[list[object]]:
+        """Read literal/formula cells in a bounded existing-tab row window.
+
+        Padding outside allocated grid is empty, never an invented market value.
+        Used for per-chunk compare/readback; final whole-table read is separate.
+        """
+        symbol,target=GoogleSheetsBridge.target_for_symbol(symbol)
+        props=self._sheets.get((symbol,sheet))
+        if props is None or sheet not in {"D1","H1","M15","D1_INDICATORS","H1_INDICATORS","M15_INDICATORS"}:
+            raise MirrorConflict("validate existing archive tab before window read")
+        if not 0<=start<stop<=MAX_ROWS or stop-start>2000 or not 1<=width<=160:
+            raise MirrorConflict("bounded read window required")
+        grid=props["gridProperties"];count=min(width,grid["columnCount"]);letters=""
+        while count:
+            count,rem=divmod(count-1,26);letters=chr(65+rem)+letters
+        values=[];last=min(stop,grid["rowCount"])
+        if start<last:
+            name=f"'{sheet}'!A{start+1}:{letters}{last}"
+            values=self._request("GET",f"https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}/values/{quote(name,safe='')}",
+                params={"valueRenderOption":"FORMULA","dateTimeRenderOption":"SERIAL_NUMBER","majorDimension":"ROWS"}).get("values",[])
+        if not isinstance(values,list) or len(values)>stop-start or any(not isinstance(r,list) or len(r)>width for r in values):
+            raise MirrorConflict("invalid bounded window response")
+        return [r+[""]*(width-len(r)) for r in values]+[[""]*width for _ in range(stop-start-len(values))]
+
     def append_rows(self, symbol: str, timeframe: str, rows: list[list[object]]) -> None:
         symbol, target = GoogleSheetsBridge.target_for_symbol(symbol)
         if not rows or len(rows) > 1000:

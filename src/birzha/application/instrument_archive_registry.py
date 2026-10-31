@@ -12,6 +12,7 @@ class IndicatorSet:
 # Existing physical p3_* columns are preserved for compatibility. They are
 # calculated once in the instrument archive and can be consumed by any model.
 from birzha.application.model3_features import EXTRA_COLUMNS
+from birzha.application.continuous_archive_schema import CONTINUOUS_COLUMNS
 INDICATOR_SETS = (IndicatorSet("bar_volume_structure_v1",("P3_PURNOV_BAR_RESEARCH",),("RI",),tuple(EXTRA_COLUMNS)),)
 
 def archive_contract(symbol):
@@ -28,4 +29,8 @@ def archive_contract(symbol):
         "new_book_policy":"ONLY_NEW_INSTRUMENT_AND_APPROVED_TEMPLATE",
         "source_policy":"EXISTING_ARCHIVE_FIRST_MISSING_ONLY_SHARED_GOVERNOR",
         "m15_source":"M1_THROUGH_EXISTING_MOEX_AGGREGATOR",
+        "continuous_series": ({"command":"archive.sync","scope":"RI_2026_RECONSTRUCTED_RESEARCH",
+            "coordinate":"FORWARD_SPREAD","selection":"MOEX_T_MINUS_1_VOLUME_EXPIRY_V1",
+            "derived_columns":CONTINUOUS_COLUMNS,
+            "source_prices_and_volumes":"PRESERVED"} if key=="RI" else {"status":"POLICY_NOT_ACCEPTED"}),
         "forecast_admission":"NOT_GRANTED_BY_ARCHIVE"}

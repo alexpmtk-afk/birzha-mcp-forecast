@@ -56,7 +56,7 @@ def test_full_update_existing_tabs_exact_readback_and_noop(tmp_path):
     result=run(svc);assert result["written"] is False and not book.writes
     result=run(svc,dry_run=False,exclusive_workbook_owner=True)
     assert result["status"]=="MODEL3_ARCHIVE_READBACK_PASS"
-    assert len(COLUMNS)==109
+    assert len(COLUMNS)==119
     assert all(book.data[tf]==raw[tf] for tf in raw)
     assert all(len(book.data[tf+"_INDICATORS"])==36 for tf in raw)
     before=deepcopy(book.data);writes=len(book.writes)
@@ -247,7 +247,7 @@ def test_real_stdio_mcp_model3_cycle_and_existing_mirror_route(tmp_path):
             async with ClientSession(read,write) as client:
                 await client.initialize()
                 tools=await client.list_tools()
-                assert {"archive.update","archive.collect","archive.contract","archive.contract_plan"} <= {t.name for t in tools.tools}
+                assert {"archive.update","archive.sync","archive.collect","archive.contract","archive.contract_plan"} <= {t.name for t in tools.tools}
                 reply=await client.call_tool("archive.contract",arguments={"symbol":"RI"})
                 contract=reply.structured_content or json.loads(reply.content[0].text)
                 assert contract["canonical_storage"]=="GOOGLE_SHEETS"

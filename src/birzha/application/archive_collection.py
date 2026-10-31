@@ -38,6 +38,8 @@ class ArchiveCollector:
                     "reason":"existing rows have no matching full-response receipt; do not re-download them or infer missing bars from row count"}
             if dry_run:return {"status":"ARCHIVE_COLLECTION_PLANNED","symbol":symbol,"exact_secid":exact_secid,"timeframe":timeframe,"from_date":from_date,"till_date":till_date,"written":False,"network_requests":0,"canonical_storage":"GOOGLE_SHEETS"}
             if not self.audit_dir:raise MirrorConflict("local audit directory required")
+            if symbol=="RI" and timeframe=="M15" and getattr(getattr(self.market,"provider",None),"_minute_observer",None) is None:
+                raise MirrorConflict("persistent RI M1 capture must be configured before M15 collection")
             # Exact instrument metadata is resolved by the existing official resolver.
             instrument=self.market.direct_resolver.resolve(exact_secid)
             if instrument is None or instrument.secid!=exact_secid:raise MirrorConflict("exact instrument metadata unavailable")
