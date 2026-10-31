@@ -95,6 +95,23 @@ def test_canonical_replacement_blocked_before_network(monkeypatch):
         b.replace_snapshot(spreadsheet_id=INSTRUMENT_TARGETS["SI"].spreadsheet_id, sheets={"D1": [["key"], ["x"]]})
 
 
+
+def test_ri_retired_readme_status_cannot_be_published_by_existing_writers():
+    """RI README_STATUS is a retired tab, not a recoverable service sheet."""
+    from birzha.application.canonical_market_mirror import MirrorConflict
+    from birzha.storage.google_sheets_bridge import ALLOWED_SHEETS
+    from birzha.storage.native_canonical_sheets import NativeCanonicalSheets
+
+    assert "README_STATUS" not in ALLOWED_SHEETS
+    with pytest.raises(ValueError, match="unsupported mirror sheet"):
+        bridge()._validated_sheets({"README_STATUS": [["field", "value"]]})
+
+    native = NativeCanonicalSheets(lambda: "no-network")
+    with pytest.raises(MirrorConflict, match="unsupported service sheet"):
+        native.validate_service_target("RI", "README_STATUS")
+
+
+
 def test_unregistered_instrument_has_no_creation_path():
     with pytest.raises(ValueError): bridge().ensure_archive(symbol="TATN")
 
