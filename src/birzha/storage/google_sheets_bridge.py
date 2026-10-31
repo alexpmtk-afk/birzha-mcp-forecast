@@ -44,11 +44,10 @@ class InstrumentArchiveTarget:
 
 # Existing files pinned after the 2026-10-14 archive revision. Names are labels;
 # no fallback to path search or implicit file creation is allowed.
-# RI is the RTS *futures* family. Its existing Drive folder name is a legacy
-# label; the immutable folder ID and canonical sheet ID identify the RI archive.
-# Do not rename the folder here without a controlled Drive-path migration.
+# RI is the RTS *futures* family. The existing RI Drive folder was renamed to "RI - Фьючерс РТС" on 2026-10-31.
+# Its immutable folder ID and canonical spreadsheet ID remain unchanged.
 INSTRUMENT_TARGETS: dict[str, InstrumentArchiveTarget] = {
-    "RI": InstrumentArchiveTarget("RTS - Индекс РТС", "RI", "1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY", "MOEX_HISTDATA_RI_MCP_CANONICAL"),
+    "RI": InstrumentArchiveTarget("RI - Фьючерс РТС", "RI", "1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY", "MOEX_HISTDATA_RI_MCP_CANONICAL"),
     "SI": InstrumentArchiveTarget("Si - Доллар-рубль", "Si", "1gqYoZ04887U6btTyj0diHPGq3oZVrk9QNKT9PJ6W0ss", "MOEX_HISTDATA_Si_MCP_CANONICAL"),
     "BR": InstrumentArchiveTarget("BR - Brent", "BR", "1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ", "MOEX_HISTDATA_BR_MCP_CANONICAL"),
     "GOLD": InstrumentArchiveTarget("GOLD - Золото", "GOLD", "1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g", "MOEX_HISTDATA_GOLD_MCP_CANONICAL"),
