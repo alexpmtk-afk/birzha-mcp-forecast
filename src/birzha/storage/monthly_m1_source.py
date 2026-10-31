@@ -224,10 +224,21 @@ def publish_month(source_paths: list[Path], target_folder: Path, recovery_folder
             old_doc, _, _ = _read_zip_bytes(old_bytes)
             if old_doc.get("exact_secid") != secid or old_doc.get("symbol") != symbol:
                 raise MonthlyM1Error("existing monthly target belongs to another source")
-            for row in old_doc.get("raw", {}).get("M1", []):
+            new_rows = {r["begin"]: r for r in doc["raw"]["M1"]}
+            old_rows = old_doc.get("raw", {}).get("M1", [])
+            if not isinstance(old_rows, list):
+                raise MonthlyM1Error("invalid existing monthly payload")
+            if old_rows == doc["raw"]["M1"]:
+                # A re-capture with a different ZIP/provenance but identical bars
+                # must not create a fresh canonical object.
+                old_manifest = _read_zip_bytes(old_bytes)[1]
+                return MonthlyM1Result(
+                    "NOOP_VERIFIED", str(target), _sha(old_bytes),
+                    old_manifest["archive_sha256"], count, volume
+                )
+            for row in old_rows:
                 key = _clock(row["begin"]).isoformat(timespec="seconds")
-                newer = {r["begin"]: r for r in doc["raw"]["M1"]}.get(key)
-                if newer != row:
+                if new_rows.get(key) != row:
                     raise MonthlyM1Error("non-append revision needs explicit review")
             previous_revision = target.name + "." + _sha(old_bytes)[:16] + ".zip"
             old_backup = recovery_folder / previous_revision
