@@ -14,7 +14,7 @@ def test_refresh_uses_os_lease_instead_of_pid_liveness():
     source = SCRIPT.read_text(encoding="utf-8-sig")
     assert "Get-Process -Id $existingPid" not in source
     assert "$refreshLease = Enter-RefreshLease" in source
-    assert source.index("$refreshLease = Enter-RefreshLease") < source.index("$PID | Set-Content")
+    assert "$PID | Set-Content" not in source  # Google-first owns no persistent local PID journal.
     assert "AbandonedMutexException" in source
     assert "$refreshLease.ReleaseMutex()" in source
     assert "$refreshLease.Dispose()" in source

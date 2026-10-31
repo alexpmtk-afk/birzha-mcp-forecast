@@ -149,3 +149,14 @@ MOEX data
 ```
 
 This proves the path works on real market data. It does not by itself prove forecast quality; statistical model calibration and real forward validation remain separate acceptance gates.
+
+## Google-first market archive (owner decision 2026-10-31)
+
+New collection runs through `python -m birzha.mcp.archive_server` on a separate
+loopback endpoint. It reads and appends the existing canonical Google workbooks;
+M1 is kept in versioned monthly Drive ZIPs and `M1_SOURCE_INDEX`. No candle
+DuckDB, local M1 cache, local state journal or DuckDB backup prerequisite is used.
+Forecast/Outcome storage and the existing HOME deployment are unchanged.
+See [the runtime contract and installation gates](docs/GOOGLE_FIRST_ARCHIVE_RUNTIME.md).
+The new hourly script previews by default and uses D1 for RI, Si, BR, GOLD,
+SBER and IMOEX. This is a prepared change, not an installed or enabled writer.

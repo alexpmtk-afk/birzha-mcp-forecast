@@ -10,13 +10,8 @@ from birzha.application.market_data import is_futures_root_symbol
 from birzha.domain.market import CandleSeries, Instrument
 
 
-D1_COLUMNS = [
-    "record_key", "calendar_date", "trade_session_date", "session_id",
-    "bar_start_time", "bar_end_time", "available_at", "available_at_confidence",
-    "contract_code", "open", "high", "low", "close", "volume",
-    "number_of_trades", "turnover", "is_complete", "source_interval",
-    "source_candles", "source_id",
-]
+from birzha.application.archive_schema import D1_COLUMNS
+
 SESSION_COLUMNS = ["symbol", "secid", "trade_date"]
 VERIFIED_COLUMNS = ["scope", "symbol", "timeframe", "from_date", "till_date"]
 SYNC_COLUMNS = ["key", "value"]

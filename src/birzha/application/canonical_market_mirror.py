@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from birzha.application.market_mirror import D1_COLUMNS
+from birzha.application.archive_schema import D1_COLUMNS
 from birzha.storage.google_sheets_bridge import GoogleSheetsBridge
 
 MAX_ROWS = 100_000

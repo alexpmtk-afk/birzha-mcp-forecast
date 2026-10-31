@@ -14,7 +14,7 @@ MIRROR_SCOPES = (
 )
 
 
-def _service_account_grant(cfg: dict) -> dict:
+def _service_account_grant(cfg: dict, scopes=MIRROR_SCOPES) -> dict:
     """Use Google's signer; fixed endpoint/scopes, no user delegation."""
     from google.auth import crypt, jwt
     email = cfg.get("client_email")
@@ -27,7 +27,7 @@ def _service_account_grant(cfg: dict) -> dict:
     issued = int(time.time())
     assertion = jwt.encode(crypt.RSASigner.from_service_account_info(cfg), {
         "iss": email, "aud": TOKEN_URI, "iat": issued, "exp": issued + 3600,
-        "scope": " ".join(MIRROR_SCOPES),
+        "scope": " ".join(scopes),
     })
     return {"grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
             "assertion": assertion.decode("ascii")}
@@ -35,7 +35,8 @@ def _service_account_grant(cfg: dict) -> dict:
 
 class GoogleRefreshToken:
     """Lazy local service account or OAuth refresh credentials."""
-    def __init__(self, credential_path: str, *, transport=None):
+    def __init__(self, credential_path: str, *, transport=None, scopes=MIRROR_SCOPES):
+        self.scopes=tuple(scopes)
         self.path=Path(credential_path)
         self.transport=transport
         self._lock=threading.Lock()
@@ -49,7 +50,7 @@ class GoogleRefreshToken:
             try:
                 cfg=json.loads(self.path.read_text(encoding="utf-8"))
                 if cfg.get("type") == "service_account":
-                    grant = _service_account_grant(cfg)
+                    grant = _service_account_grant(cfg,self.scopes)
                 else:
                     if cfg.get("type") not in (None, "authorized_user") or not all(isinstance(cfg.get(k),str) and cfg[k] for k in ("client_id","client_secret","refresh_token")):
                         raise ValueError("configuration incomplete")
