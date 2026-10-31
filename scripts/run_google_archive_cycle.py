@@ -43,7 +43,16 @@ async def cycle(url,token,*,from_date,till_date,timeframes,dry_run):
                         v=r.structured_content or json.loads(r.content[0].text)
                         status='ERROR' if r.is_error else v.get('status','ERROR')
                         results.append({'symbol':symbol,'status':status})
-                        if status not in ('PASS','PLANNED','UP_TO_DATE'):break
+                        # No observations / unverified old rows do not block later days.
+                        # Keep the overall PARTIAL result; never continue after unknown
+                        # write outcomes, unrecognised failures or an unfinished budget.
+                        safe_partial=(status=='PARTIAL' and not v.get('next_day')
+                            and isinstance(v.get('results'),list) and bool(v['results'])
+                            and all(isinstance(item,dict) and item.get('status') in (
+                                'READBACK_PASS','REUSED','SOURCE_NOT_AVAILABLE',
+                                'SOURCE_NOT_AVAILABLE_RETRY_LATER','EXISTING_UNVERIFIED_NO_FETCH'
+                            ) for item in v['results']))
+                        if status not in ('PASS','PLANNED','UP_TO_DATE') and not safe_partial:break
                         left=right+timedelta(days=1)
                 return {'status':'PASS' if all(r['status'] in ('PASS','PLANNED','UP_TO_DATE') for r in results) else 'PARTIAL','results':results}
 
