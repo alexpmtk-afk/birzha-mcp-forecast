@@ -41,10 +41,12 @@ def build_app(service,token):
     @mcp.tool(name='archive.model3_backfill',description='RI-only bounded research indicator preview (default); apply requires sole_writer and explicit owner confirmation. Existing 95-column D1/H1/M15 indicator sheets only. No signal admission, no automatic retries.')
     def model3_backfill(timeframe:str,from_date:str,till_date:str,
                         max_rows:int=50,dry_run:bool=True,
-                        owner_confirmed:bool=False)->dict:
+                        owner_confirmed:bool=False,
+                        include_minute_proxies:bool=False)->dict:
         try:return service.model3_backfill(timeframe=timeframe,from_date=from_date,
             till_date=till_date,max_rows=max_rows,dry_run=dry_run,
-            owner_confirmed=owner_confirmed)
+            owner_confirmed=owner_confirmed,
+            include_minute_proxies=include_minute_proxies)
         except Exception:return {'status':'BLOCKED','code':'MODEL3_RECONCILE_OR_PREFLIGHT_FAILED','written':'UNKNOWN' if not dry_run else False}
     @mcp.custom_route('/healthz',methods=['GET'])
     async def health(request):return JSONResponse({'status':'ok','runtime':'GOOGLE_FIRST','source_sha':service.source_sha})
