@@ -1,5 +1,11 @@
 # BIRZHA MCP Forecast System
 
+## Единый сборщик и идентичность инструментов — 01.11.2026
+
+Приоритет действующих действий: [общий порядок шести инструментов](docs/SHARED_ARCHIVE_OPERATING_CONTRACT.md). RTSI исключён; RTS в ASSETCODE MOEX — служебный код фьючерсов RI. Датированные описания прежнего серверного контура ниже не являются инструкцией запуска нового сборщика.
+
+
+
 > **Active RTS market (2026-10-31):** `RI` means the RTS **futures** family and exact quarterly contracts. `RTSI` (cash index) is retired and must not be routed to the RI Google book. Archive registry and core workflows are RI-only; old index history is preserved, not automatically migrated. Deployment to HOME requires a separate review and approval.
 
 Universal MCP backend for causal MOEX market analysis, forecasting, immutable forecast journaling, outcome evaluation and historical walk-forward validation.
@@ -149,3 +155,14 @@ MOEX data
 ```
 
 This proves the path works on real market data. It does not by itself prove forecast quality; statistical model calibration and real forward validation remain separate acceptance gates.
+
+## Google-first market archive (owner decision 2026-10-31)
+
+New collection runs through `python -m birzha.mcp.archive_server` on a separate
+loopback endpoint. It reads and appends the existing canonical Google workbooks;
+M1 is kept in versioned monthly Drive ZIPs and `M1_SOURCE_INDEX`. No candle
+DuckDB, local M1 cache, local state journal or DuckDB backup prerequisite is used.
+Forecast/Outcome storage and the existing HOME deployment are unchanged.
+See [the runtime contract and installation gates](docs/GOOGLE_FIRST_ARCHIVE_RUNTIME.md).
+The new hourly script previews by default and uses D1 for RI, Si, BR, GOLD,
+SBER and IMOEX. This is a prepared change, not an installed or enabled writer.

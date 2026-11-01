@@ -2,6 +2,14 @@
 
 > **Owner decision 2026-10-31:** retire the `RTSI` cash index from all active workflows and archive routing. Work with `RI` RTS futures only, resolving exact contracts by session. `MOEX_HISTDATA_RI_MCP_CANONICAL` is an RI futures book, never an RTSI book. Preserve historical index data and immutable price rows; do not rewrite/delete history or assume GitHub edits are deployed to HOME.
 
+## Global Google-first candle collection window — owner decision, 01.11.2026
+
+For each of the six canonical instruments **RI, Si, BR, GOLD, SBER, IMOEX** and each candle timeframe **D1, H1, M15**, the mandatory archive coverage and backfill horizon is **2025-01-01 inclusive** through the **latest completed trading session in Europe/Moscow, never later than the previous Moscow calendar day**. Earlier valid history must not be deleted. A nontrading day, an absent trade, an empty MOEX reply and a genuinely missing source are different statuses and must not be conflated.
+
+**Do not compute the requested collection period from the Google sheet's `last_date` alone.** Inspect already-stored keys, exact futures SECIDs and applicable trade sessions for internal gaps across the entire horizon. Reuse verified cloud receipts, preserve existing price/volume/formulas, request only proven missing source windows in bounded batches, and verify every write by reading the same existing Google sheet back. Keep progress/checkpoints in existing Google `SYNC_STATUS` and quality evidence in `QUALITY_AUDIT`; do not add a permanent local DuckDB/journal/candle archive for this collector. M1 remains monthly ZIP on Google Drive and its existing index. RI is the **futures** root; never route RTSI to its workbook.
+
+**Implementation status:** the original PR #291 revision `c975ca2` incorrectly started from the last observed Google date. The **updated Draft PR #291 now proposes** a bounded per-timeframe Google `SYNC_STATUS` cursor plus an independent recent-tail check; cursor advances only after explicitly safe days and must pass a readback. Code and regression tests are awaiting final independent CI review and real-book acceptance. **Do not deploy, merge, or start `--apply` without that verification and the owner's separate authorization.** Neither this rule nor the source branch is an installed HOME update.
+
 ## Start here
 
 For any candle download, storage, continuation or session-concatenation task,
@@ -65,8 +73,9 @@ manual action if one is needed; do not consume limits repeating the same attempt
 
 - One exact SECID and one timeframe per stored series. Futures roots require
   historical contract resolution; never join prices of different contracts.
-- Reuse history.sync and existing governor/resumable store operations for source
-  loading. Reuse history.stored_series/load_exact/store.read for stored reading.
+- New market archive: use the shared Google-first pipeline and cloud receipts.
+  Reuse the existing MOEX client/resolver. history.sync writes the legacy server
+  store only; history.stored_series reads that store, not Google coverage.
 - The persistence key is SECID/timeframe/begin. Existing source version policy
   must remain explicit; identical-key count is not proof of payload agreement.
 - Preserve raw OHLCV, times, NULL, completeness and provenance. Do not remove
@@ -79,8 +88,9 @@ manual action if one is needed; do not consume limits repeating the same attempt
 
 ## Storage destinations
 
-Canonical source history is the installed backend; isolated research archives
-remain labelled research until separately admitted. Google Sheets are the six
+Google Sheets are the permanent canonical market archive of the new collector.
+The installed legacy backend is a separate store; isolated research archives
+remain labelled research until separately admitted. Use the six
 existing canonical books in My Drive/Birzha/Archive market data, not new books
 per chat. Read instruction 09 at its existing Drive address and use exact IDs
 returned by history.session_rules. Sheet roles: D1/H1/M15 = candles; SESSIONS =
@@ -125,4 +135,23 @@ Local rollout remains tracked in [issue #277](https://github.com/alexpmtk-afk/bi
 
 Перед архивной задачей читать docs/INSTRUMENT_ARCHIVE_MCP_20261031.md. Реальные интерфейсы: archive.contract, archive.contract_plan, archive.collect, archive.update. Действующий общий загрузчик и M1-to-M15 агрегатор переиспользуются. Расчёт показателей выбирается из зарегистрированных наборов; новые требования моделей добавляются в общий набор, а не в параллельные книги.
 
-Команды считаются установленными только после отдельного подтверждения source SHA и tools/list работающего сервера. Наличие этого раздела или кода в ветке не является HOME-приёмкой. При неизвестной полноте существующего окна не скачивать его заново и не выдумывать нулевые интервалы. При конфликте адресов RI/RTSI блокировать запись до установления верного адреса индекса.
+Команды считаются установленными только после отдельного подтверждения source SHA и tools/list работающего сервера. Наличие этого раздела или кода в ветке не является HOME-приёмкой. При неизвестной полноте существующего окна не скачивать его заново и не выдумывать нулевые интервалы. При конфликте адресов RI/RTSI блокировать запись до установления верного адреса фьючерса RI.
+
+
+## Единый сборщик и идентичность инструментов — 01.11.2026
+
+Для RI, Si, BR, GOLD, SBER, IMOEX действует один порядок D1/H1/M15: существующий Google-архив → поиск недостающих ключей → официальный источник MOEX → дополнение того же листа → обратное чтение → повтор без скачивания и дублей. Различаются только подтверждённые параметры рынка, режима торгов, единиц и точного контракта; отдельный алгоритм загрузки для RI не создавать.
+
+RI — действующий фьючерс на индекс РТС. RTSI — исключённый индекс: активные команды должны его отклонять. RTS в поле ASSETCODE официального ISS MOEX — служебное имя семейства фьючерсов RI, а не RTSI и не седьмой инструмент. Преобразование RI → RTS разрешено только в адаптере MOEX; публичный инструмент, книга и ключ остаются RI и точный SECID. Не удалять строку RTS глобальной заменой. GOLD разрешается в GD..., не в одноимённую акцию.
+
+Для фьючерсов использовать общий исторический выбор по завершённой предыдущей торговой сессии T−1, официальным кандидатам, объёмам и срокам обращения. Не подставлять сегодняшний контракт или будущий объём. Календарный день и торговая сессия различаются, особенно в выходные и вечерние торги. Неизвестные календарные границы и время первой доступности не объявлять доказанными.
+
+Проверять внутренние пропуски с 2025-01-01 до последней завершённой сессии по Москве, не позже вчера; более ранние данные сохранять. Ключ: инструмент + точный SECID + период + нормализованное время. Пустой ответ не означает ноль или доказанное отсутствие торгов. Читать Google до MOEX; сохранённые пригодные строки повторно не загружать. Не переписывать цены, объёмы, формулы и заполненные показатели без доказанного дефекта. Для ATR14 сохранять массив новых записей A:AH, начальную A и AI:BB.
+
+Google — постоянный архив этого сборщика. Статусы и ошибки — существующие SYNC_STATUS и QUALITY_AUDIT. M1 — ZIP на Google Drive и существующий M1_SOURCE_INDEX, без постоянной локальной копии. Не создавать новые книги, вкладки, тестовые IMPORTDATA-таблицы или копии-замены. Если обязательного каталога нет, зафиксировать препятствие для данного периода, не создавать его самовольно. RI README_STATUS намеренно удалён; не восстанавливать. DuckDB, локальные журналы и резервирование DuckDB не являются предпосылкой нового сборщика; отдельные Forecast/Outcome и старые архивы сохранять.
+
+Перед исполнением сверять SHA, tools/list и archive.status: GOOGLE_FIRST. Наличие кода в GitHub не доказывает установку или право записи. Старый history.sync пишет в серверное хранилище и не является новой Google-first цепочкой. Восемь команд аудиторского подключения только читают; через них нельзя скачать и сохранить свечи. Различать: ошибка выбора контракта; отсутствие локальных свечей; отсутствие Google-строк; недоступная команда или право записи. Нулевой ответ локальной базы не доказывает ошибку RI и не разрешает перенос из Google.
+
+Приёмка требует поведения, а не совпадения названий: все шесть инструментов и все три периода через реальные resolver/parser и отдельный тест настоящего слоя Google API с заменой сети; первый запуск, обратное чтение и повтор после нового подключения без MOEX и дублей. Изолированный тест не означает установку HOME или полное покрытие архива. Merge, deploy/restart, включение расписания и изменение рабочих рыночных данных требуют соответствующего отдельного решения владельца; исправление инструкций этих действий не выполняет.
+
+Подробности: [общий порядок](docs/SHARED_ARCHIVE_OPERATING_CONTRACT.md).

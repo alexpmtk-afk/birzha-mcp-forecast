@@ -4,7 +4,7 @@ from birzha.application.stored_session_series import VERSION, MAX_DAYS, MAX_ROWS
 
 def session_data_rules() -> dict:
     return {
-        "rules_version": "SESSION_DATA_OPERATING_RULES_V1",
+        "rules_version": "SESSION_DATA_OPERATING_RULES_V2_GOOGLE_FIRST",
         "series_contract_version": VERSION,
         "purpose": "Read before authorised candle download/storage/session concatenation",
         "supported_timeframes": ["D1", "H1", "M15"],
@@ -23,11 +23,11 @@ def session_data_rules() -> dict:
         "workflow": [
             "Read these rules and installed tools/list; distinguish installed SHA from GitHub/Draft",
             "Resolve instrument/contract for requested dates; retain exact SECID identity",
-            "Inspect history.coverage; endpoints/counts alone do not prove no internal missing bars",
-            "Use existing history.sync for authorised missing bounded source batches and governor retries",
+            "Inspect Google archive.coverage and stored keys first; history.coverage is legacy local coverage only",
+            "Use the shared GOOGLE_FIRST archive.collect/sync only for authorised Google gaps; history.sync writes the separate legacy store",
             "Use history.stored_series to inspect one exact SECID and timeframe without network or writes",
             "Verify chronology, duplicates/conflicts, NULL/completion and independent calendar/admission separately",
-            "For requested Google export use existing canonical IDs and the authorised writer only; verify installed export capability/access",
+            "Google is the permanent market archive; verify archive.status runtime, installed source SHA, sole writer and permissions before any write",
             "Read back written data, preserve accepted prices, update real quality/provenance evidence and project map",
         ],
         "autonomy": {
@@ -38,7 +38,7 @@ def session_data_rules() -> dict:
                                "separately controlled merge/deploy/restart/production-data/secrets/paid action"],
             "existing_owner_authorisation": "PERSISTS_WITHIN_CURRENT_TASK",
         },
-        "source_history": "INSTALLED_BACKEND; isolated research archives are not automatically installed",
+        "source_history": "GOOGLE_CANONICAL_MARKET_ARCHIVE; legacy installed backend and isolated research data are separate, not evidence of Google coverage",
         "br_research_reconciliation": {
             "read_tool": "history.br_research_series",
             "administrative_tool": "history.br_research_reconcile",
@@ -51,9 +51,16 @@ def session_data_rules() -> dict:
         },
         "google_export_installation": "NOT_ASSERTED_BY_THIS_RULE_TOOL; inspect actual capabilities/configuration",
         "google_book_registry_date": "2026-10-31",
+        "shared_archive_rules": {"symbols": ["RI", "Si", "BR", "GOLD", "SBER", "IMOEX"],
+            "timeframes": ["D1", "H1", "M15"], "archive_start": "2025-01-01",
+            "archive_end": "LATEST_COMPLETED_MOSCOW_SESSION_NEVER_LATER_THAN_YESTERDAY",
+            "m1": "GOOGLE_DRIVE_ZIP_AND_EXISTING_M1_SOURCE_INDEX_NO_PERSISTENT_LOCAL_COPY",
+            "progress": "EXISTING_SYNC_STATUS_AND_QUALITY_AUDIT",
+            "admission": "SOURCE_RULES_NOT_INSTALLATION_OR_PIT_ACCEPTANCE",
+            "documentation": "docs/SHARED_ARCHIVE_OPERATING_CONTRACT.md"},
         "active_instruments": ["SBER", "Si", "BR", "GOLD", "IMOEX", "RI"],
         "retired_index_symbols": ["RTSI"],
-        "rts_futures_identity": "RI exact contract family (RIH6/RIM6/RIU6/RIZ6/RIH7), not RTSI cash index",
+        "rts_futures_identity": "RI exact contract family; official MOEX ASSETCODE=RTS is adapter-only identity, not retired cash index RTSI",
         "canonical_google_books": {'SBER': {'spreadsheet_id': '1DQojm2mzeXC41mHX1oH8xMv0d43TSz7U7o-ciK9lgoQ', 'name': 'MOEX_HISTDATA_SBER_MCP_CANONICAL'}, 'Si': {'spreadsheet_id': '1gqYoZ04887U6btTyj0diHPGq3oZVrk9QNKT9PJ6W0ss', 'name': 'MOEX_HISTDATA_Si_MCP_CANONICAL'}, 'BR': {'spreadsheet_id': '1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ', 'name': 'MOEX_HISTDATA_BR_MCP_CANONICAL'}, 'GOLD': {'spreadsheet_id': '1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g', 'name': 'MOEX_HISTDATA_GOLD_MCP_CANONICAL'}, 'IMOEX': {'spreadsheet_id': '1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg', 'name': 'MOEX_HISTDATA_IMOEX_MCP_CANONICAL'}, 'RI': {'spreadsheet_id': '1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY', 'name': 'MOEX_HISTDATA_RI_MCP_CANONICAL'}},
         "canonical_drive_folder_ids": {
             "SBER": "14WYHet60gDRUtxlLAJ-BX_8_dyKiPjh0",
