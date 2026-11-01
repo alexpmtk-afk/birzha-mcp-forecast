@@ -153,3 +153,53 @@ def test_wrong_day_source_cannot_mutate_monthly_zip():
     m.candles_for_instrument=wrong_day
     with pytest.raises(MirrorConflict,match='SOURCE_TIME_OUTSIDE'):call(s,tf='M15')
     assert b.m1=={} and len(b.data['M15'])==1
+
+
+def test_managed_cloud_scan_cursor_progress_and_safe_restart():
+    b,m,s=setup()
+    assert s.coverage(symbol='RI',timeframes=('D1',))['timeframes']['D1']['archive_start']=='2025-01-01'
+    assert s.coverage(symbol='RI',timeframes=('D1',))['timeframes']['D1']['scan_cursor']=='2025-01-01'
+    b.status['google_first_scan_cursor|D1']='2026-10-29'
+    before=dict(b.status)
+    assert s.sync(symbol='RI',from_date='2026-10-29',till_date='2026-10-29',
+                  timeframes=('D1',),dry_run=True,scan_mode=True)['status']=='PLANNED'
+    assert b.status==before and not m.calls
+    r=s.sync(symbol='RI',from_date='2026-10-29',till_date='2026-10-29',
+             timeframes=('D1',),dry_run=False,scan_mode=True)
+    assert r['status']=='PASS' and len(m.calls)==1
+    assert b.status['google_first_scan_cursor|D1']=='2026-10-30'
+    assert s.coverage(symbol='RI',timeframes=('D1',))['timeframes']['D1']['scan_cursor']=='2026-10-30'
+    with pytest.raises(MirrorConflict,match='SCAN_CURSOR_MISMATCH'):
+        s.sync(symbol='RI',from_date='2026-10-29',till_date='2026-10-29',
+               timeframes=('D1',),dry_run=False,scan_mode=True)
+    assert len(m.calls)==1
+
+
+def test_managed_cursor_advances_safely_after_empty_and_unverified_day():
+    b,m,s=setup()
+    b.status['google_first_scan_cursor|D1']='2026-10-29'
+    m.candles_for_instrument=lambda ins,**kw:CandleSeries(ins,kw['timeframe'],())
+    r=s.sync(symbol='RI',from_date='2026-10-29',till_date='2026-10-29',
+             timeframes=('D1',),dry_run=False,scan_mode=True)
+    assert r['status']=='PARTIAL' and r['results'][0]['status']=='SOURCE_NOT_AVAILABLE'
+    assert b.status['google_first_scan_cursor|D1']=='2026-10-30'
+    assert not b.data['D1'][1:]
+
+
+def test_managed_cursor_never_advances_after_unknown_source():
+    b,m,s=setup();b.status['google_first_scan_cursor|D1']='2026-10-29'
+    m.fail=True
+    with pytest.raises(RuntimeError):
+        s.sync(symbol='RI',from_date='2026-10-29',till_date='2026-10-29',
+               timeframes=('D1',),dry_run=False,scan_mode=True)
+    assert b.status['google_first_scan_cursor|D1']=='2026-10-29'
+    assert b.status['google_first_status']=='ERROR_RECONCILE_BEFORE_RETRY'
+
+
+def test_full_horizon_resets_after_last_moscow_day_without_local_state():
+    b,m,s=setup()
+    b.status['google_first_scan_cursor|D1']='2026-10-31'  # later than 30 October
+    assert s.coverage(symbol='RI',timeframes=('D1',))['timeframes']['D1']['scan_cursor']=='2025-01-01'
+    with pytest.raises(MirrorConflict,match='SCAN_CURSOR_INVALID'):
+        b.status['google_first_scan_cursor|D1']='not a day'
+        s.coverage(symbol='RI',timeframes=('D1',))
