@@ -240,9 +240,12 @@ class GoogleFirstArchive:
                         # budget, or any result not explicitly classified as safe.
                         return {'status':'PARTIAL','results':results,
                                 'next_day':day.isoformat(),'next_timeframe':timeframe}
+                    next_cursor=(day+timedelta(days=1)).isoformat()
                     self.transport.update_status(symbol,{
-                        cursor_key:(day+timedelta(days=1)).isoformat(),
+                        cursor_key:next_cursor,
                         f'google_first_scan_updated_at|{tf}':self.now().isoformat()})
+                    if dict(self.transport.read_status(symbol)[1:]).get(cursor_key)!=next_cursor:
+                        raise MirrorConflict('SCAN_CURSOR_READBACK_FAILED')
             day+=timedelta(days=1)
         return {'status':'PLANNED' if dry_run else
                 ('PASS' if all(r['status'] in ('REUSED','READBACK_PASS') for r in results) else 'PARTIAL'),
