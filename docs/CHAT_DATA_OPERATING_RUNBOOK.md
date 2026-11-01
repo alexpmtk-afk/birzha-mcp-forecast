@@ -1,5 +1,11 @@
 # Единый порядок работы чатов с рыночными данными
 
+## Единый сборщик и идентичность инструментов — 01.11.2026
+
+Приоритет действующих действий: [общий порядок шести инструментов](SHARED_ARCHIVE_OPERATING_CONTRACT.md). RTSI исключён; RTS в ASSETCODE MOEX — служебный код фьючерсов RI. Датированные описания прежнего серверного контура ниже не являются инструкцией запуска нового сборщика.
+
+
+
 Дата: 15.10.2026. Активные инструменты: SBER / Si / BR / GOLD / IMOEX / RI. Индекс RTSI исключён по решению владельца 31.10.2026.
 Этот документ задаёт маршрут выполнения. Правила самих свечей находятся в
 [STORED_SESSION_SERIES_20261015.md](STORED_SESSION_SERIES_20261015.md).
@@ -51,7 +57,7 @@ GitHub main, открытая ветка, исследовательский ф�
 зависимости; не считай все открытые PR уже установленными.
 
 Серверный код: C:\MCP-HOME\projects\birzha-mcp-forecast.
-Назначенная история: C:\MCP-HOME\data\birzha\birzha_history.duckdb.
+Прежняя локальная история (не покрытие Google): C:\MCP-HOME\data\birzha\birzha_history.duckdb.
 Рабочая история читается через сервер, без параллельного открытия рабочей базы.
 Исследовательский архив хранится отдельно и не заменяет рабочую базу автоматически.
 Подтверждай фактическую конфигурацию по доступному разрешённому контуру.
@@ -66,8 +72,7 @@ GitHub main, открытая ветка, исследовательский ф�
 | BR | [MOEX_HISTDATA_BR_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1y8nMiqmMKv1af_lRQjGPCYDKpz3P1nfojkPjqqa4JjQ/edit) |
 | GOLD | [MOEX_HISTDATA_GOLD_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1L4BWi9aUG536WP-HZGVvz70q7B9CuNju4wh7zEQBk7g/edit) |
 | IMOEX | [MOEX_HISTDATA_IMOEX_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1d5czoih68MxGja0MBJbEq-WSLWVFfhMA3iqdkfe4Plg/edit) |
-| RI (фьючерс РТС, точные контракты RIH6/RIM6/RIU6/RIZ6/RIH7) | **Канон: MOEX_HISTDATA_RI_MCP_CANONICAL. Индекс RTSI не активен.** |
-| RI (фьючерс; исследовательская книга) | [MOEX_HISTDATA_RI_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY/edit) |
+| RI (действующий фьючерс; точные контракты) | [MOEX_HISTDATA_RI_MCP_CANONICAL](https://docs.google.com/spreadsheets/d/1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY/edit) |
 
 D1/H1/M15 — свечи своего периода; SESSIONS — сведения о календаре;
 VERIFIED_RANGES — действительно проверенные диапазоны; SYNC_STATUS — результат
@@ -94,7 +99,7 @@ VERIFIED_RANGES — действительно проверенные диапа
 `QUALITY_AUDIT`, описания формул — в проектной документации.
 Остальные пять инструментальных книг не менять на основании этого решения.
 
-## 3. Если сервер подключён
+## 3. Проверка сервера и чтение прежнего хранилища
 
 Проверить tools/list и вызвать history.session_rules({}). Сверить
 installed_source_sha с нужной версией; опубликованный SHA не доказывает текущую
@@ -116,7 +121,7 @@ installed_source_sha с нужной версией; опубликованны�
 Даты фильтруют исходный begin, не независимо аттестованную торговую дату.
 Границы coverage и число строк не доказывают отсутствие внутренних пропусков.
 
-Только если установлены недостающие диапазоны и их сбор разрешён:
+Следующий пример — только для отдельно разрешённой записи в прежнее серверное хранилище. Для Google-first применять archive.coverage/collect/sync по новому контракту; не запускать history.sync как его замену:
 
 ```json
 {"tool":"history.sync","arguments":{"symbol":"RI","timeframe":"H1","from_date":"2026-10-12","till_date":"2026-10-14"}}

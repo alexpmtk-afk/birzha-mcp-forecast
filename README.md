@@ -1,5 +1,11 @@
 # BIRZHA MCP Forecast System
 
+## Единый сборщик и идентичность инструментов — 01.11.2026
+
+Приоритет действующих действий: [общий порядок шести инструментов](docs/SHARED_ARCHIVE_OPERATING_CONTRACT.md). RTSI исключён; RTS в ASSETCODE MOEX — служебный код фьючерсов RI. Датированные описания прежнего серверного контура ниже не являются инструкцией запуска нового сборщика.
+
+
+
 > **Active RTS market (2026-10-31):** `RI` means the RTS **futures** family and exact quarterly contracts. `RTSI` (cash index) is retired and must not be routed to the RI Google book. Archive registry and core workflows are RI-only; old index history is preserved, not automatically migrated. Deployment to HOME requires a separate review and approval.
 
 Universal MCP backend for causal MOEX market analysis, forecasting, immutable forecast journaling, outcome evaluation and historical walk-forward validation.

@@ -37,6 +37,12 @@ class GoogleFirstArchive:
         self.transport.validate_service_target(symbol,'CONTRACTS')
         return rows
 
+    def _status(self,symbol):
+        # A restarted process has no cached Google tab identity. Always validate
+        # the pinned service target before the native transport reads its rows.
+        self.transport.validate_service_target(symbol,'SYNC_STATUS')
+        return dict(self.transport.read_status(symbol)[1:])
+
     def _audit(self,symbol,run,scope,status,count=0):
         # Fixed codes only; upstream exception text, arguments and credentials never enter audit.
         self.transport.append_quality(symbol,{'audit_id':run+'|'+status,'scope':scope,'status':status,
@@ -54,7 +60,7 @@ class GoogleFirstArchive:
         if not self.lock.acquire(blocking=False):raise MirrorConflict('ARCHIVE_BUSY')
         run=uuid.uuid4().hex;started=False
         try:
-            old=self._schemas(symbol,timeframe);h=old[0];state=dict(self.transport.read_status(symbol)[1:])
+            old=self._schemas(symbol,timeframe);h=old[0];state=self._status(symbol)
             key=f'google_first|{symbol}|{timeframe}|{day}'
             receipt=json.loads(state[key]) if state.get(key) else None
             if receipt and exact_secid is not None and receipt.get('secid')!=exact_secid:raise MirrorConflict('EXACT_CONTRACT_NOT_T_MINUS_1_SELECTION')
@@ -193,7 +199,7 @@ class GoogleFirstArchive:
         The next sweep starts again at 2025-01-01, so older unresolved gaps
         cannot be hidden by a fresh last_date.
         """
-        if state is None:state=dict(self.transport.read_status(symbol)[1:])
+        if state is None:state=self._status(symbol)
         key=f'google_first_scan_cursor|{tf}'
         raw=state.get(key,ARCHIVE_START_DATE.isoformat())
         try:
@@ -220,7 +226,7 @@ class GoogleFirstArchive:
         tf=timeframes[0] if scan_mode else None
         cursor_key=f'google_first_scan_cursor|{tf}' if scan_mode else None
         if scan_mode:
-            state=dict(self.transport.read_status(symbol)[1:])
+            state=self._status(symbol)
             expected=self._scan_cursor(symbol,tf,state)
             if left!=expected:raise MirrorConflict('SCAN_CURSOR_MISMATCH')
             if right>self.now().astimezone(MSK).date()-timedelta(days=1):raise MirrorConflict('SCAN_FUTURE_DAY')
@@ -254,7 +260,7 @@ class GoogleFirstArchive:
 
     def coverage(self,*,symbol,timeframes=('D1','H1','M15')):
         symbol=GoogleSheetsBridge.target_for_symbol(symbol)[0]
-        state=dict(self.transport.read_status(symbol)[1:])
+        state=self._status(symbol)
         result={}
         for tf in timeframes:
             if tf not in ('D1','H1','M15'):raise MirrorConflict('TIMEFRAME_UNSUPPORTED')
