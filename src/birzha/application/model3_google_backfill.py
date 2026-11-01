@@ -141,11 +141,13 @@ def minute_features_from_existing_drive(*, transport, candles, timeframe,
     if not 1<=len(combos)<=4:
         raise MirrorConflict("MODEL3_MINUTE_MONTH_CONTRACT_LIMIT")
     minutes={}
+    evidence=[]
     days = {stamp(r[idx["bar_start_time"]]).date().isoformat() for r in chosen}
     for sec,month in combos:
         info=transport.read_m1("RI",sec,month)
         if not info or not info.get("indexed"):
             raise MirrorConflict("MODEL3_INDEXED_M1_REQUIRED")
+        evidence.append({"secid":sec,"month":month,"sha256":info["sha256"],"file_id":info["file_id"]})
         for x in validate_zip(info["body"],"RI",sec,month,info["sha256"]):
             t=clock(x["begin"])
             if t[:10] not in days:continue
@@ -164,4 +166,4 @@ def minute_features_from_existing_drive(*, transport, candles, timeframe,
             continue
         if not number(vol) or result[key]["volume"]!=vol:
             raise MirrorConflict("MODEL3_M1_CANDLE_VOLUME_CONFLICT")
-    return result
+    return result, evidence
