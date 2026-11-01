@@ -67,3 +67,25 @@ def test_coverage_fail_closed_on_duplicate_and_header_drift():
         coverage_summary(src, features + [features[1]], timeframe="D1")
     with pytest.raises(ValueError, match="HEADER"):
         coverage_summary(src, [features[0][:-1], features[1][:-1]], timeframe="D1")
+
+def test_archive_service_uses_existing_tabs_and_no_writer():
+    from birzha.application.google_first_archive import GoogleFirstArchive
+    src, indicators = _sample()
+    class ReadOnlyTransport:
+        def __init__(self):
+            self.calls = []
+        def validate_model3_target(self, symbol, sheet):
+            self.calls.append(("validate", symbol, sheet))
+        def read_rows(self, symbol, sheet):
+            self.calls.append(("read", symbol, sheet))
+            assert sheet == "D1_INDICATORS"
+            return [r[:] for r in indicators]
+    transport = ReadOnlyTransport()
+    service = GoogleFirstArchive(transport=transport, market=None, source_sha="a" * 40)
+    service._schemas = lambda symbol, timeframe: src
+    result = service.model3_coverage(timeframe="D1")
+    assert result["missing_indicator_records"] == 1
+    assert result["written"] is False
+    assert transport.calls == [("validate", "RI", "D1_INDICATORS"), ("read", "RI", "D1_INDICATORS")]
+    with pytest.raises(Exception, match="TIMEFRAME_UNSUPPORTED"):
+        service.model3_coverage(timeframe="M1")
