@@ -9,6 +9,8 @@ from birzha.providers.continuous_futures import (
     ContinuousFuturesEvidenceError,
     select_completed_session_volume,
     _OUTRIGHT,
+    moex_asset_code,
+    asset_matches_root,
 )
 
 from birzha.domain.market import Instrument
@@ -91,12 +93,12 @@ class MoexHistoricalFutureResolver:
                     "iss.meta": "off",
                     "iss.only": "history",
                     "history.columns": (
-                        "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,"
+                        "TRADEDATE,SECID,BOARDID,ASSETCODE,VALUE,VOLUME,NUMTRADES,"
                         "OPENPOSITIONVALUE,OPENPOSITION,SHORTNAME,CLOSE,"
                         "LASTTRADEDATE,LASTDELDATE,MINSTEP,STEPPRICE,LOTVOLUME,CURRENCYID"
                     ),
                     "date": day.isoformat(),
-                    "assetcode": root,
+                    "assetcode": moex_asset_code(root),
                 },
             )
             payload = response.json()
@@ -104,7 +106,7 @@ class MoexHistoricalFutureResolver:
             self._day_cache[key] = self._with_expiries([
                 row for row in source
                 if _text(row, "TRADEDATE")[:10] == day.isoformat()
-                and _text(row, "ASSETCODE").casefold() == root.casefold()
+                and asset_matches_root(root, _text(row, "ASSETCODE"))
             ])
         return self._day_cache[key]
 
@@ -180,7 +182,7 @@ def _pick_instrument(root: str, as_of: date, rows: list[dict[str, Any]]) -> Inst
         asset = _text(row, "ASSETCODE")
         if not secid:
             continue
-        if asset and asset.lower() != root_lower:
+        if asset and not asset_matches_root(root, asset):
             continue
         if not asset and not secid.lower().startswith(root_lower):
             continue

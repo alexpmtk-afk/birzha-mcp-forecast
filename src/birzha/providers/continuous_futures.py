@@ -17,6 +17,16 @@ from typing import Any, Mapping, Sequence
 _OUTRIGHT = re.compile(r"^[A-Za-z]{1,8}[FGHJKMNQUVXZ]\d{1,2}$", re.ASCII)
 
 
+def moex_asset_code(root: str) -> str:
+    """Public RI SECID family is reported as ASSETCODE=RTS by ISS."""
+    return "RTS" if root.strip().upper() == "RI" else root.strip()
+
+
+def asset_matches_root(root: str, asset: str) -> bool:
+    # Keep existing explicitly labelled RI research rows readable as well.
+    return asset.casefold() in {root.strip().casefold(), moex_asset_code(root).casefold()}
+
+
 class ContinuousFuturesEvidenceError(ValueError):
     """Insufficient or inconsistent source evidence; no silent fallback."""
 
@@ -55,7 +65,6 @@ def select_completed_session_volume(
     if not root.strip() or decision_session >= effective_session:
         raise ContinuousFuturesEvidenceError("Invalid root/session decision chronology")
     best: list[tuple[float, str]] = []
-    root_key = root.strip().casefold()
     for row in decision_rows:
         trade_date = _text(row, "TRADEDATE")
         if not trade_date:
@@ -64,7 +73,7 @@ def select_completed_session_volume(
             raise ContinuousFuturesEvidenceError("Cross-session D1 history in decision rows")
         secid = _text(row, "SECID")
         asset = _text(row, "ASSETCODE")
-        if not secid or not asset or asset.casefold() != root_key:
+        if not secid or not asset or not asset_matches_root(root, asset):
             continue
         if not _OUTRIGHT.fullmatch(secid):
             continue
@@ -77,6 +86,10 @@ def select_completed_session_volume(
             continue
         raw_volume = row.get("VOLUME", row.get("volume"))
         if raw_volume is None:
+            trades = row.get("NUMTRADES", row.get("numtrades"))
+            if type(trades) in (int, float) and trades == 0:
+                # Official zero trades proves inactivity; retain NULL in RAW.
+                continue
             raise ContinuousFuturesEvidenceError("Unverifiable candidate D1 volume")
         try:
             volume = float(raw_volume)
