@@ -77,3 +77,39 @@ by this ChatGPT branch. Enable real writes only after a separately controlled
 HOME/Google acceptance including actual owner permission and one real
 small-batch readback; then iterate 2025 months without creating other sheets
 or changing original OHLCV.
+
+
+## Optional RI M1 evidence for H1/M15
+
+\`archive.model3_backfill(..., include_minute_proxies=true)\` additionally reads
+the **existing** monthly \`RI_SECID_YYYY-MM_SOURCE_M1_OHLCV.zip\` from the pinned
+Drive folder through the established \`GoogleArchiveTransport.read_m1\` path.
+It requires an indexed exact SECID/month and verifies the ZIP body SHA and
+contents with the existing monthly source validator. No new ZIP/folder/tab,
+minute download from MOEX or local cache is created.
+
+The already-existing \`model3_minutes.minute_groups/profiles\` transforms each
+minute to a bounded H1/M15 bucket, with a strict volume conservation check
+against the exact canonical candle. It fills approximate POC/VAH/VAL/HVN/LVN,
+minute VWAP and signed-minute-close Delta proxy only when actually supported.
+It refuses missing/indexless ZIP, missing positive-volume buckets and volume
+conflicts rather than replacing absent observations with zero.
+
+The response and cloud \`SYNC_STATUS\` receipt retain exact source
+\`secid\`, \`month\`, ZIP \`sha256\` and \`file_id\`. These are **approximations**:
+the minute grid spreads one-minute volume evenly over its minute high–low
+range and the close-change sign is not the buyer/seller aggressor side.
+The model remains RESEARCH_ONLY and \`p3_signal_eligible=false\`.
+
+By default \`include_minute_proxies=false\` and this extra Drive read is not
+performed. For a full RI research backfill, perform separate H1 and M15
+dry-runs with the option enabled, confirm matching sources/volumes, then
+seek explicit authorization for bounded production writes.
+
+The first restored 2025 source files were independently confirmed present by
+read-only Drive metadata: RIH5 January/February 2025 have names matching
+the expected archive prefix; this does NOT prove every monthly record,
+session calendar or source-availability timestamp.
+
+The HOME 18085 installation, sole-writer claim and real Google acceptance
+remain unverified from this chat's read-only HOME audit connection.
