@@ -258,6 +258,16 @@ class GoogleFirstArchive:
                 'results':results,'written':any(r.get('written') for r in results),
                 'scan_cursor':(right+timedelta(days=1)).isoformat() if scan_mode and not dry_run else None}
 
+    def model3_coverage(self,*,timeframe='D1'):
+        """Read-only RI candle/indicator key coverage, not a formula acceptance."""
+        if timeframe not in ('D1','H1','M15'):raise MirrorConflict('TIMEFRAME_UNSUPPORTED')
+        from birzha.application.model3_indicator_coverage import coverage_summary
+        candles=self._schemas('RI',timeframe)
+        indicator_sheet=timeframe+'_INDICATORS'
+        self.transport.validate_model3_target('RI',indicator_sheet)
+        indicators=rectangular(self.transport.read_rows('RI',indicator_sheet))
+        return coverage_summary(candles,indicators,timeframe=timeframe)
+
     def coverage(self,*,symbol,timeframes=('D1','H1','M15')):
         symbol=GoogleSheetsBridge.target_for_symbol(symbol)[0]
         state=self._status(symbol)
