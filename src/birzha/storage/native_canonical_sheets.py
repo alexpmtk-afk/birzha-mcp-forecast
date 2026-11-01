@@ -161,6 +161,53 @@ class NativeCanonicalSheets:
         # Refresh grid bounds: appendCells may expand the allocated sheet.
         self._validate_named_target(symbol, timeframe)
 
+    def model3_insert_rows(self, symbol: str, sheet: str, row_index: int,
+                           rows: list[list[object]]) -> None:
+        """One atomic native insertion; never overwrite pre-existing indicator cells.
+
+        A lost HTTP response has unknown outcome; callers MUST re-read all
+        source keys before any subsequent attempt. No automatic write retry.
+        """
+        self.validate_model3_target(symbol, sheet)
+        props = self._sheets[(symbol, sheet)]
+        grid = props["gridProperties"]
+        cols = grid["columnCount"]
+        if sheet not in {"D1_INDICATORS", "H1_INDICATORS", "M15_INDICATORS"}:
+            raise MirrorConflict("MODEL3_INSERT_INDICATORS_ONLY")
+        if not isinstance(row_index, int) or isinstance(row_index, bool) or not 1 <= row_index <= grid["rowCount"]:
+            raise MirrorConflict("MODEL3_INSERT_POSITION")
+        if not isinstance(rows, list) or not 1 <= len(rows) <= 50 or any(len(r) != cols for r in rows):
+            raise MirrorConflict("MODEL3_INSERT_COMPACT_ROWS_ONLY")
+
+        def literal(value):
+            if value is None or value == "":
+                return {}
+            if isinstance(value, bool):
+                return {"userEnteredValue": {"boolValue": value}}
+            if isinstance(value, (float, int)) and math.isfinite(value):
+                return {"userEnteredValue": {"numberValue": value}}
+            if isinstance(value, str) and len(value) <= 45000 and not value.startswith("="):
+                return {"userEnteredValue": {"stringValue": value}}
+            raise MirrorConflict("MODEL3_INSERT_NONLITERAL_CELL")
+
+        request = {"requests": [
+            {"insertDimension": {
+                "range": {"sheetId": props["sheetId"], "dimension": "ROWS",
+                          "startIndex": row_index, "endIndex": row_index + len(rows)},
+                "inheritFromBefore": row_index > 1}},
+            {"updateCells": {
+                "start": {"sheetId": props["sheetId"], "rowIndex": row_index, "columnIndex": 0},
+                "rows": [{"values": [literal(x) for x in r]} for r in rows],
+                "fields": "userEnteredValue"}},
+        ]}
+        if len(json_module.dumps(request, ensure_ascii=False, allow_nan=False).encode()) > 750_000:
+            raise MirrorConflict("MODEL3_INSERT_PAYLOAD_LIMIT")
+        symbol, target = GoogleSheetsBridge.target_for_symbol(symbol)
+        self._request("POST",
+            f"https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}:batchUpdate",
+            json=request)
+        self._validate_named_target(symbol, sheet)
+
     def validate_service_target(self, symbol: str, sheet: str) -> None:
         if sheet not in {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:
             raise MirrorConflict("unsupported service sheet")
