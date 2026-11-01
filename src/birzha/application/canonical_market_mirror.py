@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from birzha.application.archive_schema import D1_COLUMNS, COMPACT_CANDLE_COLUMNS
+from birzha.application.archive_schema import D1_COLUMNS, COMPACT_CANDLE_COLUMNS, COMPACT_CANDLE_COLUMNS_WITH_SOURCE_COUNT
 from birzha.storage.google_sheets_bridge import GoogleSheetsBridge
 
 MAX_ROWS = 100_000
@@ -38,7 +38,7 @@ def rectangular(rows: list[list[object]]) -> list[list[object]]:
     width = len(header)
     if width > MAX_COLUMNS or not all(isinstance(x, str) and x for x in header) or len(set(header)) != width:
         raise MirrorConflict("invalid header")
-    if not set(D1_COLUMNS).issubset(header) and tuple(header) != COMPACT_CANDLE_COLUMNS:
+    if not set(D1_COLUMNS).issubset(header) and tuple(header) not in (COMPACT_CANDLE_COLUMNS, COMPACT_CANDLE_COLUMNS_WITH_SOURCE_COUNT):
         raise MirrorConflict("required canonical columns missing")
     result = []
     for row in rows:

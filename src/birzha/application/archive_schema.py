@@ -15,3 +15,8 @@ COMPACT_CANDLE_COLUMNS = (
     "close", "volume", "is_complete", "source_id", "research_status",
     "normalized_sha256", "caveat", "source_file_id",
 )
+
+# M15's observed compact layout retains the count of its source M1 candles.
+COMPACT_CANDLE_COLUMNS_WITH_SOURCE_COUNT = (
+    COMPACT_CANDLE_COLUMNS[:13] + ("source_candles",) + COMPACT_CANDLE_COLUMNS[13:]
+)

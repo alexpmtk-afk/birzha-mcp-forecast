@@ -16,10 +16,11 @@ from test_google_first_archive import Book
 
 COMPACT_OBSERVED=['record_key','calendar_date','trade_session_date','bar_start_time','bar_end_time','available_at','contract_code','open','high','low','close','volume','is_complete','source_id','research_status','normalized_sha256','caveat','source_file_id']
 
-def compact_rows(book):
+def compact_rows(book,source_count=False):
+    columns=COMPACT_OBSERVED[:13]+["source_candles"]+COMPACT_OBSERVED[13:] if source_count else COMPACT_OBSERVED
     for tf in ('D1','H1','M15'):
         source=book.data[tf];h=source[0]
-        book.data[tf]=[COMPACT_OBSERVED[:]]+[[row[h.index(k)] for k in COMPACT_OBSERVED] for row in source[1:]]
+        book.data[tf]=[columns[:]]+[[row[h.index(k)] for k in columns] for row in source[1:]]
     return book
 
 SYMBOLS=('RI','Si','BR','GOLD','SBER','IMOEX')
@@ -64,12 +65,12 @@ def service(book,symbol,day):
     market=MarketDataService(provider,MoexDirectInstrumentResolver(provider),MoexHistoricalFutureResolver(provider))
     return GoogleFirstArchive(book,market,'a'*40,True,now=lambda:datetime(2026,11,1,tzinfo=MSK)),provider
 
-@pytest.mark.parametrize('compact',(False,True))
+@pytest.mark.parametrize('compact',(False,True,'source_count'))
 @pytest.mark.parametrize('symbol',SYMBOLS)
 @pytest.mark.parametrize('tf',('D1','H1','M15'))
 @pytest.mark.parametrize('day',tuple(CODES))
 def test_one_real_resolver_parser_pipeline_for_all_instruments(symbol,tf,day,compact):
-    book=compact_rows(Book()) if compact else Book();collector,provider=service(book,symbol,day)
+    book=compact_rows(Book(),compact=="source_count") if compact else Book();collector,provider=service(book,symbol,day)
     indicators=deepcopy(book.indicators)
     result=collector.collect(symbol=symbol,timeframe=tf,day=day,dry_run=False)
     assert result['status']=='READBACK_PASS' and result['added_rows']==1
@@ -83,7 +84,7 @@ def test_one_real_resolver_parser_pipeline_for_all_instruments(symbol,tf,day,com
 class GoogleREST:
     def __init__(self,symbol,tf,compact=False):
         self.symbol,self.target=GoogleSheetsBridge.target_for_symbol(symbol)
-        self.rows=(compact_rows(Book()) if compact else Book()).data
+        self.rows=(compact_rows(Book(),compact=="source_count") if compact else Book()).data
         self.rows.update({'SYNC_STATUS':[['key','value'],['google_first_scan_cursor|'+tf,'2025-01-15']],'QUALITY_AUDIT':[AUDIT],'CONTRACTS':[['symbol']]})
         self.sids={name:i for i,name in enumerate(self.rows,1)}
         self.calls=[]
@@ -109,7 +110,7 @@ class GoogleREST:
                 for offset,row in enumerate(converted):self.rows[name][op['start']['rowIndex']+offset]=row
         return httpx.Response(200,json={})
 
-@pytest.mark.parametrize('compact',(False,True))
+@pytest.mark.parametrize('compact',(False,True,'source_count'))
 @pytest.mark.parametrize('symbol',SYMBOLS)
 @pytest.mark.parametrize('tf',('D1','H1'))
 def test_cold_native_google_coverage_scan_append_and_reopen_without_duckdb(symbol,tf,compact):
