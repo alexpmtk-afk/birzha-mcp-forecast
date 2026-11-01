@@ -27,7 +27,7 @@ def test_scheduled_d1_scans_policy_start_even_with_fresh_last_date(monkeypatch):
     monkeypatch.setattr(client,'streamable_http_client',streams)
     monkeypatch.setenv('BIRZHA_SOURCE_SHA','a'*40)
     r=asyncio.run(client.cycle('http://127.0.0.1:18085/mcp','isolated-test-token',
-        from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,scan_days_per_run=3))
+        from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,scan_days_per_run=3,tail_days=0))
     writes=[a for n,a in calls if n=='archive.sync']
     assert r['status']=='PASS' and len(writes)==6
     assert [a['symbol'] for a in writes]==['RI','Si','BR','GOLD','SBER','IMOEX']
@@ -64,7 +64,7 @@ def test_managed_scan_uses_cloud_cursor_on_next_cycle(monkeypatch):
     monkeypatch.setenv('BIRZHA_SOURCE_SHA','a'*40)
     for _ in range(2):
         result=asyncio.run(client.cycle('http://127.0.0.1:18085/mcp','test-token',
-            from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,scan_days_per_run=3))
+            from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,scan_days_per_run=3,tail_days=0))
         assert result['status']=='PASS'
     assert [x[1:] for x in seen if x[0]=='RI']==[
         ('2025-01-01','2025-01-03'),('2025-01-04','2025-01-06')]
@@ -90,7 +90,7 @@ def test_scheduler_fail_closed_without_cloud_cursor(monkeypatch):
     monkeypatch.setattr(client,'streamable_http_client',streams)
     monkeypatch.setenv('BIRZHA_SOURCE_SHA','a'*40)
     result=asyncio.run(client.cycle('http://127.0.0.1:18085/mcp','test-token',
-        from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,scan_days_per_run=3))
+        from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,scan_days_per_run=3,tail_days=0))
     assert result['status']=='PARTIAL'
     assert all(x['status']=='CLOUD_SCAN_CURSOR_REQUIRED' for x in result['results'])
     assert 'archive.sync' not in seen
@@ -141,3 +141,39 @@ def test_scheduler_reaches_later_dates_after_safe_partial_windows(monkeypatch, w
         if windows_per_symbol==2:
             assert windows[1]['from_date']=='2026-01-04'
             assert windows[1]['till_date']=='2026-01-05'
+
+
+def test_recent_tail_is_checked_even_during_2025_backfill(monkeypatch):
+    calls=[]
+    class Session:
+        def __init__(self,*a,**k):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*a):pass
+        async def initialize(self):pass
+        async def call_tool(self,name,args):
+            if name=='archive.status':
+                v={'runtime':'GOOGLE_FIRST','local_candle_store':False,'source_sha':'a'*40,'sole_writer':True}
+            elif name=='archive.coverage':
+                v={'timeframes':{'D1':{'last_date':'2026-10-29','archive_start':'2025-01-01',
+                                      'scan_cursor':'2025-01-01'}}}
+            elif name=='archive.sync':
+                calls.append(args)
+                v={'status':'PASS','results':[{'status':'READBACK_PASS'}]}
+            else:raise AssertionError(name)
+            return SimpleNamespace(is_error=False,structured_content=v)
+    @asynccontextmanager
+    async def streams(*a,**k):yield (None,None)
+    monkeypatch.setattr(client,'ClientSession',Session)
+    monkeypatch.setattr(client,'streamable_http_client',streams)
+    monkeypatch.setenv('BIRZHA_SOURCE_SHA','a'*40)
+    result=asyncio.run(client.cycle('http://127.0.0.1:18085/mcp','test-token',
+        from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,
+        scan_days_per_run=3,tail_days=4))
+    assert result['status']=='PASS'
+    for symbol in ('RI','Si','BR','GOLD','SBER','IMOEX'):
+        rows=[r for r in calls if r['symbol']==symbol]
+        assert len(rows)==3
+        assert [r['scan_mode'] for r in rows]==[False,False,True]
+        assert [(r['from_date'],r['till_date']) for r in rows]==[
+            ('2026-10-27','2026-10-29'),('2026-10-30','2026-10-30'),
+            ('2025-01-01','2025-01-03')]
