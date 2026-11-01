@@ -184,3 +184,70 @@ def test_native_atomic_insert_has_no_clear_update_old_or_auto_retry():
     assert not any("delete" in json.dumps(x).lower() or "clear" in json.dumps(x).lower() for x in reqs)
     with pytest.raises(MirrorConflict,match="COMPACT_ROWS"):
         t.model3_insert_rows("RI","D1_INDICATORS",1,[[""]*94])
+
+
+def test_m1_zip_proxy_uses_exact_sec_month_and_labels_approximation():
+    from hashlib import sha256
+    from birzha.storage.google_m1_bytes import merge_zip
+    from birzha.application.model3_google_backfill import minute_features_from_existing_drive
+    sec="RIH5";date="2025-01-03"
+    raw=[{
+        "begin":f"{date}T10:00:00+03:00","end":f"{date}T10:00:59+03:00",
+        "open":100,"high":102,"low":99,"close":101,"volume":50,"value":None},
+        {
+        "begin":f"{date}T10:01:00+03:00","end":f"{date}T10:01:59+03:00",
+        "open":101,"high":103,"low":100,"close":102,"volume":50,"value":None}]
+    body,changed=merge_zip(None,raw,"RI",sec,"2025-01")
+    assert changed
+    class Cloud:
+        def __init__(self):self.calls=[]
+        def read_m1(self,s,contract,month):
+            self.calls.append((s,contract,month))
+            return dict(body=body,sha256=sha256(body).hexdigest(),
+                        file_id="existing-pinned-file",indexed=True)
+    source=candles()
+    h=list(COMPACT_CANDLE_COLUMNS)
+    t=f"{date}T10:00:00+03:00"
+    candle=dict(record_key=f"RI|H1|{sec}|{t}",contract_code=sec,
+                calendar_date=date,bar_start_time=t,
+                bar_end_time=f"{date}T10:59:59+03:00",
+                open=100,high=103,low=99,close=102,volume=100,
+                is_complete=True,normalized_sha256="source-sha")
+    table=[h,[candle.get(x,"") for x in h]]
+    cloud=Cloud()
+    profiles,evidence=minute_features_from_existing_drive(
+        transport=cloud,candles=table,timeframe="H1",
+        source_keys={candle["record_key"]},till_date=date)
+    assert cloud.calls==[("RI","RIH5","2025-01")]
+    assert len(evidence)==1 and evidence[0]["sha256"]==sha256(body).hexdigest()
+    key=(sec,"H1",f"{date} 10:00:00")
+    assert profiles[key]["volume"]==100
+    assert profiles[key]["count"]==2
+    assert profiles[key]["delta"]==50  # proxy: minute-close sign, NOT aggressor delta
+    existing=[list(COMPACT_RI_INDICATOR_COLUMNS)]
+    plan,rows=plan_ri_indicator_backfill(
+        candles=table,daily=source,existing=existing,timeframe="H1",
+        from_date=date,till_date=date,max_rows=50,
+        calculated_at="2026-11-01T15:00:00+00:00",minute_features=profiles)
+    ih=existing[0]
+    assert plan["minute_features"]=="APPROX_SOURCE_M1"
+    assert rows[0][ih.index("p3_minute_count")]==2
+    assert rows[0][ih.index("p3_delta_proxy_status")].startswith("M1_CLOSE_SIGN")
+    assert rows[0][ih.index("p3_minute_sign_delta_proxy")]==50
+    assert rows[0][ih.index("p3_profile_status")].endswith("APPROX")
+    assert rows[0][ih.index("p3_signal_eligible")] is False
+    wrong=[list(x) for x in table]
+    wrong[1][h.index("volume")]=99
+    with pytest.raises(MirrorConflict,match="VOLUME_CONFLICT"):
+        minute_features_from_existing_drive(
+            transport=cloud,candles=wrong,timeframe="H1",
+            source_keys={candle["record_key"]},till_date=date)
+
+
+def test_minute_profiles_require_indexed_existing_source():
+    from birzha.application.model3_google_backfill import minute_features_from_existing_drive
+    table=candles()
+    with pytest.raises(MirrorConflict,match="INTRADAY"):
+        minute_features_from_existing_drive(
+            transport=None,candles=table,timeframe="D1",
+            source_keys={table[1][0]},till_date="2025-01-03")
