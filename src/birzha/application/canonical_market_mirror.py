@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from birzha.application.archive_schema import D1_COLUMNS
+from birzha.application.archive_schema import D1_COLUMNS, COMPACT_CANDLE_COLUMNS
 from birzha.storage.google_sheets_bridge import GoogleSheetsBridge
 
 MAX_ROWS = 100_000
@@ -38,7 +38,7 @@ def rectangular(rows: list[list[object]]) -> list[list[object]]:
     width = len(header)
     if width > MAX_COLUMNS or not all(isinstance(x, str) and x for x in header) or len(set(header)) != width:
         raise MirrorConflict("invalid header")
-    if not set(D1_COLUMNS).issubset(header):
+    if not set(D1_COLUMNS).issubset(header) and tuple(header) != COMPACT_CANDLE_COLUMNS:
         raise MirrorConflict("required canonical columns missing")
     result = []
     for row in rows:
@@ -138,7 +138,7 @@ def validate_identity(rows: list[list[object]], symbol: str, timeframe: str, *, 
                 status = str(row[header.index("research_status")])
                 if status not in {"RECONSTRUCTED_RESEARCH", "RECONSTRUCTED_RESEARCH_ONLY", "INDIVIDUAL_BAR_VALID_SESSION_UNCERTIFIED"} and not status.startswith("RESEARCH_ONLY_"):
                     raise MirrorConflict("historical intraday must remain explicitly research-only")
-            confidence = row[header.index("available_at_confidence")]
+            confidence = row[header.index("available_at_confidence")] if "available_at_confidence" in header else "UNKNOWN"
             available = row[header.index("available_at")]
             if confidence in {"UNKNOWN", "UNVERIFIED", "NOT_PIT_VERIFIED"}:
                 if available != "":
@@ -148,7 +148,7 @@ def validate_identity(rows: list[list[object]], symbol: str, timeframe: str, *, 
                     raise MirrorConflict("inferred bar end requires explicit PIT limitation")
             else:
                 raise MirrorConflict("historical availability cannot be promoted to verified")
-            if row[header.index("trade_session_date")] != "" or row[header.index("session_id")] != "":
+            if row[header.index("trade_session_date")] != "" or ("session_id" in header and row[header.index("session_id")] != ""):
                 raise MirrorConflict("new historical intraday requires unverified session fields empty")
 
 
