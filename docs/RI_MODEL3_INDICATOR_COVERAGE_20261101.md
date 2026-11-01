@@ -27,3 +27,53 @@
 - Installed HOME18085 version from this GitHub branch; this ChatGPT connection only has an eight-tool read-only HOME audit interface and cannot deploy/restart Windows processes.
 
 This file is an evidence ledger and *not* permission to merge, deploy, or change production data.
+
+
+## Isolated bounded backfill implementation (PR #298; not installed)
+
+The same Draft PR now provides a **manual** Google-first research backfill path:
+\`archive.model3_backfill(timeframe, from_date, till_date, max_rows=50, dry_run=true, owner_confirmed=false)\`.
+
+The existing \`model3_features.research_features\` calculates OHLCV-derived research
+metrics. The new planner projects its 119-column intermediate result into the
+**observed exact ordered 95-column Google indicator schema**, preserving 2026
+rows. The source is read from the pinned RI D1/H1/M15 sheets. The planner
+uses prior history and resets state per exact contract, limits each window to
+31 civil days and at most 50 new records, and inserts one contiguous chronological
+gap instead of appending old 2025 rows behind 2026 rows.
+
+A real insert requires all of the following:
+- Deployed **separate** archive runtime 18085 at the reviewed SHA, with
+  \`sole_writer=true\` enabled only under explicit owner authorisation;
+- \`owner_confirmed=true\` **on the call**, \`dry_run=false\`, and a completed
+  historical time window;
+- Identical source/indicator preflight reads, sorted existing indicator keys,
+  no duplicate/orphan source identity, and no formulas in existing indicator cells;
+- One Google Sheets atomic \`insertDimension\` + \`updateCells\` request (maximum
+  50 rows), followed by a complete readback that proves all old rows unchanged.
+  A lost result is never automatically retried; inspect keys first. Successful
+  data insertion with failed status update is explicitly \`READBACK_PASS_STATUS_UNCONFIRMED\`.
+
+All new features are labelled \`RECONSTRUCTED_RESEARCH_ONLY\`,
+\`CALENDAR_UNVERIFIED\`, historical availability \`UNKNOWN\`, and
+\`p3_signal_eligible=false\`. This is **not** signal admission.
+
+IMPORTANT: Current backfill only calculates existing OHLCV-derived fields.
+It does **not** yet import exact-contract M1 monthly ZIP into per-bar
+horizontal volume/delta proxy calculations; those fields remain UNAVAILABLE.
+Minute close-sign proxy is not true aggressor Delta. Actual price-at-trade
+profiles require a different upstream feed. Existing 2026 feature values are
+preserved, not retroactively proven correct after adding 2025 history.
+
+Offline tests cover chronological insert ahead of 2026, idempotent second
+call, unknown-response reconciliation, formula/unknown header rejection,
+source-key checks, and one native Google batch without clear/delete. Exact
+head \`8d1fa88449620eba7777e1f3b5e6fce4749f0ad3\`: 832 tests PASS,
+Docker MCP PASS, four Github workflows PASS. These are isolated CI results,
+**not** evidence of an installed HOME or a successful real Google write.
+
+No merge, deploy, HOME restart, production batch, or schedule was performed
+by this ChatGPT branch. Enable real writes only after a separately controlled
+HOME/Google acceptance including actual owner permission and one real
+small-batch readback; then iterate 2025 months without creating other sheets
+or changing original OHLCV.
