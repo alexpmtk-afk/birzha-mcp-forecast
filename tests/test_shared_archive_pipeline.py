@@ -14,6 +14,14 @@ from birzha.storage.google_archive_transport import GoogleArchiveTransport,AUDIT
 from birzha.storage.google_sheets_bridge import GoogleSheetsBridge,INSTRUMENT_FOLDER_IDS
 from test_google_first_archive import Book
 
+COMPACT_OBSERVED=['record_key','calendar_date','trade_session_date','bar_start_time','bar_end_time','available_at','contract_code','open','high','low','close','volume','is_complete','source_id','research_status','normalized_sha256','caveat','source_file_id']
+
+def compact_rows(book):
+    for tf in ('D1','H1','M15'):
+        source=book.data[tf];h=source[0]
+        book.data[tf]=[COMPACT_OBSERVED[:]]+[[row[h.index(k)] for k in COMPACT_OBSERVED] for row in source[1:]]
+    return book
+
 SYMBOLS=('RI','Si','BR','GOLD','SBER','IMOEX')
 CODES={'2025-01-15':('RIH5','SiH5','BRG5','GDH5','SBER','IMOEX'),'2026-10-29':('RIZ6','SiZ6','BRX6','GDZ6','SBER','IMOEX')}
 def table(name,rows):
@@ -56,11 +64,12 @@ def service(book,symbol,day):
     market=MarketDataService(provider,MoexDirectInstrumentResolver(provider),MoexHistoricalFutureResolver(provider))
     return GoogleFirstArchive(book,market,'a'*40,True,now=lambda:datetime(2026,11,1,tzinfo=MSK)),provider
 
+@pytest.mark.parametrize('compact',(False,True))
 @pytest.mark.parametrize('symbol',SYMBOLS)
 @pytest.mark.parametrize('tf',('D1','H1','M15'))
 @pytest.mark.parametrize('day',tuple(CODES))
-def test_one_real_resolver_parser_pipeline_for_all_instruments(symbol,tf,day):
-    book=Book();collector,provider=service(book,symbol,day)
+def test_one_real_resolver_parser_pipeline_for_all_instruments(symbol,tf,day,compact):
+    book=compact_rows(Book()) if compact else Book();collector,provider=service(book,symbol,day)
     indicators=deepcopy(book.indicators)
     result=collector.collect(symbol=symbol,timeframe=tf,day=day,dry_run=False)
     assert result['status']=='READBACK_PASS' and result['added_rows']==1
@@ -69,12 +78,12 @@ def test_one_real_resolver_parser_pipeline_for_all_instruments(symbol,tf,day):
     assert collector.collect(symbol=symbol,timeframe=tf,day=day,dry_run=False)['status']=='REUSED'
     assert calls==provider.candle_requests==1 and book.data[tf]==before
     assert book.indicators==indicators
-    assert before[1][13]==('' if symbol=='IMOEX' else 75 if tf=='M15' else 5)
+    assert before[1][before[0].index('volume')]==('' if symbol=='IMOEX' else 75 if tf=='M15' else 5)
 
 class GoogleREST:
-    def __init__(self,symbol,tf):
+    def __init__(self,symbol,tf,compact=False):
         self.symbol,self.target=GoogleSheetsBridge.target_for_symbol(symbol)
-        self.rows=Book().data
+        self.rows=(compact_rows(Book()) if compact else Book()).data
         self.rows.update({'SYNC_STATUS':[['key','value'],['google_first_scan_cursor|'+tf,'2025-01-15']],'QUALITY_AUDIT':[AUDIT],'CONTRACTS':[['symbol']]})
         self.sids={name:i for i,name in enumerate(self.rows,1)}
         self.calls=[]
@@ -100,10 +109,11 @@ class GoogleREST:
                 for offset,row in enumerate(converted):self.rows[name][op['start']['rowIndex']+offset]=row
         return httpx.Response(200,json={})
 
+@pytest.mark.parametrize('compact',(False,True))
 @pytest.mark.parametrize('symbol',SYMBOLS)
 @pytest.mark.parametrize('tf',('D1','H1'))
-def test_cold_native_google_coverage_scan_append_and_reopen_without_duckdb(symbol,tf):
-    rest=GoogleREST(symbol,tf)
+def test_cold_native_google_coverage_scan_append_and_reopen_without_duckdb(symbol,tf,compact):
+    rest=GoogleREST(symbol,tf,compact)
     def transport():return GoogleArchiveTransport(lambda:'isolated',transport=httpx.MockTransport(rest))
     collector,provider=service(transport(),symbol,'2025-01-15')
     assert collector.coverage(symbol=symbol,timeframes=(tf,))['timeframes'][tf]['scan_cursor']=='2025-01-15'
@@ -114,3 +124,22 @@ def test_cold_native_google_coverage_scan_append_and_reopen_without_duckdb(symbo
     assert collector.collect(symbol=symbol,timeframe=tf,day='2025-01-15',dry_run=False)['status']=='REUSED'
     assert provider.candle_requests==1 and unused_source.candle_requests==0
     assert len(rest.rows[tf])==2
+
+
+@pytest.mark.parametrize('field,value',(
+    ('available_at','2026-10-29T11:00:00+03:00'),
+    ('trade_session_date','2026-10-29'),
+    ('research_status','VERIFIED'),
+    ('is_complete','true'),
+))
+def test_compact_new_intraday_cannot_promote_unknown_evidence(field,value):
+    from birzha.application.canonical_market_mirror import validate_identity,MirrorConflict
+    book=compact_rows(Book());collector,_=service(book,'RI','2026-10-29')
+    collector.collect(symbol='RI',timeframe='H1',day='2026-10-29',dry_run=False)
+    rows=deepcopy(book.data['H1']);rows[1][rows[0].index(field)]=value
+    with pytest.raises(MirrorConflict):validate_identity(rows,'RI','H1',incoming=True)
+
+
+def test_compact_is_exact_layout_not_permission_to_drop_other_columns():
+    from birzha.application.canonical_market_mirror import rectangular,MirrorConflict
+    with pytest.raises(MirrorConflict):rectangular([[x for x in COMPACT_OBSERVED if x!='volume']])
