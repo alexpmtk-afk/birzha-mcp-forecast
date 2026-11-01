@@ -23,6 +23,13 @@ def test_actual_mcp_google_first_chain_and_auth():
                 args={'symbol':'RI','timeframe':'D1','day':'2026-10-29','dry_run':False}
                 assert (await call('archive.collect',args))['status']=='READBACK_PASS'
                 assert (await call('archive.collect',args))['status']=='REUSED'
+                b.status['google_first_scan_cursor|D1']='2026-10-29'
+                check=await call('archive.sync',{'symbol':'RI','from_date':'2026-10-29',
+                    'till_date':'2026-10-29','timeframes':['D1'],'dry_run':False,
+                    'max_source_windows':3,'scan_mode':True})
+                assert check['status']=='PASS'
+                assert check['results'][0]['status']=='REUSED'
+                assert b.status['google_first_scan_cursor|D1']=='2026-10-30'
                 r=await c.post('/mcp',headers=headers,json={'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'history.sync','arguments':{}}})
                 assert r.json()['result'].get('isError') is True
     asyncio.run(run());assert len(m.calls)==1
