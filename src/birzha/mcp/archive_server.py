@@ -28,12 +28,12 @@ def build_app(service,token):
         try:return service.collect(symbol=symbol,timeframe=timeframe,day=day,exact_secid=exact_secid,dry_run=dry_run)
         except Exception:return {'status':'BLOCKED','code':'RECONCILE_CLOUD_STATUS_BEFORE_RETRY','written':'UNKNOWN' if not dry_run else False}
     @mcp.tool(name='archive.sync',description='Bounded Google-first D1/H1/M15 collection; at most three days, explicit budget. Does not calculate continuous research coordinates or modify existing indicator formulas.')
-    def sync(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,dry_run:bool=True,max_source_windows:int=6)->dict:
-        try:return service.sync(symbol=symbol,from_date=from_date,till_date=till_date,timeframes=tuple(timeframes if timeframes is not None else ('D1','H1','M15')),dry_run=dry_run,max_source_windows=max_source_windows)
+    def sync(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False)->dict:
+        try:return service.sync(symbol=symbol,from_date=from_date,till_date=till_date,timeframes=tuple(timeframes if timeframes is not None else ('D1','H1','M15')),dry_run=dry_run,max_source_windows=max_source_windows,scan_mode=scan_mode)
         except Exception:return {'status':'BLOCKED','code':'RECONCILE_CLOUD_STATUS_BEFORE_RETRY','written':'UNKNOWN' if not dry_run else False}
     @mcp.tool(name='archive.update',description='Same bounded Google-first synchronization; no DuckDB mirror or local backup prerequisite.')
-    def update(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,dry_run:bool=True,max_source_windows:int=6)->dict:
-        return sync(symbol,from_date,till_date,timeframes,dry_run,max_source_windows)
+    def update(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False)->dict:
+        return sync(symbol,from_date,till_date,timeframes,dry_run,max_source_windows,scan_mode)
     @mcp.custom_route('/healthz',methods=['GET'])
     async def health(request):return JSONResponse({'status':'ok','runtime':'GOOGLE_FIRST','source_sha':service.source_sha})
     app=mcp.streamable_http_app(json_response=True,transport_security=TransportSecuritySettings(allowed_hosts=['127.0.0.1','127.0.0.1:*','localhost','localhost:*'],allowed_origins=[]))

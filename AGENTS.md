@@ -2,6 +2,14 @@
 
 > **Owner decision 2026-10-31:** retire the `RTSI` cash index from all active workflows and archive routing. Work with `RI` RTS futures only, resolving exact contracts by session. `MOEX_HISTDATA_RI_MCP_CANONICAL` is an RI futures book, never an RTSI book. Preserve historical index data and immutable price rows; do not rewrite/delete history or assume GitHub edits are deployed to HOME.
 
+## Global Google-first candle collection window — owner decision, 01.11.2026
+
+For each of the six canonical instruments **RI, Si, BR, GOLD, SBER, IMOEX** and each candle timeframe **D1, H1, M15**, the mandatory archive coverage and backfill horizon is **2025-01-01 inclusive** through the **latest completed trading session in Europe/Moscow, never later than the previous Moscow calendar day**. Earlier valid history must not be deleted. A nontrading day, an absent trade, an empty MOEX reply and a genuinely missing source are different statuses and must not be conflated.
+
+**Do not compute the requested collection period from the Google sheet's `last_date` alone.** Inspect already-stored keys, exact futures SECIDs and applicable trade sessions for internal gaps across the entire horizon. Reuse verified cloud receipts, preserve existing price/volume/formulas, request only proven missing source windows in bounded batches, and verify every write by reading the same existing Google sheet back. Keep progress/checkpoints in existing Google `SYNC_STATUS` and quality evidence in `QUALITY_AUDIT`; do not add a permanent local DuckDB/journal/candle archive for this collector. M1 remains monthly ZIP on Google Drive and its existing index. RI is the **futures** root; never route RTSI to its workbook.
+
+**Implementation status:** the original PR #291 revision `c975ca2` incorrectly started from the last observed Google date. The **updated Draft PR #291 now proposes** a bounded per-timeframe Google `SYNC_STATUS` cursor plus an independent recent-tail check; cursor advances only after explicitly safe days and must pass a readback. Code and regression tests are awaiting final independent CI review and real-book acceptance. **Do not deploy, merge, or start `--apply` without that verification and the owner's separate authorization.** Neither this rule nor the source branch is an installed HOME update.
+
 ## Start here
 
 For any candle download, storage, continuation or session-concatenation task,
