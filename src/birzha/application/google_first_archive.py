@@ -11,6 +11,7 @@ from birzha.storage.google_m1_bytes import validate_zip
 
 SYMBOLS=('RI','Si','BR','GOLD','SBER','IMOEX')
 MSK=ZoneInfo('Europe/Moscow')
+ARCHIVE_START_DATE=date(2025,1,1)
 def stamp(v):
     d=sheet_timestamp(v);return d.replace(tzinfo=MSK) if d.tzinfo is None else d.astimezone(MSK)
 def packed(v):return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)
@@ -185,25 +186,81 @@ class GoogleFirstArchive:
         index_rows(output);validate_identity(output,symbol,tf,incoming=True)
         return output
 
-    def sync(self,*,symbol,from_date,till_date,timeframes=('D1','H1','M15'),dry_run=True,max_source_windows=6):
+    def _scan_cursor(self,symbol,tf,state=None):
+        """Cloud-only, per-instrument/per-timeframe full-horizon cursor.
+
+        A cursor beyond yesterday means the previous bounded sweep finished.
+        The next sweep starts again at 2025-01-01, so older unresolved gaps
+        cannot be hidden by a fresh last_date.
+        """
+        if state is None:state=dict(self.transport.read_status(symbol)[1:])
+        key=f'google_first_scan_cursor|{tf}'
+        raw=state.get(key,ARCHIVE_START_DATE.isoformat())
+        try:
+            cursor=date.fromisoformat(raw)
+            if raw!=cursor.isoformat():raise ValueError('not canonical')
+        except (ValueError,TypeError):raise MirrorConflict('SCAN_CURSOR_INVALID') from None
+        if cursor<ARCHIVE_START_DATE:raise MirrorConflict('SCAN_CURSOR_BEFORE_POLICY_START')
+        yesterday=self.now().astimezone(MSK).date()-timedelta(days=1)
+        return ARCHIVE_START_DATE if cursor>yesterday else cursor
+
+    def sync(self,*,symbol,from_date,till_date,timeframes=('D1','H1','M15'),
+             dry_run=True,max_source_windows=6,scan_mode:bool=False):
+        """Collect up to three days; optionally persist safe sweep progress in Google.
+
+        The automatic scheduler uses one timeframe at a time with scan_mode;
+        explicitly requested backfills do not advance its shared cursor.
+        """
         left,right=date.fromisoformat(from_date),date.fromisoformat(till_date)
         if not 0<=(right-left).days<3 or not timeframes or len(set(timeframes))!=len(timeframes):raise MirrorConflict('BOUNDED_THREE_DAY_RANGE_REQUIRED')
         if type(max_source_windows) is not int or not 1<=max_source_windows<=12:raise MirrorConflict('INVALID_SOURCE_BUDGET')
+        if type(scan_mode) is not bool:raise MirrorConflict('BOOLEAN_SCAN_MODE_REQUIRED')
+        if scan_mode and len(timeframes)!=1:raise MirrorConflict('SCAN_ONE_TIMEFRAME_REQUIRED')
+        symbol=GoogleSheetsBridge.target_for_symbol(symbol)[0]
+        tf=timeframes[0] if scan_mode else None
+        cursor_key=f'google_first_scan_cursor|{tf}' if scan_mode else None
+        if scan_mode:
+            state=dict(self.transport.read_status(symbol)[1:])
+            expected=self._scan_cursor(symbol,tf,state)
+            if left!=expected:raise MirrorConflict('SCAN_CURSOR_MISMATCH')
+            if right>self.now().astimezone(MSK).date()-timedelta(days=1):raise MirrorConflict('SCAN_FUTURE_DAY')
+            if not dry_run and not self.sole_writer:raise MirrorConflict('SOLE_WRITER_REQUIRED')
         results=[];day=left
+        safe=('READBACK_PASS','REUSED','SOURCE_NOT_AVAILABLE',
+              'SOURCE_NOT_AVAILABLE_RETRY_LATER','EXISTING_UNVERIFIED_NO_FETCH')
         while day<=right:
-            for tf in timeframes:
-                if len(results)>=max_source_windows:return {'status':'PARTIAL','results':results,'next_day':day.isoformat(),'next_timeframe':tf}
-                results.append(self.collect(symbol=symbol,timeframe=tf,day=day.isoformat(),dry_run=dry_run))
+            for timeframe in timeframes:
+                if len(results)>=max_source_windows:return {
+                    'status':'PARTIAL','results':results,'next_day':day.isoformat(),'next_timeframe':timeframe}
+                result=self.collect(symbol=symbol,timeframe=timeframe,day=day.isoformat(),dry_run=dry_run)
+                results.append(result)
+                if scan_mode and not dry_run:
+                    if result['status'] not in safe:
+                        # Never move the cursor past an unknown outcome, incomplete
+                        # budget, or any result not explicitly classified as safe.
+                        return {'status':'PARTIAL','results':results,
+                                'next_day':day.isoformat(),'next_timeframe':timeframe}
+                    self.transport.update_status(symbol,{
+                        cursor_key:(day+timedelta(days=1)).isoformat(),
+                        f'google_first_scan_updated_at|{tf}':self.now().isoformat()})
             day+=timedelta(days=1)
-        return {'status':'PLANNED' if dry_run else ('PASS' if all(r['status'] in ('REUSED','READBACK_PASS') for r in results) else 'PARTIAL'),'results':results,'written':any(r.get('written') for r in results)}
+        return {'status':'PLANNED' if dry_run else
+                ('PASS' if all(r['status'] in ('REUSED','READBACK_PASS') for r in results) else 'PARTIAL'),
+                'results':results,'written':any(r.get('written') for r in results),
+                'scan_cursor':(right+timedelta(days=1)).isoformat() if scan_mode and not dry_run else None}
 
     def coverage(self,*,symbol,timeframes=('D1','H1','M15')):
         symbol=GoogleSheetsBridge.target_for_symbol(symbol)[0]
+        state=dict(self.transport.read_status(symbol)[1:])
         result={}
         for tf in timeframes:
             if tf not in ('D1','H1','M15'):raise MirrorConflict('TIMEFRAME_UNSUPPORTED')
             table=self._schemas(symbol,tf);h=table[0]
             dates=[stamp(r[h.index('bar_start_time')]).date().isoformat() for r in table[1:] if stamp(r[h.index('bar_start_time')]).date()<self.now().astimezone(MSK).date()]
             contracts=sorted({r[h.index('contract_code')] for r in table[1:]})
-            result[tf]={'rows':len(dates),'first_date':min(dates) if dates else None,'last_date':max(dates) if dates else None,'contracts':contracts,'full_session_coverage':'UNVERIFIED'}
+            result[tf]={'rows':len(dates),'first_date':min(dates) if dates else None,
+                'last_date':max(dates) if dates else None,'contracts':contracts,
+                'archive_start':ARCHIVE_START_DATE.isoformat(),
+                'scan_cursor':self._scan_cursor(symbol,tf,state).isoformat(),
+                'full_session_coverage':'UNVERIFIED'}
         return {'symbol':symbol,'timeframes':result,'canonical_storage':'GOOGLE_SHEETS','written':False}
