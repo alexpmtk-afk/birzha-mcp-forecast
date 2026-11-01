@@ -2,6 +2,14 @@
 
 > **Owner decision 2026-10-31:** retire the `RTSI` cash index from all active workflows and archive routing. Work with `RI` RTS futures only, resolving exact contracts by session. `MOEX_HISTDATA_RI_MCP_CANONICAL` is an RI futures book, never an RTSI book. Preserve historical index data and immutable price rows; do not rewrite/delete history or assume GitHub edits are deployed to HOME.
 
+## Global Google-first candle collection window — owner decision, 01.11.2026
+
+For each of the six canonical instruments **RI, Si, BR, GOLD, SBER, IMOEX** and each candle timeframe **D1, H1, M15**, the mandatory archive coverage and backfill horizon is **2025-01-01 inclusive** through the **latest completed trading session in Europe/Moscow, never later than the previous Moscow calendar day**. Earlier valid history must not be deleted. A nontrading day, an absent trade, an empty MOEX reply and a genuinely missing source are different statuses and must not be conflated.
+
+**Do not compute the requested collection period from the Google sheet's `last_date` alone.** Inspect already-stored keys, exact futures SECIDs and applicable trade sessions for internal gaps across the entire horizon. Reuse verified cloud receipts, preserve existing price/volume/formulas, request only proven missing source windows in bounded batches, and verify every write by reading the same existing Google sheet back. Keep progress/checkpoints in existing Google `SYNC_STATUS` and quality evidence in `QUALITY_AUDIT`; do not add a permanent local DuckDB/journal/candle archive for this collector. M1 remains monthly ZIP on Google Drive and its existing index. RI is the **futures** root; never route RTSI to its workbook.
+
+**Release gate:** as of PR #291 HEAD c975ca2, the scheduler starts from the last observed Google date and limits an automatic backfill to 31 days; this **does not implement** the above whole-horizon rule. Do not claim deployment-readiness or start `--apply` until the scheduler and cloud progress handling are changed and tested for internal gaps, contract rolls, skipped sessions, bounded resume, and a repeat without duplicates. This documentation change is not an HOME deploy, PR merge, permission to write Google, or waiver of sole-writer checks.
+
 ## Start here
 
 For any candle download, storage, continuation or session-concatenation task,
