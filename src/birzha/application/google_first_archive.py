@@ -272,7 +272,8 @@ class GoogleFirstArchive:
         return coverage_summary(candles,indicators,timeframe=timeframe)
 
     def model3_backfill(self,*,timeframe,from_date,till_date,max_rows=50,
-                        dry_run=True,owner_confirmed=False):
+                        dry_run=True,owner_confirmed=False,
+                        include_minute_proxies=False):
         """RI-only cloud-native research backfill, without local history files.
 
         Only one 50-row *chronological gap* may be inserted per call. The
@@ -280,7 +281,8 @@ class GoogleFirstArchive:
         the operator must re-read coverage before manually retrying.
         """
         if timeframe not in ('D1','H1','M15'):raise MirrorConflict('MODEL3_TIMEFRAME_UNSUPPORTED')
-        if type(dry_run) is not bool or type(owner_confirmed) is not bool:
+        if (type(dry_run) is not bool or type(owner_confirmed) is not bool
+                or type(include_minute_proxies) is not bool):
             raise MirrorConflict('MODEL3_EXPLICIT_BOOLEANS_REQUIRED')
         if not dry_run and (not self.sole_writer or not owner_confirmed):
             raise MirrorConflict('MODEL3_OWNER_AND_SOLE_WRITER_REQUIRED')
@@ -306,6 +308,16 @@ class GoogleFirstArchive:
                 candles=candles,daily=daily,existing=old,timeframe=timeframe,
                 from_date=from_date,till_date=till_date,max_rows=max_rows,
                 calculated_at=self.now().isoformat())
+            if include_minute_proxies and planned:
+                from birzha.application.model3_google_backfill import minute_features_from_existing_drive
+                proxy, minute_evidence=minute_features_from_existing_drive(
+                    transport=self.transport,candles=candles,timeframe=timeframe,
+                    source_keys=set(report['source_keys']),till_date=till_date)
+                report,planned=plan_ri_indicator_backfill(
+                    candles=candles,daily=daily,existing=old,timeframe=timeframe,
+                    from_date=from_date,till_date=till_date,max_rows=max_rows,
+                    calculated_at=report['calculated_at'],minute_features=proxy)
+                report['minute_evidence']=minute_evidence
             if dry_run or not planned:
                 return report
             if report['coverage']['orphan_indicator_records']:
@@ -342,6 +354,7 @@ class GoogleFirstArchive:
                     'model3_google_backfill_sha':self.source_sha,
                     'model3_google_backfill_timeframe':timeframe,
                     'model3_google_backfill_last_date':till_date,
+                    'model3_google_backfill_m1_evidence':packed(report.get('minute_evidence',[])),
                 })
             except Exception:
                 status='READBACK_PASS_STATUS_UNCONFIRMED'
