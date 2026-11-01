@@ -265,7 +265,10 @@ class GoogleFirstArchive:
         candles=self._schemas('RI',timeframe)
         indicator_sheet=timeframe+'_INDICATORS'
         self.transport.validate_model3_target('RI',indicator_sheet)
-        indicators=rectangular(self.transport.read_rows('RI',indicator_sheet))
+        # Indicator sheets legitimately have 95 columns; the candle-only
+        # rectangular() validator caps widths at 40. Coverage validates the
+        # existing exact header and pads rows without changing Google.
+        indicators=self.transport.read_rows('RI',indicator_sheet)
         return coverage_summary(candles,indicators,timeframe=timeframe)
 
     def coverage(self,*,symbol,timeframes=('D1','H1','M15')):
