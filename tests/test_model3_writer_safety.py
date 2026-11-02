@@ -77,7 +77,7 @@ def test_lost_prepared_receipt_response_reconciles_no_write_without_retry():
     assert b.writes==0
     b.append_quality=real
     with pytest.raises(MirrorConflict,match='SETTLEMENT_REQUIRED'):_service(b,True).model3_backfill(**ARGS)
-    assert b.writes==0 and statuses(b)[-1]=='RECOVERY_NOT_OBSERVED'
+    assert b.writes==0 and 'RECOVERY_NOT_OBSERVED' in statuses(b) and statuses(b)[-1]=='ERROR'
 
 
 def test_failure_before_append_is_not_retried_during_recovery():
@@ -96,7 +96,7 @@ def test_conflicting_recovery_never_rewrites_or_rolls_back_current_rows():
     current=deepcopy(b.features)
     with pytest.raises(MirrorConflict,match='RECOVERY_CONFLICT'):s.model3_backfill(**ARGS)
     assert b.writes==1 and b.features==current
-    assert statuses(b)[-1]=='RECOVERY_CONFLICT'
+    assert 'RECOVERY_CONFLICT' in statuses(b) and statuses(b)[-1]=='ERROR'
 
 
 def test_committed_audit_failure_is_recovered_without_duplicate():
@@ -195,3 +195,12 @@ def test_source_changes_are_logged_before_any_target_write():
     s._schemas=read
     with pytest.raises(MirrorConflict,match='SOURCE_CHANGED'):s.model3_backfill(**ARGS)
     assert b.writes==0 and statuses(b)==['STARTED','ERROR']
+
+
+def test_recovery_read_failure_records_new_attempt_and_sanitized_error():
+    b=Book();b.fail_after_commit=True;s=_service(b,True)
+    with pytest.raises(MirrorConflict):s.model3_backfill(**ARGS)
+    b.read_rows=lambda *a:(_ for _ in ()).throw(RuntimeError('private recovery response'))
+    with pytest.raises(RuntimeError):s.model3_backfill(**ARGS)
+    assert statuses(b)[-2:]==['STARTED','ERROR']
+    assert b.writes==1 and 'private recovery response' not in json.dumps(b.audit)

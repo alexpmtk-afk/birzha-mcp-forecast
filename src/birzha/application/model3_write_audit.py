@@ -60,5 +60,5 @@ def recover(service):
     record(service, run, sheet, status, before=r['before_sha'], after=current, count=r['affected_rows'])
     # Recovery performs NO indicator write; the caller must review before a new batch.
     return {'status': status, 'written': written, 'recovery_only': True,
-            'confirmed_rows': r['affected_rows'] if written else 0,
+            'confirmed_rows': r['affected_rows'] if written else 0, 'source_sheet': sheet,
             'forecast_admission': 'NOT_GRANTED'}

@@ -288,11 +288,14 @@ class GoogleFirstArchive:
         # The OS-owned workbook lease spans recovery, all source reads, receipts,
         # append, verification and status writes. It has no lease-stealing timeout.
         with self.transport.writer_guard('RI'):
-            recovered = recover(self)
-            if recovered is not None: return recovered
             run = uuid.uuid4().hex; sheet = timeframe + '_INDICATORS'
             try:
                 record(self, run, sheet, 'STARTED')
+                recovered = recover(self)
+                if recovered is not None:
+                    record(self, run, sheet, 'RECOVERY_COMPLETE',
+                           payload={'result':recovered['status'],'source_sheet':recovered['source_sheet']})
+                    return recovered
                 result = self._model3_backfill(**args, audit_run=run)
                 if not result.get('written'):
                     record(self, run, sheet, 'NO_MISSING')

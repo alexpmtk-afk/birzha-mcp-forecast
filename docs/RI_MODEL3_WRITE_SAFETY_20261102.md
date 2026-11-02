@@ -56,7 +56,9 @@ Dry-runs and requests denied before ownership do not mutate even the audit.
 Requests unable to obtain a lease cannot safely append to its audit either;
 they fail closed to the caller and are not falsely reported as journalled.
 
-Recovery runs under the same mutex before every authorized apply. An exact
+Recovery runs under the same mutex before every authorized apply. Each recovery
+invocation has a fresh STARTED and a RECOVERY_COMPLETE or sanitized ERROR,
+including failures while reading the target. An exact
 expected table yields RECOVERED_COMMITTED without an indicator write. A table
 still equal to the pre-write state does NOT prove failure: the original Google
 request may commit late. Log RECOVERY_NOT_OBSERVED and keep PREPARED unresolved;
