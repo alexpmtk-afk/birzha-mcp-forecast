@@ -113,3 +113,43 @@ session calendar or source-availability timestamp.
 
 The HOME 18085 installation, sole-writer claim and real Google acceptance
 remain unverified from this chat's read-only HOME audit connection.
+
+
+## Independent correction audit — 2026-11-02
+
+Dependent on PR #298 at `4e98a365a7408a0b092e928e0f552b3acb25c556`;
+this correction is not a replacement collector or a production installation.
+
+Two release defects were found:
+
+* Existing 2026 indicator literals are grouped by contract and are not globally
+  chronological. The original planner rejects all historical insertion. Permit
+  insertion into a chronological prefix only when the remaining unsorted block
+  is strictly later than the requested window. Preserve that block's values
+  and row order exactly; still reject past/future interleaving.
+* Selecting only the next 50 minute-profile targets loses earlier same-day
+  bars and resets cumulative minute-sign Delta at batch boundaries. Preserve
+  same-day context, and map short opening bars to their actual source begin
+  (for example 08:50), while filtering minutes to each candle interval.
+
+Added regressions cover both normal and short opening hours, day context across
+batches, and preservation of an unsorted future block. The final minimal patch
+passes 837 isolated tests (834 original + 3 new parametrized cases).
+
+Real Google reads with write permissions absent produced dry-run plans for
+D1/H1/M15 on 2025-01-03 and H1 on 2025-01-27. These are calculation previews;
+no production insertion, Google acceptance or forecast admission is claimed.
+
+On the audit date, archive port 18085 and audit ports 18083/18084 were not
+listening. The archive checkout remains at `355fcc84`; Forecast checkout remains
+at `9fb5feec`. Prior dated runtime acceptance must not be presented as current
+availability. Restart/deployment/writes are outside this audit authorization.
+
+Before production acceptance, independently establish one writer: the boolean
+sole_writer is an operator assertion, and the in-process lock is not a
+cross-process lease. Source/indicator rereads are optimistic checks, not an
+atomic Google compare-and-swap. Inspect cross-sheet references and formatting;
+checking literals within the target does not prove all dependent references.
+The backfill currently records success in SYNC_STATUS but does not record its
+full progress/errors/results in existing QUALITY_AUDIT; that operational gap
+remains explicit. Do not turn on write mode or scheduling based on test counts.

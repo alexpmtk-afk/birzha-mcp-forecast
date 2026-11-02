@@ -61,8 +61,17 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
             raise MirrorConflict('MODEL3_EXISTING_TIME_MISSING')
         existing_sorted.append(((stamp(r[begin_col]), str(r[secid_col])), r))
     if existing_sorted != sorted(existing_sorted, key=lambda x:x[0]):
-        raise MirrorConflict('MODEL3_EXISTING_INDICATORS_UNSORTED')
-    expected_keys = [x[0] for x in existing_sorted]
+        # A legacy future block can be contract-grouped (e.g.2026). Preserve
+        # every row and its order; only insert into the chronological prefix
+        # ending at the requested date. Never sort or rewrite the future block.
+        split=next((i for i,x in enumerate(existing_sorted) if x[0][0].date()>finish),len(existing_sorted))
+        prefix=existing_sorted[:split];future=existing_sorted[split:]
+        if prefix!=sorted(prefix,key=lambda x:x[0]) or any(x[0][0].date()<=finish for x in future):
+            raise MirrorConflict('MODEL3_EXISTING_INDICATORS_UNSORTED')
+        expected_keys=[x[0] for x in prefix]
+        if future:expected_keys.append(min(x[0] for x in future))
+    else:
+        expected_keys = [x[0] for x in existing_sorted]
     selected = []
     for row in _ordered(candles, 'bar_start_time', 'contract_code'):
         when = stamp(row[col['bar_start_time']]).date()
@@ -132,7 +141,7 @@ def minute_features_from_existing_drive(*, transport, candles, timeframe,
     from birzha.storage.google_m1_bytes import validate_zip
     from birzha.application.google_first_archive import stamp
     h = candles[0]
-    idx={k:h.index(k) for k in ("record_key","bar_start_time","contract_code","volume")}
+    idx={k:h.index(k) for k in ("record_key","bar_start_time","bar_end_time","contract_code","volume")}
     chosen = [r for r in candles[1:] if r[idx["record_key"]] in source_keys]
     if len(chosen)!=len(source_keys):
         raise MirrorConflict("MODEL3_MINUTE_SOURCE_KEY_MISSING")
@@ -155,9 +164,20 @@ def minute_features_from_existing_drive(*, transport, candles, timeframe,
             if key in minutes:raise MirrorConflict("MODEL3_M1_DUPLICATE")
             minutes[key]={**x, "begin":t}
     groups=minute_groups(minutes,min(days),till_date)
-    keys={(r[idx["contract_code"]],timeframe,clock(r[idx["bar_start_time"]]))
-          for r in chosen}
-    result=profiles(groups,keys)
+    # Keep earlier bars of each selected civil day: cumulative delta must
+    # be identical whether a day is written in one batch or several batches.
+    # Re-key short opening bars (e.g.08:50 H1) to their actual source begin.
+    context={}
+    for r in candles[1:]:
+        sec=r[idx["contract_code"]]
+        begin=clock(r[idx["bar_start_time"]])
+        if begin[:10] not in days or (sec,begin[:7]) not in combos:continue
+        end=clock(r[idx["bar_end_time"]])
+        bucket=(begin[:13]+":00:00" if timeframe=="H1" else
+                begin[:14]+f"{int(begin[14:16])//15*15:02d}"+":00")
+        rs=[x for x in groups.get((sec,timeframe,bucket),()) if begin<=x[0]<=end]
+        if rs:context[(sec,timeframe,begin)]=rs
+    result=profiles(context,set(context))
     for r in chosen:
         key=(r[idx["contract_code"]],timeframe,clock(r[idx["bar_start_time"]]))
         vol=r[idx["volume"]]

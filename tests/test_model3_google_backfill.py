@@ -251,3 +251,49 @@ def test_minute_profiles_require_indexed_existing_source():
         minute_features_from_existing_drive(
             transport=None,candles=table,timeframe="D1",
             source_keys={table[1][0]},till_date="2025-01-03")
+
+
+@pytest.mark.parametrize('first_clock',('10:00','08:50'))
+def test_minute_context_survives_row_batches_and_nonhour_open(first_clock):
+    from hashlib import sha256
+    from birzha.storage.google_m1_bytes import merge_zip
+    from birzha.application.model3_google_backfill import minute_features_from_existing_drive
+    sec='RIH5';day='2025-01-27'
+    times=[first_clock,'11:00','12:00']
+    if first_clock=='08:50':times=[first_clock,'09:00','10:00']
+    raw=[];source=[list(COMPACT_CANDLE_COLUMNS)]
+    for i,t in enumerate(times):
+        raw.append(dict(begin=day+'T'+t+':00+03:00',end=day+'T'+t+':59+03:00',open=100+i,high=103+i,low=99,close=101+i,volume=50,value=None))
+        begin=day+'T'+t+':00+03:00'
+        end=day+'T'+t[:2]+':59:59+03:00'
+        d=dict(record_key='RI|H1|'+sec+'|'+begin,contract_code=sec,calendar_date=day,bar_start_time=begin,bar_end_time=end,open=100+i,high=103+i,low=99,close=101+i,volume=50,is_complete=True)
+        source.append([d.get(k,'') for k in source[0]])
+    body,_=merge_zip(None,raw,'RI',sec,'2025-01')
+    class Cloud:
+        def read_m1(self,*args):return dict(body=body,sha256=sha256(body).hexdigest(),file_id='existing',indexed=True)
+    key=source[-1][0]
+    features,_=minute_features_from_existing_drive(transport=Cloud(),candles=source,timeframe='H1',source_keys={key},till_date=day)
+    first=(sec,'H1',day+' '+times[0]+':00')
+    assert first in features  # Earlier same-day bar is cumulative context.
+    from birzha.application.model3_features import research_features,COLUMNS
+    rows=research_features({'H1':source},minute_features=features,targets={key},calculated_at='fixed')['H1']
+    assert rows[0][COLUMNS.index('p3_minute_count')]==1
+    assert rows[0][COLUMNS.index('p3_cumulative_delta_proxy_civil_day')]==100
+
+
+def test_new_prefix_preserves_contract_grouped_future_block_exactly():
+    source=candles();old=historical_indicators(source);h=old[0]
+    later=old[1][:]
+    later[h.index('begin')]='2026-02-05T00:00:00+03:00'
+    later[h.index('source_record_key')]='RI|D1|RIH6|2026-02-05T00:00:00+03:00'
+    later[0]='later-research-key'
+    future=dict(zip(source[0],source[-1]))
+    future.update(record_key=later[h.index('source_record_key')],calendar_date='2026-02-05',bar_start_time='2026-02-05T00:00:00+03:00',bar_end_time='2026-02-05T23:59:59+03:00')
+    source.append([future.get(k,'') for k in source[0]])
+    existing=[h,later,old[1]];snapshot=deepcopy(existing)
+    a,rows=plan_ri_indicator_backfill(candles=source,daily=source,existing=existing,timeframe='D1',from_date='2025-01-01',till_date='2025-01-31',max_rows=1,calculated_at='fixed')
+    assert a['coverage']['orphan_indicator_records']==0
+    assert a['insert_row_index']==1 and existing==snapshot
+    existing=existing[:1]+rows+existing[1:]
+    b,more=plan_ri_indicator_backfill(candles=source,daily=source,existing=existing,timeframe='D1',from_date='2025-01-01',till_date='2025-01-31',max_rows=1,calculated_at='fixed')
+    assert b['insert_row_index']==2 and existing[-2:]==snapshot[-2:]
