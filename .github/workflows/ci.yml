@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, m22-gold-futures-root, m23-ydb-model-validation]
+    branches: [main, m22-gold-futures-root, m23-ydb-model-validation, chatgpt/ri-indicator-readonly-coverage-20261101]
 
 permissions:
   contents: read

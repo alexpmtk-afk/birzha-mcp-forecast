@@ -61,7 +61,7 @@ def test_plan_backfill_reuses_research_formulas_and_keeps_2026_unchanged():
     h=before[0]
     assert plan["status"] == "MODEL3_RESEARCH_BACKFILL_PLAN"
     assert plan["planned_rows"] == 2
-    assert plan["insert_row_index"] == 1
+    assert plan["insert_row_index"] == len(before)
     assert [r[h.index("source_record_key")] for r in rows] == [source[1][0], source[2][0]]
     assert all(r[h.index("p3_signal_eligible")] is False for r in rows)
     assert all(r[h.index("calendar_status")] == "CALENDAR_UNVERIFIED" for r in rows)
@@ -76,18 +76,27 @@ class Book:
         self.writes = 0
         self.status = {}
         self.fail_after_commit = False
+        self.audit = []
     def validate_model3_target(self, s, sheet):
         assert (s, sheet) == ("RI","D1_INDICATORS")
     def read_rows(self, s, sheet):
         assert (s,sheet) == ("RI","D1_INDICATORS")
         return deepcopy(self.features)
-    def model3_insert_rows(self, s, sheet, index, rows):
+    def model3_append_rows(self, s, sheet, index, rows):
         self.writes += 1
         self.features[index:index] = deepcopy(rows)
         if self.fail_after_commit:
             self.fail_after_commit = False
             raise RuntimeError("unknown reply after atomic commit")
     def update_status(self,s,u):self.status.update(u)
+    def writer_guard(self, symbol):
+        from contextlib import nullcontext
+        return nullcontext()
+    def validate_service_target(self,s,sheet): assert sheet=='QUALITY_AUDIT'
+    def read_service_rows(self,s,sheet):
+        from birzha.storage.google_archive_transport import AUDIT
+        return [AUDIT]+[[e.get(k,'') for k in AUDIT] for e in self.audit]
+    def append_quality(self,s,event): self.audit.append(deepcopy(event))
 
 
 def _service(book, writer):
@@ -124,8 +133,8 @@ def test_chronological_insert_readback_and_manual_repeat_safe():
     assert book.writes==2
     header=book.features[0]
     ordered=[r[header.index("begin")][:10] for r in book.features[1:]]
-    assert ordered==["2025-01-03","2025-01-06","2026-01-05"]
-    assert book.features[-1]==historical_indicators(book.source)[-1]
+    assert ordered==["2026-01-05","2025-01-03","2025-01-06"]
+    assert book.features[1]==historical_indicators(book.source)[-1]
     assert book.status["model3_google_backfill_status"]=="READBACK_PASS_RESEARCH_ONLY"
 
 
@@ -142,6 +151,9 @@ def test_lost_response_never_retries_and_existing_source_key_reconciles():
     assert verified["status"]=="MODEL3_NO_MISSING_IN_WINDOW"
     assert book.writes==1
     assert len(book.features)==3
+    recovered=service.model3_backfill(**args)
+    assert recovered['status']=='RECOVERED_COMMITTED' and recovered['recovery_only']
+    assert book.writes==1
 
 
 def test_fail_closed_on_formula_and_unsorted_existing_rows():
@@ -150,40 +162,32 @@ def test_fail_closed_on_formula_and_unsorted_existing_rows():
     row[book.features[0].index("atr_14_wilder")]="=SUM(1,2)"
     with pytest.raises(MirrorConflict,match="FORMULAS"):
         _service(book,True).model3_backfill(timeframe="D1",from_date="2025-01-01",till_date="2025-01-31")
-    book=Book()
-    old=book.features[1][:]
-    old[book.features[0].index("begin")]="2024-01-01T00:00:00+03:00"
-    book.features.append(old)
-    with pytest.raises((MirrorConflict,ValueError)):
-        _service(book,True).model3_backfill(timeframe="D1",from_date="2025-01-01",till_date="2025-01-31")
 
 
-def test_native_atomic_insert_has_no_clear_update_old_or_auto_retry():
-    target=INSTRUMENT_TARGETS["RI"]
-    submitted=[]
+def test_native_append_has_no_row_shift_update_old_format_or_auto_retry():
+    target=INSTRUMENT_TARGETS['RI'];submitted=[]
     def handler(req):
-        if "/drive/" in str(req.url):
-            return httpx.Response(200,json={"id":target.spreadsheet_id,"name":target.spreadsheet_name,
-                "mimeType":"application/vnd.google-apps.spreadsheet","trashed":False,
-                "parents":[INSTRUMENT_FOLDER_IDS["RI"]]})
-        if req.method=="POST":
-            submitted.append(json.loads(req.content))
-            return httpx.Response(200,json={})
-        return httpx.Response(200,json={"spreadsheetId":target.spreadsheet_id,"sheets":[{
-            "properties":{"sheetId":54321,"title":"D1_INDICATORS","sheetType":"GRID",
-                          "gridProperties":{"rowCount":1000,"columnCount":95}}}]})
-    t=NativeCanonicalSheets(lambda:"test-token",transport=httpx.MockTransport(handler))
-    sample=[[""]*95]
-    t.model3_insert_rows("RI","D1_INDICATORS",1,sample)
+        if '/drive/' in str(req.url):
+            return httpx.Response(200,json={'id':target.spreadsheet_id,'name':target.spreadsheet_name,
+                'mimeType':'application/vnd.google-apps.spreadsheet','trashed':False,
+                'parents':[INSTRUMENT_FOLDER_IDS['RI']]})
+        if req.method=='POST':
+            submitted.append(json.loads(req.content));return httpx.Response(200,json={})
+        if '/values/' in str(req.url):return httpx.Response(200,json={'values':[list(COMPACT_RI_INDICATOR_COLUMNS)]})
+        return httpx.Response(200,json={'spreadsheetId':target.spreadsheet_id,'sheets':[{
+            'properties':{'sheetId':54321,'title':'D1_INDICATORS','sheetType':'GRID',
+                          'gridProperties':{'rowCount':1000,'columnCount':95}}}]})
+    t=NativeCanonicalSheets(lambda:'test-token',transport=httpx.MockTransport(handler))
+    t.model3_append_rows('RI','D1_INDICATORS',1,[['']*95])
     assert len(submitted)==1
-    reqs=submitted[0]["requests"]
-    assert list(reqs[0])==["insertDimension"]
-    assert reqs[0]["insertDimension"]["range"]["startIndex"]==1
-    assert list(reqs[1])==["updateCells"]
-    assert reqs[1]["updateCells"]["start"]["rowIndex"]==1
-    assert not any("delete" in json.dumps(x).lower() or "clear" in json.dumps(x).lower() for x in reqs)
-    with pytest.raises(MirrorConflict,match="COMPACT_ROWS"):
-        t.model3_insert_rows("RI","D1_INDICATORS",1,[[""]*94])
+    assert list(submitted[0]['requests'][0])==['appendCells']
+    assert submitted[0]['requests'][0]['appendCells']['fields']=='userEnteredValue'
+    for forbidden in ('insertDimension','updateCells','sortRange','copyPaste','updateNamedRange','updateSheetProperties','delete','clear'):
+        assert forbidden not in json.dumps(submitted)
+    with pytest.raises(MirrorConflict,match='COMPACT_ROWS'):
+        t.model3_append_rows('RI','D1_INDICATORS',1,[['']*94])
+    with pytest.raises(MirrorConflict,match='TARGET_CHANGED'):
+        t.model3_append_rows('RI','D1_INDICATORS',2,[['']*95])
 
 
 def test_m1_zip_proxy_uses_exact_sec_month_and_labels_approximation():
@@ -293,7 +297,7 @@ def test_new_prefix_preserves_contract_grouped_future_block_exactly():
     existing=[h,later,old[1]];snapshot=deepcopy(existing)
     a,rows=plan_ri_indicator_backfill(candles=source,daily=source,existing=existing,timeframe='D1',from_date='2025-01-01',till_date='2025-01-31',max_rows=1,calculated_at='fixed')
     assert a['coverage']['orphan_indicator_records']==0
-    assert a['insert_row_index']==1 and existing==snapshot
-    existing=existing[:1]+rows+existing[1:]
+    assert a['insert_row_index']==len(existing) and existing==snapshot
+    existing=existing+rows
     b,more=plan_ri_indicator_backfill(candles=source,daily=source,existing=existing,timeframe='D1',from_date='2025-01-01',till_date='2025-01-31',max_rows=1,calculated_at='fixed')
-    assert b['insert_row_index']==2 and existing[-2:]==snapshot[-2:]
+    assert b['insert_row_index']==len(existing) and existing[:len(snapshot)]==snapshot

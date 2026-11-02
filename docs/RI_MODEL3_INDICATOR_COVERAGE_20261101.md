@@ -1,3 +1,5 @@
+> Superseded write protocol: see RI_MODEL3_WRITE_SAFETY_20261102.md. Historical descriptions of insertDimension below are audit history, not the active write path.
+
 # RI indicator coverage — observed state and safe MCP acceptance (2026-11-01)
 
 ## Scope and evidence

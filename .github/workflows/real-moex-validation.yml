@@ -2,7 +2,7 @@ name: Real MOEX Validation
 
 on:
   pull_request:
-    branches: [main, m22-gold-futures-root]
+    branches: [main, m22-gold-futures-root, chatgpt/ri-indicator-readonly-coverage-20261101]
     paths:
       - "src/**"
       - "scripts/run_live_validation.py"
