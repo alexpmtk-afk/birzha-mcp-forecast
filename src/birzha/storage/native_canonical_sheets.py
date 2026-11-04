@@ -24,7 +24,19 @@ class NativeCanonicalSheets:
         self._last_request = float("-inf")
         self._sheets: dict[tuple[str, str], dict] = {}
 
+    def writer_guard(self, symbol):
+        from birzha.storage.google_writer_guard import workbook_guard
+        return workbook_guard(GoogleSheetsBridge.target_for_symbol(symbol)[1].spreadsheet_id)
+
     def _request(self, method: str, url: str, *, params=None, json=None) -> dict:
+        if method.upper() not in ('GET', 'HEAD') and '/spreadsheets/' in url:
+            from birzha.storage.google_writer_guard import workbook_guard
+            book_id = url.split('/spreadsheets/', 1)[1].split('/', 1)[0].split(':', 1)[0]
+            with workbook_guard(book_id):
+                return self._request_impl(method, url, params=params, json=json)
+        return self._request_impl(method, url, params=params, json=json)
+
+    def _request_impl(self, method: str, url: str, *, params=None, json=None) -> dict:
         try:
             token = self._access_token()
         except Exception:
@@ -160,6 +172,28 @@ class NativeCanonicalSheets:
         self._request("POST", f"https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}:batchUpdate", json=body)
         # Refresh grid bounds: appendCells may expand the allocated sheet.
         self._validate_named_target(symbol, timeframe)
+
+    def model3_append_rows(self, symbol, sheet, row_index, rows):
+        """Append literals server-side; never shift a row or overwrite a cell.
+
+        appendCells extends the grid at its END when necessary. All existing
+        cell addresses, named ranges and formatting remain at the same rows.
+        Fixed dependent ranges do not automatically include the new history.
+        """
+        with self.writer_guard(symbol):
+            self.validate_model3_target(symbol, sheet)
+            if sheet not in {'D1_INDICATORS', 'H1_INDICATORS', 'M15_INDICATORS'}:
+                raise MirrorConflict('MODEL3_APPEND_INDICATORS_ONLY')
+            if type(row_index) is not int or row_index < 1:
+                raise MirrorConflict('MODEL3_APPEND_POSITION')
+            old = self.read_rows(symbol, sheet)
+            if (len(old) != row_index or len(old[0]) != 95
+                    or self._sheets[(symbol,sheet)]['gridProperties']['columnCount'] != 95):
+                raise MirrorConflict('MODEL3_APPEND_TARGET_CHANGED')
+            if not isinstance(rows, list) or not 1 <= len(rows) <= 50 or any(len(r) != 95 for r in rows):
+                raise MirrorConflict('MODEL3_APPEND_COMPACT_ROWS_ONLY')
+            if row_index + len(rows) > MAX_ROWS:raise MirrorConflict('MODEL3_APPEND_ROW_LIMIT')
+            self.append_rows(symbol, sheet, rows)
 
     def validate_service_target(self, symbol: str, sheet: str) -> None:
         if sheet not in {"SESSIONS", "VERIFIED_RANGES", "SYNC_STATUS"}:

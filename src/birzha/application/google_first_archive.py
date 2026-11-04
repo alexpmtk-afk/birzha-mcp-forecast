@@ -258,6 +258,154 @@ class GoogleFirstArchive:
                 'results':results,'written':any(r.get('written') for r in results),
                 'scan_cursor':(right+timedelta(days=1)).isoformat() if scan_mode and not dry_run else None}
 
+    def model3_coverage(self,*,timeframe='D1'):
+        """Read-only RI candle/indicator key coverage, not a formula acceptance."""
+        if timeframe not in ('D1','H1','M15'):raise MirrorConflict('TIMEFRAME_UNSUPPORTED')
+        from birzha.application.model3_indicator_coverage import coverage_summary
+        candles=self._schemas('RI',timeframe)
+        indicator_sheet=timeframe+'_INDICATORS'
+        self.transport.validate_model3_target('RI',indicator_sheet)
+        # Indicator sheets legitimately have 95 columns; the candle-only
+        # rectangular() validator caps widths at 40. Coverage validates the
+        # existing exact header and pads rows without changing Google.
+        indicators=self.transport.read_rows('RI',indicator_sheet)
+        return coverage_summary(candles,indicators,timeframe=timeframe)
+
+    def model3_backfill(self, *, timeframe, from_date, till_date, max_rows=50,
+                        dry_run=True, owner_confirmed=False, include_minute_proxies=False):
+        args = dict(timeframe=timeframe, from_date=from_date, till_date=till_date,
+                    max_rows=max_rows, dry_run=dry_run, owner_confirmed=owner_confirmed,
+                    include_minute_proxies=include_minute_proxies)
+        if type(dry_run) is not bool or type(owner_confirmed) is not bool:
+            raise MirrorConflict('MODEL3_EXPLICIT_BOOLEANS_REQUIRED')
+        if dry_run:
+            return self._model3_backfill(**args)
+        if not self.sole_writer or not owner_confirmed:
+            raise MirrorConflict('MODEL3_OWNER_AND_SOLE_WRITER_REQUIRED')
+        if timeframe not in ('D1', 'H1', 'M15'):
+            raise MirrorConflict('MODEL3_TIMEFRAME_UNSUPPORTED')
+        from birzha.application.model3_write_audit import record, recover
+        # The OS-owned workbook lease spans recovery, all source reads, receipts,
+        # append, verification and status writes. It has no lease-stealing timeout.
+        with self.transport.writer_guard('RI'):
+            run = uuid.uuid4().hex; sheet = timeframe + '_INDICATORS'
+            try:
+                record(self, run, sheet, 'STARTED')
+                recovered = recover(self)
+                if recovered is not None:
+                    record(self, run, sheet, 'RECOVERY_COMPLETE',
+                           payload={'result':recovered['status'],'source_sheet':recovered['source_sheet']})
+                    return recovered
+                result = self._model3_backfill(**args, audit_run=run)
+                if not result.get('written'):
+                    record(self, run, sheet, 'NO_MISSING')
+                return result
+            except Exception:
+                # Never store exception text, arguments, Google bodies or tokens.
+                # ERROR is NOT terminal for a PREPARED operation.
+                try: record(self, run, sheet, 'ERROR')
+                except Exception:
+                    raise MirrorConflict('MODEL3_AUDIT_UNCONFIRMED_RECONCILE') from None
+                raise
+
+    def _model3_backfill(self,*,timeframe,from_date,till_date,max_rows=50,
+                        dry_run=True,owner_confirmed=False,
+                        include_minute_proxies=False,audit_run=None):
+        """RI-only cloud-native research backfill, without local history files.
+
+        Only 50 missing-key rows may be appended per call. Existing row
+        addresses never move. A lost response remains an unknown outcome:
+        the operator must re-read coverage before manually retrying.
+        """
+        if timeframe not in ('D1','H1','M15'):raise MirrorConflict('MODEL3_TIMEFRAME_UNSUPPORTED')
+        if (type(dry_run) is not bool or type(owner_confirmed) is not bool
+                or type(include_minute_proxies) is not bool):
+            raise MirrorConflict('MODEL3_EXPLICIT_BOOLEANS_REQUIRED')
+        if not dry_run and (not self.sole_writer or not owner_confirmed):
+            raise MirrorConflict('MODEL3_OWNER_AND_SOLE_WRITER_REQUIRED')
+        from_date_parsed=date.fromisoformat(from_date)
+        till_date_parsed=date.fromisoformat(till_date)
+        if till_date_parsed>=self.now().astimezone(MSK).date():
+            raise MirrorConflict('MODEL3_COMPLETED_DAYS_ONLY')
+        if not self.lock.acquire(blocking=False):raise MirrorConflict('ARCHIVE_BUSY')
+        try:
+            from birzha.application.model3_google_backfill import plan_ri_indicator_backfill
+            candles=self._schemas('RI',timeframe)
+            daily=candles if timeframe=='D1' else self._schemas('RI','D1')
+            sheet=timeframe+'_INDICATORS'
+            self.transport.validate_model3_target('RI',sheet)
+            old=self.transport.read_rows('RI',sheet)
+            if not old or any(len(row)>len(old[0]) for row in old):
+                raise MirrorConflict('MODEL3_INDICATOR_ROWS_INVALID')
+            # Do not shift user-owned formulas/references. This path is for
+            # existing frozen research literals only.
+            if any(isinstance(v,str) and v.startswith('=') for row in old for v in row):
+                raise MirrorConflict('MODEL3_EXISTING_FORMULAS_NEED_REVIEW')
+            report,planned=plan_ri_indicator_backfill(
+                candles=candles,daily=daily,existing=old,timeframe=timeframe,
+                from_date=from_date,till_date=till_date,max_rows=max_rows,
+                calculated_at=self.now().isoformat())
+            if include_minute_proxies and planned:
+                from birzha.application.model3_google_backfill import minute_features_from_existing_drive
+                proxy, minute_evidence=minute_features_from_existing_drive(
+                    transport=self.transport,candles=candles,timeframe=timeframe,
+                    source_keys=set(report['source_keys']),till_date=till_date)
+                report,planned=plan_ri_indicator_backfill(
+                    candles=candles,daily=daily,existing=old,timeframe=timeframe,
+                    from_date=from_date,till_date=till_date,max_rows=max_rows,
+                    calculated_at=report['calculated_at'],minute_features=proxy)
+                report['minute_evidence']=minute_evidence
+            if dry_run or not planned:
+                return report
+            if report['coverage']['orphan_indicator_records']:
+                raise MirrorConflict('MODEL3_ORPHANS_REQUIRE_REVIEW')
+            expected_source=digest(candles)
+            expected_daily=digest(daily)
+            expected_old=digest(old)
+            # One authorized writer is required; this is an extra optimistic
+            # check but Google has no CAS across read/append.
+            if digest(self._schemas('RI',timeframe))!=expected_source:
+                raise MirrorConflict('MODEL3_SOURCE_CHANGED')
+            if timeframe!='D1' and digest(self._schemas('RI','D1'))!=expected_daily:
+                raise MirrorConflict('MODEL3_DAILY_SOURCE_CHANGED')
+            if digest(self.transport.read_rows('RI',sheet))!=expected_old:
+                raise MirrorConflict('MODEL3_INDICATORS_CHANGED')
+            pos=report['insert_row_index']
+            expected=old+planned
+            from birzha.application.model3_write_audit import record, normalized
+            if audit_run is None:raise MirrorConflict('MODEL3_AUDIT_RUN_REQUIRED')
+            before=digest(normalized(old)); after_digest=digest(normalized(expected))
+            record(self,audit_run,sheet,'PREPARED',before=before,after=after_digest,
+                   payload={'source_keys':report['source_keys'],'row_digest':report['row_digest']},count=len(planned))
+            try:
+                self.transport.model3_append_rows('RI',sheet,pos,planned)
+            except Exception:
+                # Never automatically repeat an append with unknown outcome.
+                raise MirrorConflict('MODEL3_INSERT_UNKNOWN_RECONCILE_KEYS') from None
+            after=self.transport.read_rows('RI',sheet)
+            expected=old+planned
+            if normalized(after)!=normalized(expected):
+                raise MirrorConflict('MODEL3_INSERT_READBACK_CONFLICT')
+            # The batch is already committed; a status-write failure does NOT
+            # invalidate or trigger re-submission of these source keys.
+            record(self,audit_run,sheet,'COMMITTED',before=before,after=after_digest,count=len(planned))
+            status='READBACK_PASS_RESEARCH_ONLY'
+            try:
+                self.transport.update_status('RI',{
+                    'model3_google_backfill_status':status,
+                    'model3_google_backfill_sha':self.source_sha,
+                    'model3_google_backfill_timeframe':timeframe,
+                    'model3_google_backfill_last_date':till_date,
+                    'model3_google_backfill_m1_evidence':packed(report.get('minute_evidence',[])),
+                })
+            except Exception:
+                status='READBACK_PASS_STATUS_UNCONFIRMED'
+                record(self,audit_run,sheet,'STATUS_UNCONFIRMED',count=len(planned))
+            return {**report,'status':status,'written':True,'confirmed_rows':len(planned),
+                    'forecast_admission':'NOT_GRANTED'}
+        finally:
+            self.lock.release()
+
     def coverage(self,*,symbol,timeframes=('D1','H1','M15')):
         symbol=GoogleSheetsBridge.target_for_symbol(symbol)[0]
         state=self._status(symbol)

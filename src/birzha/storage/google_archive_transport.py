@@ -96,6 +96,10 @@ class GoogleArchiveTransport(NativeCanonicalSheets):
         return {'body':body,'sha256':sha,'file_id':f['id'],'head':f.get('headRevisionId'),'indexed':bool(matches)}
 
     def publish_m1(self,symbol,secid,month,rows):
+        with self.writer_guard(symbol):
+            return self._publish_m1(symbol,secid,month,rows)
+
+    def _publish_m1(self,symbol,secid,month,rows):
         folder,name,f=self._file(symbol,secid,month);old=self.read_m1(symbol,secid,month)
         body,changed=merge_zip(old['body'] if old else None,rows,symbol,secid,month)
         sha=hashlib.sha256(body).hexdigest()
