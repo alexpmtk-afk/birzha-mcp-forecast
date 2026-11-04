@@ -134,6 +134,19 @@ class GoogleSheetsBridge:
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        # All pinned-book mutations in this legacy client participate in the
+        # same host-wide guard as the native archive client. Older deployed
+        # copies and remote Apps Script invocations remain an acceptance blocker.
+        from contextlib import nullcontext
+        from birzha.storage.google_writer_guard import workbook_guard
+        book_id = (payload or {}).get('spreadsheet_id')
+        guard = workbook_guard(str(book_id)) if str(action).strip().lower() in MUTATING_ACTIONS and book_id else nullcontext()
+        with guard:
+            return self._post_impl(action, payload, idempotency_key=idempotency_key)
+
+    def _post_impl(
+        self, action, payload=None, *, idempotency_key=None,
+    ):
         action = str(action).strip().lower()
         if action in MUTATING_ACTIONS and not str(idempotency_key or "").strip():
             raise GoogleSheetsBridgeError(

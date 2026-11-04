@@ -5,7 +5,6 @@ source-pinned research candles are used. Output is NOT a trading signal.
 """
 from __future__ import annotations
 
-from bisect import bisect_left
 from datetime import date, datetime
 
 from birzha.application.model3_features import research_features, number
@@ -31,8 +30,7 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
 
     New output uses only prior source candles, always with research-only labels.
     Existing 2026 research rows are never recalculated/overwritten by this path.
-    The sorted insertion must not cross any existing row, so one atomic
-    insertDimension+updateCells preserves their original content and order.
+    New rows are appended after all existing rows; no existing address moves.
     """
     if timeframe not in ('D1', 'H1', 'M15'):
         raise MirrorConflict('MODEL3_TIMEFRAME_UNSUPPORTED')
@@ -54,15 +52,8 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
     begin_col = ih.index('begin')
     secid_col = ih.index('secid')
     known = {str(r[source_col]) for r in existing[1:]}
-    existing_sorted = []
-    for r in existing[1:]:
-        r = list(r) + [''] * (len(ih) - len(r))
-        if not isinstance(r[begin_col], str) or not r[begin_col]:
-            raise MirrorConflict('MODEL3_EXISTING_TIME_MISSING')
-        existing_sorted.append(((stamp(r[begin_col]), str(r[secid_col])), r))
-    if existing_sorted != sorted(existing_sorted, key=lambda x:x[0]):
-        raise MirrorConflict('MODEL3_EXISTING_INDICATORS_UNSORTED')
-    expected_keys = [x[0] for x in existing_sorted]
+    # Appending preserves existing row addresses even for a contract-grouped
+    # legacy table. Calculations are still ordered by exact source timestamps.
     selected = []
     for row in _ordered(candles, 'bar_start_time', 'contract_code'):
         when = stamp(row[col['bar_start_time']]).date()
@@ -71,21 +62,7 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
     if not selected:
         return {'status': 'MODEL3_NO_MISSING_IN_WINDOW', 'written': False, 'planned_rows': 0,
                 'coverage': coverage, 'insert_row_index': None}, []
-    first = selected[0]
-    first_key = (stamp(first[col['bar_start_time']]), str(first[col['contract_code']]))
-    after_index = bisect_left(expected_keys, first_key)
-    # The entire request must fit in one chronological gap between accepted rows.
-    upper_bound = expected_keys[after_index] if after_index < len(expected_keys) else None
-    chosen = []
-    for row in selected:
-        key = (stamp(row[col['bar_start_time']]), str(row[col['contract_code']]))
-        if upper_bound is not None and key >= upper_bound:
-            break
-        if len(chosen) == max_rows:
-            break
-        chosen.append(row)
-    if not chosen:
-        raise MirrorConflict('MODEL3_NO_CONTIGUOUS_INSERT')
+    chosen = selected[:max_rows]
     chosen_keys = {r[col['record_key']] for r in chosen}
 
     def cutoff(table):
@@ -110,7 +87,8 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
     return {'status': 'MODEL3_RESEARCH_BACKFILL_PLAN', 'written': False,
             'timeframe': timeframe, 'planned_rows': len(output),
             'remaining_window_records': len(selected) - len(output),
-            'insert_row_index': after_index + 1,  # 0-based incl. header
+            'insert_row_index': len(existing),  # compatibility field: append offset, incl. header
+            'write_mode': 'APPEND_ONLY_NO_ROW_SHIFT',
             'source_keys': [r[col['record_key']] for r in chosen],
             'row_digest': digest([list(existing[0])]+output),
             'coverage': coverage, 'forecast_admission': 'NOT_GRANTED',
@@ -132,7 +110,7 @@ def minute_features_from_existing_drive(*, transport, candles, timeframe,
     from birzha.storage.google_m1_bytes import validate_zip
     from birzha.application.google_first_archive import stamp
     h = candles[0]
-    idx={k:h.index(k) for k in ("record_key","bar_start_time","contract_code","volume")}
+    idx={k:h.index(k) for k in ("record_key","bar_start_time","bar_end_time","contract_code","volume")}
     chosen = [r for r in candles[1:] if r[idx["record_key"]] in source_keys]
     if len(chosen)!=len(source_keys):
         raise MirrorConflict("MODEL3_MINUTE_SOURCE_KEY_MISSING")
@@ -155,9 +133,20 @@ def minute_features_from_existing_drive(*, transport, candles, timeframe,
             if key in minutes:raise MirrorConflict("MODEL3_M1_DUPLICATE")
             minutes[key]={**x, "begin":t}
     groups=minute_groups(minutes,min(days),till_date)
-    keys={(r[idx["contract_code"]],timeframe,clock(r[idx["bar_start_time"]]))
-          for r in chosen}
-    result=profiles(groups,keys)
+    # Keep earlier bars of each selected civil day: cumulative delta must
+    # be identical whether a day is written in one batch or several batches.
+    # Re-key short opening bars (e.g.08:50 H1) to their actual source begin.
+    context={}
+    for r in candles[1:]:
+        sec=r[idx["contract_code"]]
+        begin=clock(r[idx["bar_start_time"]])
+        if begin[:10] not in days or (sec,begin[:7]) not in combos:continue
+        end=clock(r[idx["bar_end_time"]])
+        bucket=(begin[:13]+":00:00" if timeframe=="H1" else
+                begin[:14]+f"{int(begin[14:16])//15*15:02d}"+":00")
+        rs=[x for x in groups.get((sec,timeframe,bucket),()) if begin<=x[0]<=end]
+        if rs:context[(sec,timeframe,begin)]=rs
+    result=profiles(context,set(context))
     for r in chosen:
         key=(r[idx["contract_code"]],timeframe,clock(r[idx["bar_start_time"]]))
         vol=r[idx["volume"]]
