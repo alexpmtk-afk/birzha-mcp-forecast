@@ -38,6 +38,12 @@ def build_app(service,token):
     def model3_coverage(timeframe:str='D1')->dict:
         try:return service.model3_coverage(timeframe=timeframe)
         except Exception:return {'status':'BLOCKED','code':'MODEL3_COVERAGE_READ_FAILED','written':False}
+    @mcp.tool(name='archive.model3_data_readiness',annotations=read,
+              description='Read-only 2026 RI Model3 source/feature quality and missing-field counts. No source download, historical PIT attestation, or signals.')
+    def model3_data_readiness(timeframe:str='H1')->dict:
+        try:return service.model3_data_readiness(timeframe=timeframe)
+        except Exception:return {'status':'BLOCKED','code':'MODEL3_READINESS_READ_FAILED','written':False}
+
     @mcp.tool(name='archive.model3_backfill',description='RI-only bounded research indicator preview (default); apply requires explicit ownership, OS workbook guard and QUALITY_AUDIT recovery; appends only, never shifts existing rows. Existing 95-column D1/H1/M15 indicator sheets only. No signal admission, no automatic retries.')
     def model3_backfill(timeframe:str,from_date:str,till_date:str,
                         max_rows:int=50,dry_run:bool=True,
