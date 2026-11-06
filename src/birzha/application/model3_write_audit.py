@@ -26,7 +26,7 @@ def events(transport):
 def record(service, run, sheet, status, *, before='', after='', payload=None, count=0):
     service.transport.append_quality('RI', {
         'audit_id': run + ('~' + uuid.uuid4().hex if status.startswith('RECOVERY_') else '') + '|' + status, 'scope': 'MODEL3|' + sheet,
-        'status': status, 'description': 'RI research append-only backfill',
+        'status': status, 'description': 'RI research append or blank-cell repair',
         'checked_at': service.now().isoformat(), 'evidence_ref': service.source_sha,
         'affected_rows': count, 'before_sha': before, 'after_sha': after,
         'limitation': 'LOCAL_COOPERATING_WRITERS_ONLY;RESEARCH_ONLY',
@@ -58,7 +58,13 @@ def recover(service):
         record(service, run, sheet, 'RECOVERY_CONFLICT')
         raise MirrorConflict('MODEL3_RECOVERY_CONFLICT_NO_WRITE')
     record(service, run, sheet, status, before=r['before_sha'], after=current, count=r['affected_rows'])
+    try:
+        operation = json.loads(r.get('source_payload_json') or '{}').get('operation','APPEND_ROWS')
+    except (ValueError,AttributeError):
+        raise MirrorConflict('MODEL3_RECOVERY_PAYLOAD_INVALID') from None
     # Recovery performs NO indicator write; the caller must review before a new batch.
     return {'status': status, 'written': written, 'recovery_only': True,
-            'confirmed_rows': r['affected_rows'] if written else 0, 'source_sheet': sheet,
+            'confirmed_rows': r['affected_rows'] if written and operation != 'BLANK_CELL_REPAIR' else 0,
+            'confirmed_cells': r['affected_rows'] if written and operation == 'BLANK_CELL_REPAIR' else 0,
+            'operation': operation, 'source_sheet': sheet,
             'forecast_admission': 'NOT_GRANTED'}

@@ -53,6 +53,8 @@ def readiness_summary(candles, indicators, *, timeframe):
     """
     if timeframe not in ("D1", "H1", "M15"):
         raise ValueError("MODEL3_TIMEFRAME_UNSUPPORTED")
+    from birzha.application.model3_google_backfill import scope_2026
+    candles, indicators = scope_2026(candles, indicators)
     base = coverage_summary(candles, indicators, timeframe=timeframe)
     header = tuple(indicators[0])
     if header != COMPACT_RI_INDICATOR_COLUMNS:
@@ -121,6 +123,7 @@ def readiness_summary(candles, indicators, *, timeframe):
     return {
         "status": "READ_ONLY_RESEARCH_DATA_READINESS",
         "symbol": "RI",
+        "year": 2026,
         "timeframe": timeframe,
         "source_records": len(source),
         "indicator_records": n,

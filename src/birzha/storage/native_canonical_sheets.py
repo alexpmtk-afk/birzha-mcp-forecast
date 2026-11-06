@@ -265,11 +265,16 @@ class NativeCanonicalSheets:
             raise MirrorConflict("Model3 archive is limited to existing RI tabs")
         self._validate_named_target(symbol, sheet)
 
-    def model3_write_cells(self, symbol: str, sheet: str, edits: list[tuple[int, int, object]]) -> None:
+    def model3_write_cells(self, symbol: str, sheet: str, edits: list[tuple[int, int, object]], *, existing_only: bool = False) -> None:
         """Literal missing-field/approved defect patch; no formula or value-only row replacement."""
         self.validate_model3_target(symbol, sheet)
         props=self._sheets[(symbol,sheet)]; grid=props["gridProperties"]
         if not edits or len(edits)>2000:raise MirrorConflict("bounded cell patch required")
+        if existing_only and (symbol != 'RI' or sheet not in {'D1_INDICATORS','H1_INDICATORS','M15_INDICATORS'}
+                or grid['columnCount'] != 95 or any(type(r) is not int or type(c) is not int
+                or not 1 <= r < grid['rowCount'] or not 0 <= c < 95 for r,c,v in edits)):
+            raise MirrorConflict('MODEL3_REPAIR_EXISTING_GRID_ONLY')
+
         if any(not isinstance(r,int) or not isinstance(c,int) or r<0 or c<0 or r>=MAX_ROWS or c>=160 for r,c,v in edits):
             raise MirrorConflict("cell patch outside existing-tab bounds")
         def cell(v):

@@ -285,6 +285,10 @@ class GoogleFirstArchive:
         indicators = self.transport.read_rows('RI', sheet)
         return readiness_summary(candles, indicators, timeframe=timeframe)
 
+    def model3_repair_fields(self, **kwargs):
+        from birzha.application.model3_field_repair import repair_fields
+        return repair_fields(self, **kwargs)
+
     def model3_backfill(self, *, timeframe, from_date, till_date, max_rows=50,
                         dry_run=True, owner_confirmed=False, include_minute_proxies=False):
         args = dict(timeframe=timeframe, from_date=from_date, till_date=till_date,
