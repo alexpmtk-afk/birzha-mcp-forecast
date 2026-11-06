@@ -1,0 +1,913 @@
+{
+  "version": "RI_PURNOV_SOURCE_REQUIREMENTS_V1_20261105",
+  "status": "RESEARCH_ONLY",
+  "target_instrument": "RI",
+  "scope_year": 2026,
+  "canonical_spreadsheet_id": "1PuPv7Nv_Dpj-KTECPHNHecj34HrR9K5y53OwRcu7RVY",
+  "rules_spreadsheet_id": "1_NGm6oiBF7rUV7TVNjP13huYyK4u8b21oKDOAQThEvQ",
+  "rules_sheet": "модель 3 Пурнов",
+  "field_presence_is_not_rule_implementation": true,
+  "forecast_admission": "BLOCKED",
+  "source_time_available_at": "UNKNOWN",
+  "source_calendar_attestation": "RULE_DERIVED_NOT_PER_BAR_ATTESTED",
+  "exact_price_level_volume": "UNAVAILABLE",
+  "exact_aggressor_delta": "UNAVAILABLE",
+  "classification_meanings": {
+    "FIELD_PRESENT": "Corresponding raw or calculated field/label exists; not a verified full signal",
+    "PARTIAL_FIELDS": "Some inputs exist but needed sequences, PIT/quality gates, or full conditions are missing",
+    "PROXY_ONLY": "Only approximated field is available; cannot be treated as exact trade-level source",
+    "MISSING_OR_UNIMPLEMENTED": "Required evidence or state/test infrastructure is absent",
+    "PROCEDURE_NOT_COLUMN": "Governance/documentation/research method; no standalone market-data column expected"
+  },
+  "rules": [
+    {
+      "rule_id": "P3-001",
+      "section": "00 · Границы",
+      "condition": "Если это описание используется до реализации и внешней проверки",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-002",
+      "section": "00 · Границы",
+      "condition": "Если упоминается «метод Пурнова»",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-003",
+      "section": "00 · Границы",
+      "condition": "Если пользователь назвал новую методику «Модель 3 Пурнов»",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-004",
+      "section": "00 · Таймфреймы",
+      "condition": "Если анализируется очередное решение",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1:bar_end_time",
+        "D1:bar_end_time",
+        "M15:bar_end_time"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-005",
+      "section": "00 · PIT",
+      "condition": "Если свеча t ещё не завершена либо объём/дельта запаздывают",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [
+        "H1:bar_end_time",
+        "H1:available_at"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-006",
+      "section": "00 · PIT",
+      "condition": "Если формируется событие на закрытии t",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:available_at",
+        "H1_INDICATORS:calculated_at"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-007",
+      "section": "00 · Источник",
+      "condition": "Если меняется инструмент, тикер, срочный контракт, единица объёма или режим сессии",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:contract_code",
+        "CONTRACTS:secid",
+        "SESSIONS:trade_date"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-008",
+      "section": "00 · Качество",
+      "condition": "Если есть пропуски, противоречивые OHLCV, дубли, ошибки времени или неизвестная полнота",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:is_complete",
+        "H1:normalized_sha256",
+        "QUALITY_AUDIT:status"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-009",
+      "section": "00 · Единицы",
+      "condition": "Если сравниваются объёмы разных H1 или разные даты",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:volume",
+        "H1_INDICATORS:p3_rvol_same_clock20_approx"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-010",
+      "section": "00 · Контекст",
+      "condition": "Если H1-сигнал противоречит направлению/режиму D1",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "D1:close",
+        "H1_INDICATORS:p3_d1_prior_close",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-011",
+      "section": "01 · Признаки",
+      "condition": "Если R=H−L известен и положителен",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_range",
+        "H1_INDICATORS:p3_body",
+        "H1_INDICATORS:p3_upper_wick",
+        "H1_INDICATORS:p3_lower_wick",
+        "H1_INDICATORS:p3_close_location"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-012",
+      "section": "01 · Признаки",
+      "condition": "Если текущий R крупный относительно прошлой волатильности",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_range_prior_atr"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-013",
+      "section": "01 · Признаки",
+      "condition": "Если закрытие рядом с H и тело достаточно велико",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_body_ratio",
+        "H1_INDICATORS:p3_close_location",
+        "H1_INDICATORS:p3_close_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-014",
+      "section": "01 · Признаки",
+      "condition": "Если закрытие рядом с L и тело достаточно велико",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_body_ratio",
+        "H1_INDICATORS:p3_close_location",
+        "H1_INDICATORS:p3_close_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-015",
+      "section": "01 · Признаки",
+      "condition": "Если большой R содержит длинную верхнюю тень",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_upper_wick_ratio"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-016",
+      "section": "01 · Признаки",
+      "condition": "Если большой R содержит длинную нижнюю тень",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_lower_wick_ratio"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-017",
+      "section": "01 · Признаки",
+      "condition": "Если объем велик, но |C−C_prev| или прогресс от уровня мал",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_effort_per_progress",
+        "H1:volume",
+        "H1_INDICATORS:p3_abs_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-018",
+      "section": "01 · Признаки",
+      "condition": "Если объём мал и цена растёт внутри диапазона",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:volume",
+        "H1_INDICATORS:p3_rvol_same_clock20_approx"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-019",
+      "section": "01 · Признаки",
+      "condition": "Если объём мал и цена снижается в существующем восходящем контексте",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:volume",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-020",
+      "section": "01 · Признаки",
+      "condition": "Если объём мал и цена поднимается в существующем нисходящем контексте",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:volume",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-021",
+      "section": "01 · Признаки",
+      "condition": "Если несколько последовательных баров дают уменьшающийся прогресс при равном/растущем усилии",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_close_progress",
+        "H1_INDICATORS:p3_effort_per_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-022",
+      "section": "01 · Признаки",
+      "condition": "Если бары чередуются вокруг одного ценового центра и закрытия перекрываются",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_overlap_ratio",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-023",
+      "section": "02 · Инициатива",
+      "condition": "Если бар вверх имеет высокий относительный объём, широкий спред, верхнее закрытие и выход за ранее известный максимум",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_candidate_state",
+        "H1_INDICATORS:p3_rvol_same_clock20_approx",
+        "H1_INDICATORS:p3_prior_high"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-024",
+      "section": "02 · Инициатива",
+      "condition": "Если бар вниз имеет высокий относительный объём, широкий спред, нижнее закрытие и выход за ранее известный минимум",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_candidate_state",
+        "H1_INDICATORS:p3_rvol_same_clock20_approx",
+        "H1_INDICATORS:p3_prior_low"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-025",
+      "section": "02 · Поглощение",
+      "condition": "Если на падении необычно высокий объём/отрицательная дельта, но закрытие восстанавливается от L и продавцы не удерживают минимум",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_lower_wick_ratio"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-026",
+      "section": "02 · Поглощение",
+      "condition": "Если на росте необычно высокий объём/положительная дельта, но закрытие отступает от H и покупатели не удерживают максимум",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_upper_wick_ratio"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-027",
+      "section": "02 · Ложный пробой",
+      "condition": "Если цена выходит выше известного сопротивления, затем закрывается обратно ниже",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_failed_up_break",
+        "H1_INDICATORS:p3_prior_high"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-028",
+      "section": "02 · Ложный пробой",
+      "condition": "Если цена выходит ниже известной поддержки, затем закрывается обратно выше",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_failed_down_break",
+        "H1_INDICATORS:p3_prior_low"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-029",
+      "section": "02 · Коррекция",
+      "condition": "Если после восходящего импульса следует откат со слабым относительно импульса объёмом и сохранением структуры",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure",
+        "H1_INDICATORS:p3_wave_progress",
+        "H1:volume"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-030",
+      "section": "02 · Коррекция",
+      "condition": "Если после нисходящего импульса следует подъём со слабым относительно импульса объёмом и сохранением структуры",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure",
+        "H1_INDICATORS:p3_wave_progress",
+        "H1:volume"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-031",
+      "section": "02 · Продолжение",
+      "condition": "Если после импульса и отката следующий закрытый H1 подтверждает направление, а предыдущие экстремумы не нарушены",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure",
+        "H1_INDICATORS:p3_previous_move_retained_ratio"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-032",
+      "section": "02 · Разворот",
+      "condition": "Если большой встречный бар ломает локальную структуру против действующего тренда",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure",
+        "H1_INDICATORS:p3_range_prior_atr"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-033",
+      "section": "02 · Повторяемость",
+      "condition": "Если один и тот же баровый рисунок встречается второй раз",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-034",
+      "section": "02 · Повторяемость",
+      "condition": "Если два случая визуально похожи, но имеют разные исходы",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-035",
+      "section": "03 · Дельта",
+      "condition": "Если биржа предоставляет достоверную сторону инициатора сделки",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-036",
+      "section": "03 · Дельта",
+      "condition": "Если индикатор даёт approximate/TradingView delta по младшим барам",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_delta_proxy_status"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-037",
+      "section": "03 · Дельта",
+      "condition": "Если подтверждённая положительная дельта велика, но цена почти не растёт",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_close_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-038",
+      "section": "03 · Дельта",
+      "condition": "Если подтверждённая отрицательная дельта велика, но цена почти не падает",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_close_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-039",
+      "section": "03 · Дельта",
+      "condition": "Если дельта и цена согласованно дают результат в одну сторону",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_close_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-040",
+      "section": "03 · Дельта",
+      "condition": "Если дельта отсутствует или неполна",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_delta_proxy_status"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-041",
+      "section": "04 · Профиль",
+      "condition": "Если известна только гистограмма объёма по времени (OHLCV)",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1:volume"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-042",
+      "section": "04 · Профиль",
+      "condition": "Если доступна полная лента/проверенный volume-at-price до T0",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-043",
+      "section": "04 · Профиль",
+      "condition": "Если цена проводит время в HVN/возле POC",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_profile_poc_approx",
+        "H1_INDICATORS:p3_profile_hvn_approx_json"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-044",
+      "section": "04 · Профиль",
+      "condition": "Если цена выходит из HVN в сторону LVN",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_profile_hvn_approx_json",
+        "H1_INDICATORS:p3_profile_lvn_approx_json"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-045",
+      "section": "04 · Профиль",
+      "condition": "Если рынок после пробоя возвращается тестировать бывшую зону HVN/POC",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_profile_poc_approx",
+        "H1_INDICATORS:p3_profile_hvn_approx_json"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-046",
+      "section": "04 · Профиль",
+      "condition": "Если текущий POC последовательно смещается выше в нескольких PIT-снимках",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-047",
+      "section": "04 · Профиль",
+      "condition": "Если текущий POC последовательно смещается ниже в PIT-снимках",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-048",
+      "section": "04 · Профиль",
+      "condition": "Если внутри профиля два или более крупных HVN с LVN между ними",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_profile_hvn_approx_json",
+        "H1_INDICATORS:p3_profile_lvn_approx_json"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-049",
+      "section": "04 · Профиль",
+      "condition": "Если цена пробила VAH/VAL, вычисленные на T0",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_profile_vah_approx",
+        "H1_INDICATORS:p3_profile_val_approx"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-050",
+      "section": "04 · Профиль",
+      "condition": "Если профиль рассчитывается ретроспективно за выделенный на скриншоте период",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-051",
+      "section": "04 · Профиль",
+      "condition": "Если цветные части VP подписаны Up/Down Volume",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-052",
+      "section": "04 · Профиль",
+      "condition": "Если выбран размер ценового бина и окно истории",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-053",
+      "section": "05 · Структура",
+      "condition": "Если рисуются локальные максимумы/минимумы из H1",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_confirmed_high_event",
+        "H1_INDICATORS:p3_pivot_confirmation_time"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-054",
+      "section": "05 · Структура",
+      "condition": "Если последовательно подтверждены HH+HL",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-055",
+      "section": "05 · Структура",
+      "condition": "Если последовательно подтверждены LH+LL",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-056",
+      "section": "05 · Структура",
+      "condition": "Если нет двух подтверждённых экстремумов либо структура смешанная",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-057",
+      "section": "05 · Структура",
+      "condition": "Если бар сформировал большой объём у уровня, но последующие закрытия не дали прогресса",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_effort_per_progress",
+        "H1_INDICATORS:p3_prior_high"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-058",
+      "section": "06 · Машина состояний",
+      "condition": "Если условие бара выполняется впервые",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_candidate_state"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-059",
+      "section": "06 · Машина состояний",
+      "condition": "Если BUY и SELL кандидаты одновременно имеют подтверждения или показатели противоречат друг другу",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_candidate_state"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-060",
+      "section": "06 · Машина состояний",
+      "condition": "Если выполнены контекст, паттерн, подтверждение, доступность данных и контроль риска",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-061",
+      "section": "06 · Машина состояний",
+      "condition": "Если паттерн не активировался за заданное число H1 или данные устарели",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-062",
+      "section": "06 · Машина состояний",
+      "condition": "Если условие отмены подтверждено",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-063",
+      "section": "06 · Машина состояний",
+      "condition": "Если нет рыночного преимущества при достаточных данных",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-064",
+      "section": "06 · Выход",
+      "condition": "Если кандидат подтверждён и строится прогноз",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-065",
+      "section": "07 · Проверка",
+      "condition": "Если найден «повторяющийся паттерн»",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-066",
+      "section": "07 · Проверка",
+      "condition": "Если проверяется формула правила или выбираются пороги",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-067",
+      "section": "07 · Проверка",
+      "condition": "Если оценивается качественный сценарий по одному визуальному графику",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-068",
+      "section": "07 · Проверка",
+      "condition": "Если сравниваются сигналы с разными режимами и типами рынка",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure",
+        "H1_INDICATORS:p3_rvol_same_clock20_approx",
+        "SESSIONS:trade_date"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-069",
+      "section": "07 · Проверка",
+      "condition": "Если готовится отчёт о качестве",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-070",
+      "section": "07 · Проверка",
+      "condition": "Если модель предлагается для реальных сделок",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-071",
+      "section": "07 · Ревизии",
+      "condition": "Если дальнейшие наблюдения противоречат правилу",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-072",
+      "section": "07 · Варианты",
+      "condition": "Если доступны только OHLCV без подтверждённого profile/delta",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1:open",
+        "H1:high",
+        "H1:low",
+        "H1:close",
+        "H1:volume"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-073",
+      "section": "07 · Конфликт моделей",
+      "condition": "Если Модель 3 использует профиль и структурные признаки, схожие с Моделью 2",
+      "current_evidence_status": "PROCEDURE_NOT_COLUMN",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-074",
+      "section": "07 · Параметры",
+      "condition": "Если нужен численный порог (RVOL, close_location, ATR, глубина отката, число подтверждающих баров, размер окна VP)",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_parameters_version"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-075",
+      "section": "07 · Решение",
+      "condition": "Если наступил очередной H1 T0",
+      "current_evidence_status": "MISSING_OR_UNIMPLEMENTED",
+      "existing_field_refs": [],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-076",
+      "section": "08 · Волны / тренд",
+      "condition": "Если после направленного H1-импульса цена формирует более высокие вершины, а коррекции НЕ закрепляются ниже последнего известного защищённого минимума",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_structure",
+        "H1_INDICATORS:p3_prior_confirmed_low"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-077",
+      "section": "08 · Волны / повторный тест",
+      "condition": "Если после начального сильного роста первая/очередная коррекция тестирует опорный минимум предыдущей волны, не получает удерживаемого пробоя вниз и затем выходит выше максимума отскока",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_wave_anchor_price",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-078",
+      "section": "08 · Волны / тень против закрытия",
+      "condition": "Если H1 лишь тенью прокалывает предыдущий значимый минимум во время восходящей волны, но закрывается обратно выше и следующие закрытия не закрепляются ниже",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_prior_confirmed_low",
+        "H1_INDICATORS:p3_failed_down_break"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-079",
+      "section": "08 · Объём / продажи без результата",
+      "condition": "Если внутри восходящей структуры возникает необычно большой вертикальный объём и отрицательная дельта, но после закрытия продавцы НЕ удерживают пониженные цены",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-080",
+      "section": "08 · Объём / покупки без результата",
+      "condition": "Если после длительного роста на верхнем экстремуме проходит аномально большой объём/положительная дельта, но следующие закрытые H1 не удерживают новый максимум",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-081",
+      "section": "08 · Объём / контраст усилия",
+      "condition": "Если два сопоставимо крупных объёмных события имеют противоположную дельту, но последующий удержанный ценовой результат противоречит простому направлению дельты",
+      "current_evidence_status": "PROXY_ONLY",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_minute_sign_delta_proxy",
+        "H1_INDICATORS:p3_close_progress"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-082",
+      "section": "08 · Разворот / ранняя слабость вершины",
+      "condition": "Если после крупного покупательского усилия рынок несколько раз не может удержать обновление вершины и появляются понижающиеся локальные максимумы, известные на T0",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_prior_confirmed_high",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-083",
+      "section": "08 · Разворот / структурный пробой вниз",
+      "condition": "Если после серии более низких локальных максимумов закрытый H1 пробивает заранее подтверждённый защищённый минимум прежнего восходящего движения",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_prior_confirmed_low",
+        "H1_INDICATORS:p3_structure"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-084",
+      "section": "08 · Разворот / повторный нижний тест",
+      "condition": "Если после сильного снижения следующий тест прежнего минимума не даёт устойчивого более низкого закрытия, а затем H1 пробивает максимум отскока между тестами",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_prior_confirmed_low",
+        "H1_INDICATORS:p3_prior_confirmed_high"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-085",
+      "section": "08 · Ложный пробой / верхняя тень",
+      "condition": "Если H1 делает High выше ранее известного сопротивления, но закрывается ниже его границы (в пределах заданного допуска)",
+      "current_evidence_status": "FIELD_PRESENT",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_failed_up_break",
+        "H1_INDICATORS:p3_prior_high"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-086",
+      "section": "08 · Неудачные атаки / уменьшающиеся вершины",
+      "condition": "Если после неудачного пробоя известной вершины каждая следующая попытка подъёма достигает меньшего High/результата, особенно при неуменьшающемся усилии",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_up_level_test_count",
+        "H1_INDICATORS:p3_prior_confirmed_high"
+      ],
+      "independent_verified_cases": 0
+    },
+    {
+      "rule_id": "P3-087",
+      "section": "08 · Неудачный повторный подход к вершине",
+      "condition": "Если первый пробой сопротивления был отвергнут, а последующий отскок уже даже не достигает прежней вершины и завершается снижением H1",
+      "current_evidence_status": "PARTIAL_FIELDS",
+      "existing_field_refs": [
+        "H1_INDICATORS:p3_up_level_test_count",
+        "H1_INDICATORS:p3_prior_confirmed_high"
+      ],
+      "independent_verified_cases": 0
+    }
+  ]
+}

@@ -120,7 +120,7 @@ def research_features(candles, minute_features=None, *, targets=None, calculated
                 low20=min(x["low"] for x in prev20) if len(prev20)==20 else None
                 high20=max(x["high"] for x in prev20) if len(prev20)==20 else None
                 vv=sum(x["volume"] for x in win20) if all(number(x["volume"]) for x in win20) else None
-                d=next((d for d in reversed(daily[sec]) if d["calendar_date"]<r["calendar_date"]),None)
+                d=next((d for d in reversed(daily[sec]) if d["calendar_date"]<r["calendar_date"] and _time(d["bar_end_time"])<=_time(r["bar_end_time"])),None)
                 overlap=max(0,min(h,p["high"])-max(l,p["low"])) if p else None
                 pm=pc-pp["close"] if pp else None
                 source_hash=r.get("normalized_sha256") or sha(r)
