@@ -203,3 +203,118 @@ def test_full_horizon_resets_after_last_moscow_day_without_local_state():
     with pytest.raises(MirrorConflict,match='SCAN_CURSOR_INVALID'):
         b.status['google_first_scan_cursor|D1']='not a day'
         s.coverage(symbol='RI',timeframes=('D1',))
+
+
+class Model3Book(Book):
+    from test_model3_google_backfill import Book as IndicatorBook
+    from birzha.application.model3_indicator_coverage import COMPACT_RI_INDICATOR_COLUMNS
+    writer_guard = IndicatorBook.writer_guard
+    read_service_rows = IndicatorBook.read_service_rows
+    model3_append_rows = IndicatorBook.model3_append_rows
+    def __init__(self, timeframe='D1'):
+        super().__init__()
+        self.indicator_sheet = timeframe + '_INDICATORS'
+        self.features = [list(self.COMPACT_RI_INDICATOR_COLUMNS)]
+        self.writes = 0
+        self.fail_after_commit = False
+
+    def validate_model3_target(self, symbol, sheet):
+        assert (symbol, sheet) == ('RI', self.indicator_sheet)
+
+    def read_rows(self, symbol, sheet):
+        if sheet == self.indicator_sheet:
+            return deepcopy(self.features)
+        return super().read_rows(symbol, sheet)
+
+
+MODEL3_WINDOW = dict(symbol='RI', from_date='2026-10-29', till_date='2026-10-29',
+                     timeframes=('D1',))
+MODEL3_APPROVED = dict(dry_run=False, model3_mode='apply', owner_confirmed=True,
+                       external_writer_exclusion_confirmed=True)
+
+
+@pytest.mark.parametrize('timeframe', ['D1', 'H1', 'M15'])
+def test_sync_appends_indicators_after_candle_readback_and_reuses_both(timeframe):
+    book, market = Model3Book(timeframe), Market()
+    window = dict(MODEL3_WINDOW, timeframes=(timeframe,))
+    service = GoogleFirstArchive(book, market, 'a'*40, True, now=NOW)
+    first = service.sync(**window, **MODEL3_APPROVED)
+    assert first['results'][0]['status'] == 'READBACK_PASS'
+    assert first['indicator_results'][0]['confirmed_rows'] == 1
+    assert book.writes == book.appends == len(market.calls) == 1
+    assert first['written'] is True
+    old = deepcopy(book.features)
+    again = service.sync(**window, **MODEL3_APPROVED)
+    assert again['results'][0]['status'] == 'REUSED'
+    assert again['indicator_results'][0]['confirmed_rows'] == 0
+    assert again['written'] is False
+    assert book.features == old
+    assert book.writes == book.appends == len(market.calls) == 1
+
+
+def test_sync_recovers_lost_indicator_reply_without_fetch_or_append():
+    book, market = Model3Book(), Market()
+    book.fail_after_commit = True
+    book.status['google_first_scan_cursor|D1'] = '2026-10-29'
+    service = GoogleFirstArchive(book, market, 'a'*40, True, now=NOW)
+    args = dict(MODEL3_WINDOW, **MODEL3_APPROVED, scan_mode=True)
+    first = service.sync(**args)
+    assert first['status'] == 'PARTIAL' and first['written'] == 'UNKNOWN'
+    assert first['results'][0]['status'] == 'READBACK_PASS'
+    assert book.status['google_first_scan_cursor|D1'] == '2026-10-29'
+    second = service.sync(**args)
+    assert second['indicator_results'][0]['status'] == 'RECONCILED'
+    assert book.status['google_first_scan_cursor|D1'] == '2026-10-29'
+    third = service.sync(**args)
+    assert third['indicator_results'][0]['status'] in ('CURRENT', 'FIELD_REVIEW_REQUIRED')
+    assert book.status['google_first_scan_cursor|D1'] == '2026-10-30'
+    assert book.writes == book.appends == len(market.calls) == 1
+
+
+def test_sync_preview_detects_missing_indicator_on_saved_candle():
+    book, market = Model3Book(), Market()
+    service = GoogleFirstArchive(book, market, 'a'*40, True, now=NOW)
+    call(service)
+    book.status['google_first_scan_cursor|D1'] = '2026-10-29'
+    before = deepcopy((book.data, book.features, book.status, book.audit))
+    preview = service.sync(**MODEL3_WINDOW, model3_mode='preview', scan_mode=True)
+    assert preview['indicator_results'][0]['status'] == 'PENDING_ROWS'
+    assert preview['written'] is False
+    assert (book.data, book.features, book.status, book.audit) == before
+    real = service.sync(**MODEL3_WINDOW, model3_mode='preview', scan_mode=True, dry_run=False)
+    assert real['next_day'] == '2026-10-29'
+    assert book.status['google_first_scan_cursor|D1'] == '2026-10-29'
+    assert not book.writes and len(market.calls) == 1
+
+
+def test_sync_apply_requires_exclusion_before_candle_stage():
+    book, market = Model3Book(), Market()
+    service = GoogleFirstArchive(book, market, 'a'*40, True, now=NOW)
+    approval = dict(MODEL3_APPROVED, external_writer_exclusion_confirmed=False)
+    with pytest.raises(MirrorConflict, match='EXTERNAL_EXCLUSION_REQUIRED'):
+        service.sync(**MODEL3_WINDOW, **approval)
+    assert not market.calls and not book.audit and not book.status
+
+
+def test_sync_uses_december_candle_for_january_field_plan():
+    from test_model3_field_repair import PatchBook, blank, service as repair_service
+
+    book = PatchBook()
+    header = book.source[0]
+    december = dict(zip(header, book.source[-1]))
+    december.update(calendar_date='2025-12-30',
+                    bar_start_time='2025-12-30T00:00:00+03:00',
+                    bar_end_time='2025-12-30T23:59:59+03:00',
+                    record_key='RI|D1|RIH6|2025-12-30T00:00:00+03:00', high=149)
+    book.source.insert(-1, [december[k] for k in header])
+    blank(book.features, 'p3_prior_high')
+    service = repair_service(book)
+    service.collect = lambda **kwargs: {'status':'REUSED','written':False}
+    before = deepcopy(book.features)
+    preview = service.sync(symbol='RI', from_date='2026-01-05', till_date='2026-01-05',
+                           timeframes=('D1',), model3_mode='preview')
+    assert preview['indicator_results'][0]['status'] == 'FIELD_REVIEW_REQUIRED'
+    report = service.model3_repair_fields(timeframe='D1', from_date='2026-01-05',
+                                          till_date='2026-01-05', fields=['p3_prior_high'])
+    assert report['gaps'][0]['value'] == 149
+    assert book.features == before and not book.writes and not book.audit

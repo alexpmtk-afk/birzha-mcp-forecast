@@ -27,13 +27,24 @@ def build_app(service,token):
     def collect(symbol:str,timeframe:str,day:str,exact_secid:str|None=None,dry_run:bool=True)->dict:
         try:return service.collect(symbol=symbol,timeframe=timeframe,day=day,exact_secid=exact_secid,dry_run=dry_run)
         except Exception:return {'status':'BLOCKED','code':'RECONCILE_CLOUD_STATUS_BEFORE_RETRY','written':'UNKNOWN' if not dry_run else False}
-    @mcp.tool(name='archive.sync',description='Bounded Google-first D1/H1/M15 collection; at most three days, explicit budget. Does not calculate continuous research coordinates or modify existing indicator formulas.')
-    def sync(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False)->dict:
-        try:return service.sync(symbol=symbol,from_date=from_date,till_date=till_date,timeframes=tuple(timeframes if timeframes is not None else ('D1','H1','M15')),dry_run=dry_run,max_source_windows=max_source_windows,scan_mode=scan_mode)
+    @mcp.tool(name='archive.sync',description='Bounded Google-first candle sync. RI Model 3 preview by default. Explicit apply can append missing indicator rows after candle readback. Old indicator cells require a separately approved repair plan.')
+    def sync(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,
+             dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False,
+             model3_mode:str='preview',owner_confirmed:bool=False,
+             external_writer_exclusion_confirmed:bool=False)->dict:
+        try:return service.sync(symbol=symbol,from_date=from_date,till_date=till_date,
+            timeframes=tuple(timeframes if timeframes is not None else ('D1','H1','M15')),
+            dry_run=dry_run,max_source_windows=max_source_windows,scan_mode=scan_mode,
+            model3_mode=model3_mode,owner_confirmed=owner_confirmed,
+            external_writer_exclusion_confirmed=external_writer_exclusion_confirmed)
         except Exception:return {'status':'BLOCKED','code':'RECONCILE_CLOUD_STATUS_BEFORE_RETRY','written':'UNKNOWN' if not dry_run else False}
-    @mcp.tool(name='archive.update',description='Same bounded Google-first synchronization; no DuckDB mirror or local backup prerequisite.')
-    def update(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False)->dict:
-        return sync(symbol,from_date,till_date,timeframes,dry_run,max_source_windows,scan_mode)
+    @mcp.tool(name='archive.update',description='Same candle and RI Model 3 synchronization as archive.sync.')
+    def update(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,
+               dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False,
+               model3_mode:str='preview',owner_confirmed:bool=False,
+               external_writer_exclusion_confirmed:bool=False)->dict:
+        return sync(symbol,from_date,till_date,timeframes,dry_run,max_source_windows,scan_mode,
+                    model3_mode,owner_confirmed,external_writer_exclusion_confirmed)
     @mcp.tool(name='archive.model3_coverage',annotations=read,description='Read-only RI D1/H1/M15 source-key versus existing indicator-key coverage. Does not compute indicators, attest PIT, or write anything.')
     def model3_coverage(timeframe:str='D1')->dict:
         try:return service.model3_coverage(timeframe=timeframe)

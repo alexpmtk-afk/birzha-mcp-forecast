@@ -27,12 +27,18 @@ def test_scheduled_d1_scans_policy_start_even_with_fresh_last_date(monkeypatch):
     monkeypatch.setattr(client,'streamable_http_client',streams)
     monkeypatch.setenv('BIRZHA_SOURCE_SHA','a'*40)
     r=asyncio.run(client.cycle('http://127.0.0.1:18085/mcp','isolated-test-token',
-        from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,scan_days_per_run=3,tail_days=0))
+        from_date=None,till_date='2026-10-30',timeframes=['D1'],dry_run=False,
+        scan_days_per_run=3,tail_days=0,apply_ri_model3=True))
     writes=[a for n,a in calls if n=='archive.sync']
     assert r['status']=='PASS' and len(writes)==6
     assert [a['symbol'] for a in writes]==['RI','Si','BR','GOLD','SBER','IMOEX']
     assert all(a['from_date']=='2025-01-01' and a['till_date']=='2025-01-03'
                and a['timeframes']==['D1'] and a['scan_mode'] is True for a in writes)
+    assert writes[0]['model3_mode'] == 'apply'
+    assert writes[0]['owner_confirmed'] is True
+    assert writes[0]['external_writer_exclusion_confirmed'] is True
+    assert all('model3_mode' not in args for args in writes[1:])
+
 
 
 def test_managed_scan_uses_cloud_cursor_on_next_cycle(monkeypatch):
