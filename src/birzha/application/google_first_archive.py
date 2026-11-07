@@ -211,7 +211,9 @@ class GoogleFirstArchive:
         return ARCHIVE_START_DATE if cursor>yesterday else cursor
 
     def sync(self,*,symbol,from_date,till_date,timeframes=('D1','H1','M15'),
-             dry_run=True,max_source_windows=6,scan_mode:bool=False):
+             dry_run=True,max_source_windows=6,scan_mode:bool=False,
+             model3_mode='off',owner_confirmed=False,
+             external_writer_exclusion_confirmed=False):
         """Collect up to three days; optionally persist safe sweep progress in Google.
 
         The automatic scheduler uses one timeframe at a time with scan_mode;
@@ -223,6 +225,16 @@ class GoogleFirstArchive:
         if type(scan_mode) is not bool:raise MirrorConflict('BOOLEAN_SCAN_MODE_REQUIRED')
         if scan_mode and len(timeframes)!=1:raise MirrorConflict('SCAN_ONE_TIMEFRAME_REQUIRED')
         symbol=GoogleSheetsBridge.target_for_symbol(symbol)[0]
+        if model3_mode not in ('off', 'preview', 'apply'):
+            raise MirrorConflict('MODEL3_SYNC_MODE_UNSUPPORTED')
+        if any(type(flag) is not bool for flag in (
+                dry_run, owner_confirmed, external_writer_exclusion_confirmed)):
+            raise MirrorConflict('MODEL3_EXPLICIT_BOOLEANS_REQUIRED')
+        model3_enabled = symbol == 'RI' and model3_mode != 'off'
+        apply_model3 = model3_enabled and model3_mode == 'apply'
+        if apply_model3 and (dry_run or not self.sole_writer or not owner_confirmed
+                             or not external_writer_exclusion_confirmed):
+            raise MirrorConflict('MODEL3_SYNC_OWNER_AND_EXTERNAL_EXCLUSION_REQUIRED')
         tf=timeframes[0] if scan_mode else None
         cursor_key=f'google_first_scan_cursor|{tf}' if scan_mode else None
         if scan_mode:
@@ -231,20 +243,35 @@ class GoogleFirstArchive:
             if left!=expected:raise MirrorConflict('SCAN_CURSOR_MISMATCH')
             if right>self.now().astimezone(MSK).date()-timedelta(days=1):raise MirrorConflict('SCAN_FUTURE_DAY')
             if not dry_run and not self.sole_writer:raise MirrorConflict('SOLE_WRITER_REQUIRED')
-        results=[];day=left
+        results=[];indicator_results=[];day=left
         safe=('READBACK_PASS','REUSED','SOURCE_NOT_AVAILABLE',
               'SOURCE_NOT_AVAILABLE_RETRY_LATER','EXISTING_UNVERIFIED_NO_FETCH')
         while day<=right:
             for timeframe in timeframes:
                 if len(results)>=max_source_windows:return {
-                    'status':'PARTIAL','results':results,'next_day':day.isoformat(),'next_timeframe':timeframe}
+                    'status':'PARTIAL','results':results,'indicator_results':indicator_results,
+                    'next_day':day.isoformat(),'next_timeframe':timeframe}
                 result=self.collect(symbol=symbol,timeframe=timeframe,day=day.isoformat(),dry_run=dry_run)
                 results.append(result)
+                if (model3_enabled and day.year >= 2026
+                        and result['status'] in (
+                            'PLANNED', 'REUSED', 'READBACK_PASS', 'EXISTING_UNVERIFIED_NO_FETCH')):
+                    indicators = self._sync_model3_window(timeframe, day, apply_model3)
+                    indicator_results.append(indicators)
+                    blocked = indicators['status'] in ('BLOCKED', 'RECONCILED', 'MORE_ROWS')
+                    pending_scan = scan_mode and not dry_run and indicators['status'] == 'PENDING_ROWS'
+                    if blocked or pending_scan:
+                        # Keep this scan day available. The candle receipt allows
+                        # resuming without downloading or appending those candles again.
+                        return {'status':'PARTIAL','results':results,
+                                'indicator_results':indicator_results,
+                                'next_day':day.isoformat(),'next_timeframe':timeframe,
+                                'written':self._sync_written(results, indicator_results)}
                 if scan_mode and not dry_run:
                     if result['status'] not in safe:
                         # Never move the cursor past an unknown outcome, incomplete
                         # budget, or any result not explicitly classified as safe.
-                        return {'status':'PARTIAL','results':results,
+                        return {'status':'PARTIAL','results':results,'indicator_results':indicator_results,
                                 'next_day':day.isoformat(),'next_timeframe':timeframe}
                     next_cursor=(day+timedelta(days=1)).isoformat()
                     self.transport.update_status(symbol,{
@@ -253,10 +280,51 @@ class GoogleFirstArchive:
                     if dict(self.transport.read_status(symbol)[1:]).get(cursor_key)!=next_cursor:
                         raise MirrorConflict('SCAN_CURSOR_READBACK_FAILED')
             day+=timedelta(days=1)
-        return {'status':'PLANNED' if dry_run else
-                ('PASS' if all(r['status'] in ('REUSED','READBACK_PASS') for r in results) else 'PARTIAL'),
-                'results':results,'written':any(r.get('written') for r in results),
+        complete = all(r['status'] in ('REUSED', 'READBACK_PASS') for r in results)
+        complete = complete and all(r['status'] == 'CURRENT' for r in indicator_results)
+        return {'status':'PLANNED' if dry_run else ('PASS' if complete else 'PARTIAL'),
+                'results':results,'indicator_results':indicator_results,
+                'model3_mode':model3_mode if model3_enabled else 'off',
+                'written':self._sync_written(results, indicator_results),
                 'scan_cursor':(right+timedelta(days=1)).isoformat() if scan_mode and not dry_run else None}
+
+    @staticmethod
+    def _sync_written(candles, indicators):
+        if any(result.get('written') == 'UNKNOWN' for result in indicators):
+            return 'UNKNOWN'
+        return any(result.get('written') is True for result in (*candles, *indicators))
+
+    def _sync_model3_window(self, timeframe, day, apply):
+        window = dict(timeframe=timeframe, from_date=day.isoformat(), till_date=day.isoformat())
+        result = {'timeframe':timeframe, 'day':day.isoformat(), 'written':False}
+        try:
+            rows = self.model3_backfill(**window, dry_run=not apply, owner_confirmed=apply)
+        except Exception:
+            return {**result,'status':'BLOCKED','written':'UNKNOWN' if apply else False,
+                    'code':'MODEL3_APPEND_RECONCILE_BEFORE_RETRY'}
+        result.update(row_status=rows['status'], written=rows['written'],
+                      planned_rows=rows.get('planned_rows', 0),
+                      confirmed_rows=rows.get('confirmed_rows', 0),
+                      remaining_rows=rows.get('remaining_window_records', 0))
+        if rows.get('recovery_only'):
+            return {**result,'status':'RECONCILED'}
+        if rows['status'] == 'READBACK_PASS_STATUS_UNCONFIRMED':
+            return {**result,'status':'BLOCKED','code':'MODEL3_STATUS_RECONCILE'}
+        if apply and result['remaining_rows']:
+            return {**result,'status':'MORE_ROWS'}
+
+        status = 'PENDING_ROWS' if not apply and result['planned_rows'] else 'CURRENT'
+        if day.year == 2026:
+            try:
+                # Old rows still require the independently reviewed repair plan hash.
+                fields = self.model3_repair_fields(**window, max_rows=200)
+            except Exception:
+                return {**result,'status':'BLOCKED','code':'MODEL3_FIELD_PLAN_FAILED'}
+            result.update(fillable_cells=fields['fillable_cells'],
+                          gap_counts=fields['category_counts'])
+            if status == 'CURRENT' and fields['fillable_cells']:
+                status = 'FIELD_REVIEW_REQUIRED'
+        return {**result,'status':status}
 
     def model3_coverage(self,*,timeframe='D1'):
         """Read-only RI candle/indicator key coverage, not a formula acceptance."""

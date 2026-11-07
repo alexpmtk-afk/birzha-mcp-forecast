@@ -9,7 +9,7 @@ from mcp.client.streamable_http import streamable_http_client
 
 ARCHIVE_START=date(2025,1,1)
 
-async def cycle(url,token,*,from_date,till_date,timeframes,dry_run,scan_days_per_run=9,tail_days=7):
+async def cycle(url,token,*,from_date,till_date,timeframes,dry_run,scan_days_per_run=9,tail_days=7,apply_ri_model3=False):
     """A bounded sweep of the whole 2025+ horizon, resumed from Google SYNC_STATUS.
 
     An explicit from_date is a manual bounded backfill; it never advances the
@@ -21,6 +21,8 @@ async def cycle(url,token,*,from_date,till_date,timeframes,dry_run,scan_days_per
     if type(scan_days_per_run) is not int or not 1<=scan_days_per_run<=31:raise ValueError('INVALID_SCAN_BUDGET')
     if type(tail_days) is not int or not 0<=tail_days<=14:raise ValueError('INVALID_TAIL_BUDGET')
     if not timeframes or len(set(timeframes))!=len(timeframes) or any(tf not in ('D1','H1','M15') for tf in timeframes):raise ValueError('INVALID_TIMEFRAMES')
+    if apply_ri_model3 and dry_run:
+        raise ValueError('MODEL3_APPLY_REQUIRES_CANDLE_APPLY')
     managed=from_date is None
     end=date.fromisoformat(till_date)
     yesterday=datetime.now(ZoneInfo('Europe/Moscow')).date()-timedelta(days=1)
@@ -38,6 +40,10 @@ async def cycle(url,token,*,from_date,till_date,timeframes,dry_run,scan_days_per
                 if not expected or data.get('source_sha')!=expected:raise RuntimeError('ARCHIVE_SHA_MISMATCH')
                 results=[]
                 for symbol in ('RI','Si','BR','GOLD','SBER','IMOEX'):
+                    model3 = {}
+                    if symbol == 'RI' and apply_ri_model3:
+                        model3 = dict(model3_mode='apply', owner_confirmed=True,
+                                      external_writer_exclusion_confirmed=True)
                     if managed:
                         r=await session.call_tool('archive.coverage',{'symbol':symbol,'timeframes':timeframes})
                         if r.is_error:
@@ -72,10 +78,11 @@ async def cycle(url,token,*,from_date,till_date,timeframes,dry_run,scan_days_per
                                 recent=await session.call_tool('archive.sync',{
                                     'symbol':symbol,'from_date':tail_left.isoformat(),
                                     'till_date':tail_right.isoformat(),'timeframes':[tf],
-                                    'dry_run':dry_run,'max_source_windows':12,'scan_mode':False})
+                                    'dry_run':dry_run,'max_source_windows':12,'scan_mode':False,**model3})
                                 rv=recent.structured_content or json.loads(recent.content[0].text)
                                 rs='ERROR' if recent.is_error else rv.get('status','ERROR')
-                                results.append({'symbol':symbol,'timeframe':tf,'scope':'recent_tail','status':rs})
+                                results.append({'symbol':symbol,'timeframe':tf,'scope':'recent_tail','status':rs,
+                                                'indicator_results':rv.get('indicator_results',[])})
                                 safe_tail=(rs=='PARTIAL' and not rv.get('next_day')
                                     and isinstance(rv.get('results'),list) and bool(rv['results'])
                                     and all(isinstance(item,dict) and item.get('status') in (
@@ -93,10 +100,11 @@ async def cycle(url,token,*,from_date,till_date,timeframes,dry_run,scan_days_per
                             r=await session.call_tool('archive.sync',{
                                 'symbol':symbol,'from_date':left.isoformat(),'till_date':right.isoformat(),
                                 'timeframes':[tf],'dry_run':dry_run,'max_source_windows':12,
-                                'scan_mode':managed})
+                                'scan_mode':managed,**model3})
                             v=r.structured_content or json.loads(r.content[0].text)
                             status='ERROR' if r.is_error else v.get('status','ERROR')
-                            results.append({'symbol':symbol,'timeframe':tf,'status':status})
+                            results.append({'symbol':symbol,'timeframe':tf,'status':status,
+                                            'indicator_results':v.get('indicator_results',[])})
                             # In managed mode archive.sync updates the cloud cursor
                             # only after every explicitly safe day. Unknown results,
                             # conflicts or unconsumed source budget stop this scope.
@@ -111,8 +119,11 @@ async def cycle(url,token,*,from_date,till_date,timeframes,dry_run,scan_days_per
                 return {'status':'PASS' if all(r['status'] in ('PASS','PLANNED','UP_TO_DATE') for r in results) else 'PARTIAL','results':results}
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--from-date');p.add_argument('--till-date');p.add_argument('--timeframes',default='D1');p.add_argument('--apply',action='store_true');p.add_argument('--scan-days-per-run',type=int,default=9);p.add_argument('--tail-days',type=int,default=7);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--from-date');p.add_argument('--till-date');p.add_argument('--timeframes',default='D1');p.add_argument('--apply',action='store_true');p.add_argument('--scan-days-per-run',type=int,default=9);p.add_argument('--tail-days',type=int,default=7)
+    p.add_argument('--apply-ri-model3-with-exclusive-writer', action='store_true',
+                   help='Attest owner approval and exclusive access to RI; append missing indicator rows.')
+    a=p.parse_args()
     till=a.till_date or (datetime.now(ZoneInfo('Europe/Moscow')).date()-timedelta(days=1)).isoformat()
-    result=asyncio.run(cycle(os.getenv('BIRZHA_ARCHIVE_MCP_URL','http://127.0.0.1:18085/mcp'),os.getenv('BIRZHA_MCP_BEARER_TOKEN',''),from_date=a.from_date,till_date=till,timeframes=a.timeframes.split(','),dry_run=not a.apply,scan_days_per_run=a.scan_days_per_run,tail_days=a.tail_days))
+    result=asyncio.run(cycle(os.getenv('BIRZHA_ARCHIVE_MCP_URL','http://127.0.0.1:18085/mcp'),os.getenv('BIRZHA_MCP_BEARER_TOKEN',''),from_date=a.from_date,till_date=till,timeframes=a.timeframes.split(','),dry_run=not a.apply,scan_days_per_run=a.scan_days_per_run,tail_days=a.tail_days,apply_ri_model3=a.apply_ri_model3_with_exclusive_writer))
     print(json.dumps(result));return 0 if result['status']=='PASS' else 1
 if __name__=='__main__':raise SystemExit(main())
