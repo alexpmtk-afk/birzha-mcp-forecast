@@ -78,6 +78,41 @@ def build_app(service,token):
             owner_confirmed=owner_confirmed,
             include_minute_proxies=include_minute_proxies)
         except Exception:return {'status':'BLOCKED','code':'MODEL3_RECONCILE_OR_PREFLIGHT_FAILED','written':'UNKNOWN' if not dry_run else False}
+    @mcp.tool(name='archive.sbprox_contract', annotations=read,
+              description='RI SBProX source and field contract. OI and trade count remain unverified. Owner loads local cache; reviewed archive is on Google Drive.')
+    def sbprox_contract()->dict:
+        from birzha.application.sbprox_integration import source_contract
+        return source_contract()
+
+    @mcp.tool(name='archive.sbprox_features', annotations=read,
+              description='Read the existing RI SBProX master ZIP from Drive and aggregate exact-contract M15/H1/D1 research fields. Explicit timezone and at most seven days. Partial windows and unknown historical availability are labelled. No sheet writes.')
+    def sbprox_features(exact_secid:str, timeframe:str, start:str, end:str)->dict:
+        from birzha.application.sbprox_integration import aggregate
+        try:
+            source = service.transport.read_sbprox_master()
+            return aggregate(source, exact_secid, timeframe, start, end, service.now())
+        except Exception:
+            return {'status':'BLOCKED','code':'SBPROX_SOURCE_OR_WINDOW_VALIDATION_FAILED','written':False}
+
+    @mcp.tool(name='archive.sbprox_sheet_plan', annotations=read,
+              description='Review-only blank-field plan for existing RI indicator sheets. Compares source candles, preserves existing values, proposes separately named SBProX columns and reports quality/schema blockers. Does not apply the plan.')
+    def sbprox_sheet_plan(exact_secid:str, timeframe:str, start:str, end:str)->dict:
+        from birzha.application.sbprox_integration import sheet_plan
+        if timeframe not in ('D1','H1','M15'):
+            return {'status':'BLOCKED','code':'TIMEFRAME_REQUIRED','written':False}
+        try:
+            # Read the canonical book before obtaining a provider dataset.
+            candles = service._schemas('RI', timeframe)
+            sheet = timeframe + '_INDICATORS'
+            service.transport.validate_model3_target('RI', sheet)
+            indicators = service.transport.read_rows('RI', sheet)
+            result = sbprox_features(exact_secid,timeframe,start,end)
+            if result.get('status') == 'BLOCKED':
+                return result
+            return sheet_plan(result, candles, indicators)
+        except Exception:
+            return {'status':'BLOCKED','code':'SBPROX_SHEET_PLAN_VALIDATION_FAILED','written':False}
+
     @mcp.custom_route('/healthz',methods=['GET'])
     async def health(request):return JSONResponse({'status':'ok','runtime':'GOOGLE_FIRST','source_sha':service.source_sha})
     app=mcp.streamable_http_app(json_response=True,transport_security=TransportSecuritySettings(allowed_hosts=['127.0.0.1','127.0.0.1:*','localhost','localhost:*'],allowed_origins=[]))
