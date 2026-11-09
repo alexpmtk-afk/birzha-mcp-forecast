@@ -174,6 +174,8 @@ def sheet_plan(result, candle_rows, indicator_rows):
             reasons.append("UNIQUE_EXISTING_SOURCE_AND_INDICATOR_ROW_REQUIRED")
         elif [raw[0].get(k) for k in ("open","high","low","close","volume")] != row["ohlcv"]:
             reasons.append("CANONICAL_OHLCV_MISMATCH")
+        if len(raw) == 1 and raw[0].get("is_complete") not in (True, "TRUE"):
+            reasons.append("CANONICAL_SOURCE_NOT_COMPLETE")
         if row["values"]["sbprox_quality"] != "COMPLETE_CLOCK_WINDOW_RESEARCH":
             reasons.append("SOURCE_WINDOW_NOT_ATTESTED")
         if missing_columns:

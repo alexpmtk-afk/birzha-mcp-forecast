@@ -59,8 +59,8 @@ def test_aggregation_and_partial_minute(source):
 
 def test_plan_requires_columns_preserves_filled_and_rejects_price_mismatch(source):
     result=calculate(source)
-    ch=["contract_code","bar_start_time","open","high","low","close","volume"]
-    cr=[ch,["RIH6","2026-02-11T09:00:00+03:00",100,100,100,100,150]]
+    ch=["contract_code","bar_start_time","open","high","low","close","volume","is_complete"]
+    cr=[ch,["RIH6","2026-02-11T09:00:00+03:00",100,100,100,100,150,True]]
     ir=[["secid","begin"],["RIH6",cr[1][1]]]
     plan=sheet_plan(result,cr,ir)
     assert plan["proposed_columns"]==list(OUTPUTS)
@@ -70,7 +70,10 @@ def test_plan_requires_columns_preserves_filled_and_rejects_price_mismatch(sourc
     plan=sheet_plan(result,cr,ir)
     assert all(c["field"]!="sbprox_volume_contracts" for c in plan["rows"][0]["cells"])
     assert ir[1][2]==999
-    cr[1][-1]=149
+    cr[1][-1]=False
+    assert "CANONICAL_SOURCE_NOT_COMPLETE" in sheet_plan(result,cr,ir)["rows"][0]["reasons"]
+    cr[1][-1]=True
+    cr[1][-2]=149
     assert "CANONICAL_OHLCV_MISMATCH" in sheet_plan(result,cr,ir)["rows"][0]["reasons"]
 
 def test_drive_cache_and_revision_change(source):
