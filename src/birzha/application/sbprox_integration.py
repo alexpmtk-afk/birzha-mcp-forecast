@@ -16,10 +16,8 @@ from birzha.providers.sbprox_ri import MOSCOW, SERIES
 FILE_ID = "1tjN9bHtmXHSbteD3TBCX_eiyOyz7eDwu"
 FOLDER_ID = "1DMI1dZdYomr9Jm31EHrHb9Qiux5de9oT"
 NAME = "RI_SBPROX_2026_MASTER.zip"
-OUTPUTS = ("sbprox_volume_contracts", "sbprox_ask_contracts", "sbprox_bid_contracts",
-           "sbprox_delta_contracts", "sbprox_poc", "sbprox_val70", "sbprox_vah70",
-           "sbprox_hvn_json", "sbprox_lvn_json", "sbprox_source_sha256",
-           "sbprox_quality", "sbprox_formula_version")
+from birzha.application.model3_indicator_coverage import SBPROX_COLUMNS
+OUTPUTS = SBPROX_COLUMNS
 
 
 def source_contract():
@@ -178,13 +176,34 @@ def sheet_plan(result, candle_rows, indicator_rows):
             reasons.append("CANONICAL_SOURCE_NOT_COMPLETE")
         if row["values"]["sbprox_quality"] != "COMPLETE_CLOCK_WINDOW_RESEARCH":
             reasons.append("SOURCE_WINDOW_NOT_ATTESTED")
+        if len(raw) == len(target) == 1 and "source_record_key" in ih:
+            if (target[0].get("symbol") != "RI" or target[0].get("timeframe") != row["timeframe"]
+                    or target[0].get("source_record_key") != raw[0].get("record_key")
+                    or not raw[0].get("normalized_sha256")
+                    or target[0].get("source_record_sha256") != raw[0].get("normalized_sha256")
+                    or target[0].get("source_complete_flag") not in (True, "TRUE")):
+                reasons.append("INDICATOR_SOURCE_IDENTITY_OR_QUALITY_CONFLICT")
+            if row["timeframe"] != "D1":
+                try:
+                    finish = datetime.fromisoformat(raw[0]["bar_end_time"])
+                    expected = datetime.fromisoformat(row["begin"]) + timedelta(
+                        minutes=15 if row["timeframe"] == "M15" else 60)
+                    if finish not in (expected, expected-timedelta(seconds=1)):
+                        reasons.append("CANONICAL_WINDOW_BOUNDARY_CONFLICT")
+                except (KeyError, TypeError, ValueError):
+                    reasons.append("CANONICAL_WINDOW_BOUNDARY_UNKNOWN")
         if missing_columns:
             reasons.append("DESTINATION_COLUMNS_REQUIRE_REVIEW")
+        if len(target) == 1 and any(target[0].get(f) not in (None, "")
+                                   and target[0][f] != v for f, v in row["values"].items()):
+            reasons.append("EXISTING_SBPROX_VALUE_OR_PROVENANCE_CONFLICT")
         cells = []
         if not reasons:
             for field, value in row["values"].items():
                 if target[0].get(field) in ("", None) and value is not None:
-                    cells.append(dict(field=field, value=value, expected_old="EMPTY"))
+                    cells.append(dict(field=field, value=value, expected_old="EMPTY",
+                                      row_index=next(i for i, r in enumerate(indicators, 1) if r is target[0]),
+                                      column_index=ih.index(field)))
         def checksum(value):
             return hashlib.sha256(json.dumps(value, sort_keys=True, default=str,
                                              separators=(",", ":")).encode()).hexdigest()

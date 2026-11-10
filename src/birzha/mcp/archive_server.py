@@ -97,21 +97,27 @@ def build_app(service,token):
     @mcp.tool(name='archive.sbprox_sheet_plan', annotations=read,
               description='Review-only blank-field plan for existing RI indicator sheets. Compares source candles, preserves existing values, proposes separately named SBProX columns and reports quality/schema blockers. Does not apply the plan.')
     def sbprox_sheet_plan(exact_secid:str, timeframe:str, start:str, end:str)->dict:
-        from birzha.application.sbprox_integration import sheet_plan
-        if timeframe not in ('D1','H1','M15'):
-            return {'status':'BLOCKED','code':'TIMEFRAME_REQUIRED','written':False}
+        from birzha.application.sbprox_field_repair import repair
         try:
-            # Read the canonical book before obtaining a provider dataset.
-            candles = service._schemas('RI', timeframe)
-            sheet = timeframe + '_INDICATORS'
-            service.transport.validate_model3_target('RI', sheet)
-            indicators = service.transport.read_rows('RI', sheet)
-            result = sbprox_features(exact_secid,timeframe,start,end)
-            if result.get('status') == 'BLOCKED':
-                return result
-            return sheet_plan(result, candles, indicators)
+            return repair(service, exact_secid=exact_secid,timeframe=timeframe,start=start,end=end)
         except Exception:
             return {'status':'BLOCKED','code':'SBPROX_SHEET_PLAN_VALIDATION_FAILED','written':False}
+
+    @mcp.tool(name='archive.sbprox_repair_fields',
+              description='Bounded RI SBProX blank-cell plan, dry-run by default. Apply requires exact approved schema/plan hashes, sole writer, owner confirmation and exclusion of external editors. Existing writer guard and cloud receipts; no automatic retry or schema changes.')
+    def sbprox_repair_fields(exact_secid:str,timeframe:str,start:str,end:str,max_cells:int=12,
+                            dry_run:bool=True,owner_confirmed:bool=False,
+                            external_writer_exclusion_confirmed:bool=False,
+                            expected_plan_sha256:str='',approved_schema_sha256:str='')->dict:
+        from birzha.application.sbprox_field_repair import repair
+        try:
+            return repair(service,exact_secid=exact_secid,timeframe=timeframe,start=start,end=end,
+                          max_cells=max_cells,dry_run=dry_run,owner_confirmed=owner_confirmed,
+                          external_writer_exclusion_confirmed=external_writer_exclusion_confirmed,
+                          expected_plan_sha256=expected_plan_sha256,approved_schema_sha256=approved_schema_sha256)
+        except Exception:
+            return {'status':'BLOCKED','code':'SBPROX_RECONCILE_BEFORE_RETRY',
+                    'written':False if dry_run else 'UNKNOWN'}
 
     @mcp.custom_route('/healthz',methods=['GET'])
     async def health(request):return JSONResponse({'status':'ok','runtime':'GOOGLE_FIRST','source_sha':service.source_sha})

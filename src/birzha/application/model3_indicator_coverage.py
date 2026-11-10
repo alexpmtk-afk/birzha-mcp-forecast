@@ -21,8 +21,16 @@ OMITTED_COMPACT_COLUMNS = frozenset({
 COMPACT_RI_INDICATOR_COLUMNS = tuple(c for c in COLUMNS if c not in OMITTED_COMPACT_COLUMNS)
 if len(COMPACT_RI_INDICATOR_COLUMNS) != 95 or len(COMPACT_RI_INDICATOR_COLUMNS) != len(set(COMPACT_RI_INDICATOR_COLUMNS)):
     raise RuntimeError("RI compact indicator specification changed")
+SBPROX_COLUMNS = ("sbprox_volume_contracts", "sbprox_ask_contracts", "sbprox_bid_contracts",
+                 "sbprox_delta_contracts", "sbprox_poc", "sbprox_val70", "sbprox_vah70",
+                 "sbprox_hvn_json", "sbprox_lvn_json", "sbprox_source_sha256",
+                 "sbprox_quality", "sbprox_formula_version")
+# Supported candidate, not permission to migrate any production sheet.
+RI_SBPROX_INDICATOR_COLUMNS = COMPACT_RI_INDICATOR_COLUMNS + SBPROX_COLUMNS
+COMPACT_HEADERS = (COMPACT_RI_INDICATOR_COLUMNS, RI_SBPROX_INDICATOR_COLUMNS)
 APPROVED_HEADERS = {
     "COMPACT_RI_95": COMPACT_RI_INDICATOR_COLUMNS,
+    "COMPACT_RI_107_SBPROX": RI_SBPROX_INDICATOR_COLUMNS,
     "BASE_LEGACY": tuple(BASE_COLUMNS),
     "P3_LEGACY": tuple(LEGACY_COLUMNS),
     "P3_EXTENDED": tuple(COLUMNS),
@@ -43,12 +51,12 @@ def project_calculated_rows(rows, destination_header):
     """
     if indicator_header_type(destination_header) is None:
         raise ValueError("INDICATOR_HEADER_NOT_APPROVED")
-    positions = [COLUMNS.index(name) for name in destination_header]
+    positions = [COLUMNS.index(name) if name in COLUMNS else None for name in destination_header]
     result = []
     for row in rows:
         if len(row) != len(COLUMNS):
             raise ValueError("INDICATOR_GENERATED_ROW_WIDTH")
-        result.append([row[i] for i in positions])
+        result.append([row[i] if i is not None else "" for i in positions])
     return result
 
 

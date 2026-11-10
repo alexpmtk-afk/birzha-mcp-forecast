@@ -206,6 +206,7 @@ def test_native_existing_only_uses_literal_cells_no_resize():
     n._sheets={('RI','D1_INDICATORS'):{'sheetId':9,'gridProperties':{'rowCount':10,'columnCount':95}}}
     n.validate_model3_target=lambda *a:None
     n._validate_named_target=lambda *a:None
+    n.read_rows=lambda *a:[list(COMPACT_RI_INDICATOR_COLUMNS)]+[[""]*95 for _ in range(9)]
     bodies=[]
     n._request=lambda method,url,**kw:bodies.append(kw['json']) or {}
     n.model3_write_cells('RI','D1_INDICATORS',[(1,60,123)],existing_only=True)

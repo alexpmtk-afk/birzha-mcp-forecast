@@ -187,10 +187,13 @@ class NativeCanonicalSheets:
             if type(row_index) is not int or row_index < 1:
                 raise MirrorConflict('MODEL3_APPEND_POSITION')
             old = self.read_rows(symbol, sheet)
-            if (len(old) != row_index or len(old[0]) != 95
-                    or self._sheets[(symbol,sheet)]['gridProperties']['columnCount'] != 95):
+            from birzha.application.model3_write_audit import normalized
+            old = normalized(old)
+            width = len(old[0])
+            if (len(old) != row_index
+                    or self._sheets[(symbol,sheet)]['gridProperties']['columnCount'] != width):
                 raise MirrorConflict('MODEL3_APPEND_TARGET_CHANGED')
-            if not isinstance(rows, list) or not 1 <= len(rows) <= 50 or any(len(r) != 95 for r in rows):
+            if not isinstance(rows, list) or not 1 <= len(rows) <= 50 or any(len(r) != width for r in rows):
                 raise MirrorConflict('MODEL3_APPEND_COMPACT_ROWS_ONLY')
             if row_index + len(rows) > MAX_ROWS:raise MirrorConflict('MODEL3_APPEND_ROW_LIMIT')
             self.append_rows(symbol, sheet, rows)
@@ -265,15 +268,28 @@ class NativeCanonicalSheets:
             raise MirrorConflict("Model3 archive is limited to existing RI tabs")
         self._validate_named_target(symbol, sheet)
 
-    def model3_write_cells(self, symbol: str, sheet: str, edits: list[tuple[int, int, object]], *, existing_only: bool = False) -> None:
+    def model3_write_cells(self, symbol: str, sheet: str, edits: list[tuple[int, int, object]], *, existing_only: bool = False, sbprox_only: bool = False) -> None:
         """Literal missing-field/approved defect patch; no formula or value-only row replacement."""
         self.validate_model3_target(symbol, sheet)
         props=self._sheets[(symbol,sheet)]; grid=props["gridProperties"]
         if not edits or len(edits)>2000:raise MirrorConflict("bounded cell patch required")
-        if existing_only and (symbol != 'RI' or sheet not in {'D1_INDICATORS','H1_INDICATORS','M15_INDICATORS'}
-                or grid['columnCount'] != 95 or any(type(r) is not int or type(c) is not int
-                or not 1 <= r < grid['rowCount'] or not 0 <= c < 95 for r,c,v in edits)):
-            raise MirrorConflict('MODEL3_REPAIR_EXISTING_GRID_ONLY')
+        if sbprox_only and not existing_only:
+            raise MirrorConflict('SBPROX_EXISTING_ONLY_REQUIRED')
+        if existing_only:
+            from birzha.application.model3_write_audit import normalized
+            from birzha.application.model3_indicator_coverage import RI_SBPROX_INDICATOR_COLUMNS
+            old = normalized(self.read_rows(symbol, sheet))
+            width = len(old[0])
+            lo, hi = (95, width) if sbprox_only else (0, 95)
+            if (symbol != 'RI' or sheet not in {'D1_INDICATORS','H1_INDICATORS','M15_INDICATORS'}
+                    or grid['columnCount'] != width
+                    or (sbprox_only and tuple(old[0]) != RI_SBPROX_INDICATOR_COLUMNS)
+                    or len({(r,c) for r,c,v in edits}) != len(edits)
+                    or any(type(r) is not int or type(c) is not int
+                           or not 1 <= r < len(old) or not lo <= c < hi for r,c,v in edits)):
+                raise MirrorConflict('MODEL3_REPAIR_EXISTING_GRID_ONLY')
+            if sbprox_only and any(old[r][c] not in ('', None) or v in ('', None) for r,c,v in edits):
+                raise MirrorConflict('SBPROX_BLANK_CELL_REQUIRED')
 
         if any(not isinstance(r,int) or not isinstance(c,int) or r<0 or c<0 or r>=MAX_ROWS or c>=160 for r,c,v in edits):
             raise MirrorConflict("cell patch outside existing-tab bounds")
