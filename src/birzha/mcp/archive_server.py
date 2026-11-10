@@ -87,10 +87,11 @@ def build_app(service,token):
     @mcp.tool(name='archive.sbprox_features', annotations=read,
               description='Read the existing RI SBProX master ZIP from Drive and aggregate exact-contract M15/H1/D1 research fields. Explicit timezone and at most seven days. Partial windows and unknown historical availability are labelled. No sheet writes.')
     def sbprox_features(exact_secid:str, timeframe:str, start:str, end:str)->dict:
-        from birzha.application.sbprox_integration import aggregate
+        from birzha.application.sbprox_integration import aggregate, indexed_minute_reference
         try:
             source = service.transport.read_sbprox_master()
-            return aggregate(source, exact_secid, timeframe, start, end, service.now())
+            return aggregate(source, exact_secid, timeframe, start, end, service.now(),
+                             reference_minutes=indexed_minute_reference(service.transport))
         except Exception:
             return {'status':'BLOCKED','code':'SBPROX_SOURCE_OR_WINDOW_VALIDATION_FAILED','written':False}
 

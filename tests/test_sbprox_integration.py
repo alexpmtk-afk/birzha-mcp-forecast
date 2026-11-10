@@ -119,3 +119,29 @@ def test_actual_mcp_source_commands(source):
                 assert result["written"] is False
                 assert result["rows"][0]["values"]["sbprox_delta_contracts"]==60
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("difference", [None, "missing", "volume", "clipped"])
+def test_sparse_hour_requires_exact_indexed_minute_match(source, difference):
+    from datetime import timedelta
+    from birzha.application.sbprox_integration import MATCHED_SPARSE_WINDOW
+    start = datetime(2026, 2, 11, 9, tzinfo=MOSCOW)
+    minutes = {start + timedelta(minutes=i): (100,100,100,100,10) for i in range(15)}
+    if difference == "missing":
+        minutes[start + timedelta(minutes=59)] = (100,100,100,100,10)
+    if difference == "volume":
+        minutes[start] = (100,100,100,100,11)
+    evidence = {"file_id":"indexed-moex", "sha256":"1"*64, "secid":"RIH6", "month":"2026-02"}
+    end = start + timedelta(minutes=59 if difference == "clipped" else 60)
+    result = aggregate(source,"RIH6","H1",start.isoformat(),end.isoformat(),NOW,
+                       reference_minutes=lambda *args:(minutes,evidence))
+    got = result["rows"][0]
+    assert (got["values"]["sbprox_quality"] == MATCHED_SPARSE_WINDOW) is (difference is None)
+    assert got["moex_m1_reference"] == (evidence if difference is None else None)
+    if difference is None:
+        header = ["contract_code","bar_start_time","open","high","low","close","volume","is_complete"]
+        candles = [header,["RIH6",start.isoformat(),100,100,100,100,150,True]]
+        indicators = [["secid","begin",*OUTPUTS],["RIH6",start.isoformat()]]
+        assert len(sheet_plan(result,candles,indicators)["rows"][0]["cells"]) == 12
+        candles[1][-1] = False
+        assert not sheet_plan(result,candles,indicators)["rows"][0]["cells"]

@@ -11,6 +11,7 @@ from pathlib import Path
 import duckdb
 
 from birzha.application.sbprox_archive_reader import profile_stats
+from birzha.application.sbprox_moex_comparison import FIELDS, key_for, moscow
 from birzha.providers.sbprox_ri import MOSCOW, SERIES
 
 FILE_ID = "1tjN9bHtmXHSbteD3TBCX_eiyOyz7eDwu"
@@ -87,7 +88,39 @@ def _window(secid, start, end, now):
     return a, b
 
 
-def aggregate(source, secid, timeframe, start, end, now):
+CLOCK_WINDOW = "COMPLETE_CLOCK_WINDOW_RESEARCH"
+MATCHED_SPARSE_WINDOW = "MATCHED_INDEXED_MOEX_M1_RESEARCH"
+
+
+def indexed_minute_reference(transport):
+    """Load each needed indexed MOEX month once per calculation."""
+    from birzha.storage.google_m1_bytes import validate_zip
+    months = {}
+
+    def load(secid, month, timeframe, begin):
+        key = (secid, month, timeframe)
+        if key not in months:
+            archive = transport.read_m1("RI", secid, month)
+            windows = {}
+            evidence = None
+            if archive and archive["indexed"]:
+                rows = validate_zip(archive["body"], "RI", secid, month, archive["sha256"])
+                for row in rows:
+                    minute = moscow(row["begin"])
+                    window = windows.setdefault(key_for(timeframe, minute), {})
+                    if minute in window:
+                        raise ValueError("MOEX_REFERENCE_DUPLICATE_MINUTE")
+                    window[minute] = tuple(row[k] for k in FIELDS)
+                evidence = dict(secid=secid, month=month, file_id=archive["file_id"],
+                                sha256=archive["sha256"])
+            months[key] = (windows, evidence)
+        windows, evidence = months[key]
+        return windows.get(begin, {}), evidence
+
+    return load
+
+
+def aggregate(source, secid, timeframe, start, end, now, *, reference_minutes=None):
     a, b = _window(secid, start, end, now)
     if timeframe not in ("M15", "H1", "D1"):
         raise ValueError("TIMEFRAME_REQUIRED")
@@ -129,7 +162,16 @@ def aggregate(source, secid, timeframe, start, end, now):
             raise ValueError("SBPROX_AGGREGATE_TOTALS")
         expected = 15 if timeframe == "M15" else 60
         complete = timeframe != "D1" and len(rows) == expected
-        quality = "COMPLETE_CLOCK_WINDOW_RESEARCH" if complete else "PARTIAL_OR_SESSION_UNVERIFIED"
+        quality = CLOCK_WINDOW if complete else "PARTIAL_OR_SESSION_UNVERIFIED"
+        reference = None
+        if timeframe != "D1" and not complete and reference_minutes:
+            begin = datetime.fromisoformat(key)
+            # A request clipped inside a clock window cannot attest that window.
+            if a <= begin and begin + timedelta(minutes=expected) <= b:
+                ref_rows, evidence = reference_minutes(secid, key[:7], timeframe, key)
+                observed = {moscow(r[1]): tuple(r[4:9]) for r in rows}
+                if evidence and ref_rows and observed == ref_rows:
+                    quality, reference = MATCHED_SPARSE_WINDOW, evidence
         stats = profile_stats(profile) if bars[4] > 0 else None
         values = [bars[4], ask, bid, delta,
                   stats["poc"] if stats else None, stats["val"] if stats else None,
@@ -138,7 +180,7 @@ def aggregate(source, secid, timeframe, start, end, now):
                   "SBPROX_OBSERVED_PROFILE_V1"]
         output.append(dict(secid=secid, timeframe=timeframe, begin=key, minutes=len(rows),
                            ohlcv=bars, session_quality=sorted({str(r[3]) for r in rows}),
-                           values=dict(zip(OUTPUTS, values))))
+                           values=dict(zip(OUTPUTS, values)), moex_m1_reference=reference))
     return dict(source_sha256=source["sha256"], generation=manifest["generation"],
                 file_id=FILE_ID, available_at="UNKNOWN", written=False, rows=output)
 
@@ -174,7 +216,7 @@ def sheet_plan(result, candle_rows, indicator_rows):
             reasons.append("CANONICAL_OHLCV_MISMATCH")
         if len(raw) == 1 and raw[0].get("is_complete") not in (True, "TRUE"):
             reasons.append("CANONICAL_SOURCE_NOT_COMPLETE")
-        if row["values"]["sbprox_quality"] != "COMPLETE_CLOCK_WINDOW_RESEARCH":
+        if row["values"]["sbprox_quality"] not in (CLOCK_WINDOW, MATCHED_SPARSE_WINDOW):
             reasons.append("SOURCE_WINDOW_NOT_ATTESTED")
         if len(raw) == len(target) == 1 and "source_record_key" in ih:
             if (target[0].get("symbol") != "RI" or target[0].get("timeframe") != row["timeframe"]
@@ -208,7 +250,7 @@ def sheet_plan(result, candle_rows, indicator_rows):
             return hashlib.sha256(json.dumps(value, sort_keys=True, default=str,
                                              separators=(",", ":")).encode()).hexdigest()
         plans.append(dict(secid=row["secid"],begin=row["begin"],cells=cells,reasons=reasons,
-                          source_row_sha256=checksum(raw),
+                          moex_m1_reference=row.get("moex_m1_reference"), source_row_sha256=checksum(raw),
                           indicator_row_sha256=checksum(target)))
     return dict(written=False, mode="REVIEW_ONLY", source_sha256=result["source_sha256"],
                 proposed_columns=missing_columns, rows=plans,
