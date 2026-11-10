@@ -90,11 +90,13 @@ def _window(secid, start, end, now):
 
 CLOCK_WINDOW = "COMPLETE_CLOCK_WINDOW_RESEARCH"
 MATCHED_SPARSE_WINDOW = "MATCHED_INDEXED_MOEX_M1_RESEARCH"
+MATCHED_NONSTANDARD_WINDOW = "MATCHED_NONSTANDARD_MOEX_H1_RESEARCH"
 
 
 def indexed_minute_reference(transport):
     """Load each needed indexed MOEX month once per calculation."""
     from birzha.storage.google_m1_bytes import validate_zip
+    from birzha.storage.monthly_m1_source import _read_zip_bytes
     months = {}
 
     def load(secid, month, timeframe, begin):
@@ -103,6 +105,7 @@ def indexed_minute_reference(transport):
             archive = transport.read_m1("RI", secid, month)
             windows = {}
             evidence = None
+            hourly = {}
             if archive and archive["indexed"]:
                 rows = validate_zip(archive["body"], "RI", secid, month, archive["sha256"])
                 for row in rows:
@@ -113,9 +116,16 @@ def indexed_minute_reference(transport):
                     window[minute] = tuple(row[k] for k in FIELDS)
                 evidence = dict(secid=secid, month=month, file_id=archive["file_id"],
                                 sha256=archive["sha256"])
-            months[key] = (windows, evidence)
-        windows, evidence = months[key]
-        return windows.get(begin, {}), evidence
+                if timeframe == "H1":
+                    payload, _, _ = _read_zip_bytes(archive["body"])
+                    for row in payload.get("derived", {}).get("H1", []):
+                        start = moscow(row["begin"]).isoformat()
+                        if start in hourly:
+                            raise ValueError("MOEX_REFERENCE_DUPLICATE_HOUR")
+                        hourly[start] = row
+            months[key] = (windows, evidence, hourly)
+        windows, evidence, hourly = months[key]
+        return windows.get(begin, {}), evidence, hourly.get(begin)
 
     return load
 
@@ -164,11 +174,12 @@ def aggregate(source, secid, timeframe, start, end, now, *, reference_minutes=No
         complete = timeframe != "D1" and len(rows) == expected
         quality = CLOCK_WINDOW if complete else "PARTIAL_OR_SESSION_UNVERIFIED"
         reference = None
+        archived_hour = None
         if timeframe != "D1" and not complete and reference_minutes:
             begin = datetime.fromisoformat(key)
             # A request clipped inside a clock window cannot attest that window.
             if a <= begin and begin + timedelta(minutes=expected) <= b:
-                ref_rows, evidence = reference_minutes(secid, key[:7], timeframe, key)
+                ref_rows, evidence, archived_hour = reference_minutes(secid, key[:7], timeframe, key)
                 observed = {moscow(r[1]): tuple(r[4:9]) for r in rows}
                 if evidence and ref_rows and observed == ref_rows:
                     quality, reference = MATCHED_SPARSE_WINDOW, evidence
@@ -180,10 +191,35 @@ def aggregate(source, secid, timeframe, start, end, now, *, reference_minutes=No
                   "SBPROX_OBSERVED_PROFILE_V1"]
         output.append(dict(secid=secid, timeframe=timeframe, begin=key, minutes=len(rows),
                            ohlcv=bars, session_quality=sorted({str(r[3]) for r in rows}),
-                           values=dict(zip(OUTPUTS, values)), moex_m1_reference=reference))
+                           values=dict(zip(OUTPUTS, values)), moex_m1_reference=reference,
+                           archived_moex_hour=archived_hour if reference else None,
+                           last_minute=rows[-1][1]))
     return dict(source_sha256=source["sha256"], generation=manifest["generation"],
                 file_id=FILE_ID, available_at="UNKNOWN", written=False, rows=output)
 
+
+
+def verified_nonstandard_hour(row, candle, target):
+    """Preserve MOEX's original hour while admitting corroborated observations."""
+    proof = row.get("archived_moex_hour")
+    ref = row.get("moex_m1_reference")
+    if (row["timeframe"] != "H1" or not proof or not ref
+            or candle.get("is_complete") not in (False, "FALSE")
+            or target.get("source_complete_flag") not in (False, "FALSE")
+            or proof.get("is_complete") is not False
+            or proof.get("secid") != row["secid"]
+            or not proof.get("normalized_sha256")
+            or candle.get("normalized_sha256") != proof["normalized_sha256"]
+            or candle.get("source_file_id") != ref["file_id"]
+            or [proof.get(k) for k in FIELDS] != row["ohlcv"]):
+        return False
+    try:
+        start, finish = moscow(proof["begin"]), moscow(proof["end"])
+        return (start == moscow(row["begin"])
+                and moscow(row["last_minute"]) <= finish < start + timedelta(hours=1)
+                and finish == moscow(candle["bar_end_time"]) == moscow(target["end"]))
+    except (KeyError, TypeError, ValueError):
+        return False
 
 def sheet_plan(result, candle_rows, indicator_rows):
     """A bounded review plan. No source or indicator writes."""
@@ -210,11 +246,16 @@ def sheet_plan(result, candle_rows, indicator_rows):
         raw = [r for r in candles if matches(r, "contract_code", "bar_start_time")]
         target = [r for r in indicators if matches(r, "secid", "begin")]
         reasons = []
+        values = dict(row["values"])
+        nonstandard = (len(raw) == len(target) == 1
+                       and verified_nonstandard_hour(row, raw[0], target[0]))
+        if nonstandard:
+            values["sbprox_quality"] = MATCHED_NONSTANDARD_WINDOW
         if len(raw) != 1 or len(target) != 1:
             reasons.append("UNIQUE_EXISTING_SOURCE_AND_INDICATOR_ROW_REQUIRED")
         elif [raw[0].get(k) for k in ("open","high","low","close","volume")] != row["ohlcv"]:
             reasons.append("CANONICAL_OHLCV_MISMATCH")
-        if len(raw) == 1 and raw[0].get("is_complete") not in (True, "TRUE"):
+        if len(raw) == 1 and raw[0].get("is_complete") not in (True, "TRUE") and not nonstandard:
             reasons.append("CANONICAL_SOURCE_NOT_COMPLETE")
         if row["values"]["sbprox_quality"] not in (CLOCK_WINDOW, MATCHED_SPARSE_WINDOW):
             reasons.append("SOURCE_WINDOW_NOT_ATTESTED")
@@ -223,25 +264,25 @@ def sheet_plan(result, candle_rows, indicator_rows):
                     or target[0].get("source_record_key") != raw[0].get("record_key")
                     or not raw[0].get("normalized_sha256")
                     or target[0].get("source_record_sha256") != raw[0].get("normalized_sha256")
-                    or target[0].get("source_complete_flag") not in (True, "TRUE")):
+                    or (target[0].get("source_complete_flag") not in (True, "TRUE") and not nonstandard)):
                 reasons.append("INDICATOR_SOURCE_IDENTITY_OR_QUALITY_CONFLICT")
             if row["timeframe"] != "D1":
                 try:
                     finish = datetime.fromisoformat(raw[0]["bar_end_time"])
                     expected = datetime.fromisoformat(row["begin"]) + timedelta(
                         minutes=15 if row["timeframe"] == "M15" else 60)
-                    if finish not in (expected, expected-timedelta(seconds=1)):
+                    if finish not in (expected, expected-timedelta(seconds=1)) and not nonstandard:
                         reasons.append("CANONICAL_WINDOW_BOUNDARY_CONFLICT")
                 except (KeyError, TypeError, ValueError):
                     reasons.append("CANONICAL_WINDOW_BOUNDARY_UNKNOWN")
         if missing_columns:
             reasons.append("DESTINATION_COLUMNS_REQUIRE_REVIEW")
         if len(target) == 1 and any(target[0].get(f) not in (None, "")
-                                   and target[0][f] != v for f, v in row["values"].items()):
+                                   and target[0][f] != v for f, v in values.items()):
             reasons.append("EXISTING_SBPROX_VALUE_OR_PROVENANCE_CONFLICT")
         cells = []
         if not reasons:
-            for field, value in row["values"].items():
+            for field, value in values.items():
                 if target[0].get(field) in ("", None) and value is not None:
                     cells.append(dict(field=field, value=value, expected_old="EMPTY",
                                       row_index=next(i for i, r in enumerate(indicators, 1) if r is target[0]),
