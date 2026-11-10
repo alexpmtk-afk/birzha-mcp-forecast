@@ -119,3 +119,62 @@ def test_actual_mcp_source_commands(source):
                 assert result["written"] is False
                 assert result["rows"][0]["values"]["sbprox_delta_contracts"]==60
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("difference", [None, "missing", "volume", "clipped"])
+def test_sparse_hour_requires_exact_indexed_minute_match(source, difference):
+    from datetime import timedelta
+    from birzha.application.sbprox_integration import MATCHED_SPARSE_WINDOW
+    start = datetime(2026, 2, 11, 9, tzinfo=MOSCOW)
+    minutes = {start + timedelta(minutes=i): (100,100,100,100,10) for i in range(15)}
+    if difference == "missing":
+        minutes[start + timedelta(minutes=59)] = (100,100,100,100,10)
+    if difference == "volume":
+        minutes[start] = (100,100,100,100,11)
+    evidence = {"file_id":"indexed-moex", "sha256":"1"*64, "secid":"RIH6", "month":"2026-02"}
+    end = start + timedelta(minutes=59 if difference == "clipped" else 60)
+    result = aggregate(source,"RIH6","H1",start.isoformat(),end.isoformat(),NOW,
+                       reference_minutes=lambda *args:(minutes,evidence,None))
+    got = result["rows"][0]
+    assert (got["values"]["sbprox_quality"] == MATCHED_SPARSE_WINDOW) is (difference is None)
+    assert got["moex_m1_reference"] == (evidence if difference is None else None)
+    if difference is None:
+        header = ["contract_code","bar_start_time","open","high","low","close","volume","is_complete"]
+        candles = [header,["RIH6",start.isoformat(),100,100,100,100,150,True]]
+        indicators = [["secid","begin",*OUTPUTS],["RIH6",start.isoformat()]]
+        assert len(sheet_plan(result,candles,indicators)["rows"][0]["cells"]) == 12
+        candles[1][-1] = False
+        assert not sheet_plan(result,candles,indicators)["rows"][0]["cells"]
+
+
+@pytest.mark.parametrize("changed", [None, "end", "hash", "file", "volume", "last_minute"])
+def test_nonstandard_hour_needs_original_indexed_h1_proof(source, changed):
+    from datetime import timedelta
+    from birzha.application.sbprox_integration import MATCHED_NONSTANDARD_WINDOW
+    start = datetime(2026, 2, 11, 9, tzinfo=MOSCOW)
+    begin = start.isoformat()
+    finish = (start + timedelta(minutes=59,seconds=20)).isoformat()
+    minutes = {start+timedelta(minutes=i): (100,100,100,100,10) for i in range(15)}
+    evidence = dict(secid="RIH6", month="2026-02",file_id="indexed-moex",sha256="1"*64)
+    proof = dict(secid="RIH6",begin=begin,end=finish,is_complete=False,normalized_sha256="source-hash",
+                 open=100,high=100,low=100,close=100,volume=150)
+    got = aggregate(source,"RIH6","H1",begin,(start+timedelta(hours=1)).isoformat(),NOW,
+                    reference_minutes=lambda *args:(minutes,evidence,proof))
+    header = ["record_key","contract_code","bar_start_time","bar_end_time","open","high","low",
+              "close","volume","is_complete","normalized_sha256","source_file_id"]
+    raw = ["raw-key","RIH6",begin,finish,100,100,100,100,150,False,"source-hash","indexed-moex"]
+    ih = ["symbol","secid","timeframe","begin","end","source_record_key","source_record_sha256",
+          "source_complete_flag",*OUTPUTS]
+    target = ["RI","RIH6","H1",begin,finish,"raw-key","source-hash",False]
+    if changed == "end": target[4] = begin
+    if changed == "hash": raw[10] = "other"
+    if changed == "file": raw[11] = "other"
+    if changed == "volume": proof["volume"] = 151
+    if changed == "last_minute": got["rows"][0]["last_minute"] = (start+timedelta(hours=1)).isoformat()
+    planned = sheet_plan(got,[header,raw],[ih,target])["rows"][0]
+    if changed is None:
+        assert len(planned["cells"])==12
+        assert {c["field"]:c["value"] for c in planned["cells"]}["sbprox_quality"]==MATCHED_NONSTANDARD_WINDOW
+        assert raw[9] is False and raw[3] == finish
+    else:
+        assert planned["cells"]==[]

@@ -9,7 +9,7 @@ import uuid
 from birzha.application.canonical_market_mirror import MirrorConflict, digest
 from birzha.application.model3_write_audit import normalized, record, recover
 from birzha.application.model3_indicator_coverage import RI_SBPROX_INDICATOR_COLUMNS
-from birzha.application.sbprox_integration import aggregate, sheet_plan
+from birzha.application.sbprox_integration import aggregate, indexed_minute_reference, sheet_plan
 
 SCHEMA_SHA256 = digest([list(RI_SBPROX_INDICATOR_COLUMNS)])
 OPERATION = 'SBPROX_BLANK_CELL_REPAIR'
@@ -25,7 +25,8 @@ def prepare(service, *, exact_secid, timeframe, start, end, max_cells=12):
     service.transport.validate_model3_target('RI', sheet)
     old = normalized(service.transport.read_rows('RI', sheet))
     source = service.transport.read_sbprox_master()
-    result = aggregate(source, exact_secid, timeframe, start, end, service.now())
+    result = aggregate(source, exact_secid, timeframe, start, end, service.now(),
+                       reference_minutes=indexed_minute_reference(service.transport))
     plan = sheet_plan(result, candles, old)
     candidates = [c for r in plan['rows'] for c in r['cells']]
     selected = candidates[:max_cells]
@@ -77,14 +78,32 @@ def repair(service, *, exact_secid, timeframe, start, end, max_cells=12,
                     raise MirrorConflict('SBPROX_BLANK_EXTENSION_ONLY')
                 expected[r][c] = v
             before, after = digest(old), digest(expected)
+            chosen = {r for r,c,v in edits}
+            references = {tuple(sorted(row['moex_m1_reference'].items())) for row in plan['rows']
+                          if row['moex_m1_reference'] and any(c['row_index'] in chosen for c in row['cells'])}
+            reference_evidence = [dict(items) for items in sorted(references)]
             record(service, run, sheet, 'PREPARED', before=before, after=after, count=len(edits),
                    payload={'operation':OPERATION, 'plan_sha256':expected_plan_sha256,
                             'source_sha256':plan['source_sha256'], 'schema_sha256':SCHEMA_SHA256,
+                            'moex_m1_references':reference_evidence,
                             'cells':[[r,c] for r,c,v in edits]})
             if (normalized(service.transport.read_rows('RI',sheet)) != old
                     or digest(service._schemas('RI',timeframe)) != digest(candles)
                     or service.transport.read_sbprox_master()['sha256'] != plan['source_sha256']):
                 raise MirrorConflict('SBPROX_CONCURRENT_CHANGE_NO_WRITE')
+            if reference_evidence:
+                service.transport.validate_service_target('RI', 'M1_SOURCE_INDEX')
+                index = service.transport.read_service_rows('RI', 'M1_SOURCE_INDEX')
+                for ref in reference_evidence:
+                    hits = [r for r in index[1:] if r[:2] == [ref['secid'], ref['month']]]
+                    if len(hits) != 1 or hits[0][6] != ref['file_id'] or hits[0][8] != ref['sha256']:
+                        raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
+                    metadata = service.transport._request(
+                        'GET', f"https://www.googleapis.com/drive/v3/files/{ref['file_id']}",
+                        params={'fields':'id,sha256Checksum,trashed'})
+                    if (metadata.get('id') != ref['file_id'] or metadata.get('trashed') is not False
+                            or metadata.get('sha256Checksum') != ref['sha256']):
+                        raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
             try:
                 service.transport.model3_write_cells('RI',sheet,edits,existing_only=True,sbprox_only=True)
             except Exception:
