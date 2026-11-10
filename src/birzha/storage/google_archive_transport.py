@@ -139,3 +139,27 @@ class GoogleArchiveTransport(NativeCanonicalSheets):
         _,target=GoogleSheetsBridge.target_for_symbol(symbol);sid=self._sheets[(symbol,'M1_SOURCE_INDEX')]['sheetId']
         def cell(v):return {'userEnteredValue':{'numberValue':v}} if type(v) in (int,float) else {'userEnteredValue':{'stringValue':str(v)}}
         self._request('POST',f'https://sheets.googleapis.com/v4/spreadsheets/{target.spreadsheet_id}:batchUpdate',json={'requests':[{'updateCells':{'start':{'sheetId':sid,'rowIndex':r,'columnIndex':c},'rows':[{'values':[cell(v)]}],'fields':'userEnteredValue'}} for r,c,v in edits]})
+
+    def read_sbprox_master(self):
+        from birzha.application.sbprox_integration import FILE_ID, FOLDER_ID, NAME
+
+        url = f"https://www.googleapis.com/drive/v3/files/{FILE_ID}"
+        fields = "id,name,mimeType,parents,trashed,version,size,sha256Checksum"
+        meta = self._request("GET", url, params={"fields": fields})
+        if (meta.get("id") != FILE_ID or meta.get("name") != NAME
+                or meta.get("parents") != [FOLDER_ID] or meta.get("trashed") is not False
+                or meta.get("mimeType") != "application/zip"
+                or not meta.get("version") or not meta.get("sha256Checksum")
+                or not 0 < int(meta.get("size", 0)) <= MAX_SOURCE_BYTES):
+            raise MirrorConflict("SBPROX_CLOUD_IDENTITY_OR_HASH")
+        cached = getattr(self, "_sbprox_master_cache", None)
+        if cached and cached["version"] == meta["version"] and cached["sha256"] == meta["sha256Checksum"]:
+            return cached
+        body = self._media("GET", url + "?alt=media")
+        after = self._request("GET", url, params={"fields": fields})
+        if (after != meta or len(body) != int(meta["size"])
+                or hashlib.sha256(body).hexdigest() != meta["sha256Checksum"]):
+            raise MirrorConflict("SBPROX_CLOUD_CHANGED_OR_READBACK_FAILED")
+        source = {"body": body, "sha256": meta["sha256Checksum"], "version": meta["version"]}
+        self._sbprox_master_cache = source
+        return source

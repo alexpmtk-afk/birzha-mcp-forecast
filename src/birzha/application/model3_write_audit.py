@@ -6,11 +6,12 @@ from birzha.application.canonical_market_mirror import MirrorConflict, digest
 CLOSED = {'COMMITTED', 'RECOVERED_COMMITTED'}
 
 def normalized(rows):
-    from birzha.application.model3_indicator_coverage import COMPACT_RI_INDICATOR_COLUMNS
-    if not rows or tuple(rows[0]) != COMPACT_RI_INDICATOR_COLUMNS or len(rows)>100000:
+    from birzha.application.model3_indicator_coverage import COMPACT_HEADERS
+    if not rows or tuple(rows[0]) not in COMPACT_HEADERS or len(rows)>100000:
         raise MirrorConflict('MODEL3_RECEIPT_HEADER_INVALID')
-    if any(len(r)>95 for r in rows):raise MirrorConflict('MODEL3_RECEIPT_ROW_INVALID')
-    return [[('' if v is None else v) for v in list(r)+['']*(95-len(r))] for r in rows]
+    width = len(rows[0])
+    if any(len(r)>width for r in rows):raise MirrorConflict('MODEL3_RECEIPT_ROW_INVALID')
+    return [[('' if v is None else v) for v in list(r)+['']*(width-len(r))] for r in rows]
 
 def events(transport):
     transport.validate_service_target('RI', 'QUALITY_AUDIT')
@@ -64,7 +65,7 @@ def recover(service):
         raise MirrorConflict('MODEL3_RECOVERY_PAYLOAD_INVALID') from None
     # Recovery performs NO indicator write; the caller must review before a new batch.
     return {'status': status, 'written': written, 'recovery_only': True,
-            'confirmed_rows': r['affected_rows'] if written and operation != 'BLANK_CELL_REPAIR' else 0,
-            'confirmed_cells': r['affected_rows'] if written and operation == 'BLANK_CELL_REPAIR' else 0,
+            'confirmed_rows': r['affected_rows'] if written and not operation.endswith('BLANK_CELL_REPAIR') else 0,
+            'confirmed_cells': r['affected_rows'] if written and operation.endswith('BLANK_CELL_REPAIR') else 0,
             'operation': operation, 'source_sheet': sheet,
             'forecast_admission': 'NOT_GRANTED'}

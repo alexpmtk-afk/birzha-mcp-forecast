@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import Counter
 
 from birzha.application.model3_indicator_coverage import (
-    COMPACT_RI_INDICATOR_COLUMNS, coverage_summary,
+    COMPACT_RI_INDICATOR_COLUMNS, COMPACT_HEADERS, coverage_summary,
 )
 
 # These are the existing approved 95-column RI research fields. Values in
@@ -57,7 +57,7 @@ def readiness_summary(candles, indicators, *, timeframe):
     candles, indicators = scope_2026(candles, indicators)
     base = coverage_summary(candles, indicators, timeframe=timeframe)
     header = tuple(indicators[0])
-    if header != COMPACT_RI_INDICATOR_COLUMNS:
+    if header not in COMPACT_HEADERS:
         raise ValueError("MODEL3_REQUIRES_EXISTING_95_COLUMN_SCHEMA")
     source_head = tuple(candles[0])
     required_source = (

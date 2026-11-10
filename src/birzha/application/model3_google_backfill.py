@@ -9,7 +9,7 @@ from datetime import date, datetime
 
 from birzha.application.model3_features import research_features, number
 from birzha.application.model3_indicator_coverage import (
-    COMPACT_RI_INDICATOR_COLUMNS, coverage_summary, project_calculated_rows,
+    COMPACT_RI_INDICATOR_COLUMNS, COMPACT_HEADERS, coverage_summary, project_calculated_rows,
 )
 from birzha.application.canonical_market_mirror import MirrorConflict, digest
 from birzha.application.google_first_archive import stamp, packed
@@ -43,7 +43,7 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
         raise MirrorConflict('MODEL3_CALCULATED_AT_REQUIRED')
     if not candles or not daily or not existing:
         raise MirrorConflict('MODEL3_INPUT_REQUIRED')
-    if tuple(existing[0]) != COMPACT_RI_INDICATOR_COLUMNS:
+    if tuple(existing[0]) not in COMPACT_HEADERS:
         raise MirrorConflict('MODEL3_COMPACT_95_ONLY')
     coverage = coverage_summary(candles, existing, timeframe=timeframe)
     col = {name: candles[0].index(name) for name in ('record_key', 'bar_start_time', 'contract_code', 'is_complete')}
@@ -82,7 +82,7 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
     if len(by_source) != len(chosen) or set(by_source) != chosen_keys:
         raise MirrorConflict('MODEL3_GENERATED_SOURCE_KEYS_MISMATCH')
     output = [by_source[r[col['record_key']]] for r in chosen]
-    if any(len(r) != 95 for r in output):
+    if any(len(r) != len(ih) for r in output):
         raise MirrorConflict('MODEL3_ROW_WIDTH_MISMATCH')
     return {'status': 'MODEL3_RESEARCH_BACKFILL_PLAN', 'written': False,
             'timeframe': timeframe, 'planned_rows': len(output),
@@ -94,7 +94,7 @@ def plan_ri_indicator_backfill(*, candles, daily, existing, timeframe,
             'coverage': coverage, 'forecast_admission': 'NOT_GRANTED',
             'calendar': 'UNVERIFIED', 'historical_availability': 'UNKNOWN',
             'minute_features': 'APPROX_SOURCE_M1' if minute_features else 'UNAVAILABLE',
-            'indicator_columns': 95, 'calculated_at': calculated_at}, output
+            'indicator_columns': len(ih), 'calculated_at': calculated_at}, output
 
 
 def minute_features_from_existing_drive(*, transport, candles, timeframe,
