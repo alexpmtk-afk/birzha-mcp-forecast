@@ -131,6 +131,17 @@ def build_app(service,token,*,sbprox_month_writer=False):
         except MirrorConflict as exc:
             return {'job_state':'BLOCKED','code':str(exc),'written':False}
 
+    @mcp.tool(name='archive.sbprox_sync',
+              description='Plan or apply RI H1 SBProX from saved Drive data into existing Google rows. Supply month, year, inclusive from_date/till_date, or no dates to discover the current source range and fill holes. Dry-run by default. Poll archive.sbprox_month_status.')
+    def sbprox_sync(month:str='',year:int|None=None,from_date:str='',till_date:str='',
+                    dry_run:bool=True,owner_confirmed:bool=False,
+                    external_writer_exclusion_confirmed:bool=False,expected_plan_sha256:str='')->dict:
+        try:
+            return monthly.start_sync(month,year,from_date,till_date,dry_run,owner_confirmed,
+                                      external_writer_exclusion_confirmed,expected_plan_sha256)
+        except MirrorConflict as exc:
+            return {'job_state':'BLOCKED','code':str(exc),'written':False}
+
     @mcp.tool(name='archive.sbprox_month_status',annotations=read,
               description='Read progress, confirmed batches and exact RI month gaps. This call does not start a write.')
     def sbprox_month_status(job_id:str,offset:int=0,limit:int=50)->dict:

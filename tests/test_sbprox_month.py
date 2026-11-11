@@ -1,6 +1,9 @@
 """Month acceptance through the registered MCP tools and an isolated Google book."""
 import asyncio
 from copy import deepcopy
+from datetime import datetime
+
+import pytest
 import json
 
 import httpx
@@ -9,6 +12,7 @@ from birzha.application import sbprox_month
 from birzha.application.sbprox_integration import CLOCK_WINDOW, OUTPUTS
 from birzha.mcp.archive_server import build_app
 from test_sbprox_field_repair import Book, service, HEADER, ARGS
+from test_sbprox_integration import reference, source
 
 
 def test_month_mcp_fills_multiple_batches_and_preserves_parallel_contract(monkeypatch):
@@ -28,9 +32,15 @@ def test_month_mcp_fills_multiple_batches_and_preserves_parallel_contract(monkey
     later[index['end']] = '2026-02-11T10:59:59+03:00'
     later[index['record_key']] = 'later'
     later[index['source_record_key']] = 'later-raw'
-    book.rows.extend([parallel,later])
+    latest = list(later)
+    latest[index['begin']] = '2026-02-11T11:00:00+03:00'
+    latest[index['end']] = '2026-02-11T11:59:59+03:00'
+    latest[index['record_key']] = 'latest'
+    latest[index['source_record_key']] = 'latest-raw'
+    book.rows.extend([parallel, later, latest])
     book.raw.extend([['parallel-raw','RIM6',parallel[index['begin']],100,100,100,100,150,True,'raw-sha',parallel[index['end']]],
                      ['later-raw','RIH6',later[index['begin']],100,100,100,100,150,True,'raw-sha',later[index['end']]]])
+    book.raw.append(['latest-raw','RIH6',latest[index['begin']],100,100,100,100,150,True,'raw-sha',latest[index['end']]])
     original = deepcopy(book.rows)
     values = {f:1 for f in OUTPUTS}
     values['sbprox_quality'] = CLOCK_WINDOW
@@ -38,11 +48,14 @@ def test_month_mcp_fills_multiple_batches_and_preserves_parallel_contract(monkey
     def aggregate(source, secid, tf, left, right, now, **kwargs):
         rows = [dict(secid=secid,timeframe=tf,begin=begin,ohlcv=[100,100,100,100,150],
                      values=values,moex_m1_reference=None)
-                for begin in (row[index['begin']],later[index['begin']])
+                for begin in (row[index['begin']],later[index['begin']],latest[index['begin']])
                 if secid=='RIH6' and left<=begin<right]
         return {'rows':rows}
 
-    monkeypatch.setattr(sbprox_month,'aggregate',aggregate)
+    def observed(service, source, a, b, reference):
+        return aggregate(source, 'RIH6', 'H1', a.isoformat(), b.isoformat(), service.now())['rows']
+
+    monkeypatch.setattr(sbprox_month, 'observed_hours', observed)
     monkeypatch.setattr(sbprox_month,'ROWS_PER_BATCH',1)
     app = build_app(service(book,writer=False),'test',sbprox_month_writer=True)
 
@@ -69,8 +82,8 @@ def test_month_mcp_fills_multiple_batches_and_preserves_parallel_contract(monkey
                     result=response.json()['result']
                     return result.get('structuredContent') or json.loads(result['content'][0]['text'])
 
-                async def month(**kwargs):
-                    out=await tool('archive.sbprox_fill_month',dict(month='2026-02',**kwargs))
+                async def job(name='archive.sbprox_fill_month', **kwargs):
+                    out=await tool(name, kwargs)
                     assert out['job_id']
                     for _ in range(100):
                         out=await tool('archive.sbprox_month_status',dict(job_id=out['job_id']))
@@ -80,16 +93,30 @@ def test_month_mcp_fills_multiple_batches_and_preserves_parallel_contract(monkey
                         await asyncio.sleep(.01)
                     raise AssertionError('month job did not complete')
 
-                p=await month()
-                assert p['planned_cells']==24 and p['parallel_contract_hours']==1 and p['gap_rows']==1
+                p=await job(month='2026-02')
+                explicit = await job('archive.sbprox_sync', from_date='2026-02-11', till_date='2026-02-11')
+                annual = await job('archive.sbprox_sync', year=2026)
+                auto = await job('archive.sbprox_sync')
+                assert explicit['planned_cells'] == annual['planned_cells'] == auto['planned_cells'] == 36
+                assert auto['source_last_hour'] == latest[index['begin']]
+                assert auto['first_pending_hour'] == row[index['begin']]
+                assert p['planned_cells']==36 and p['parallel_contract_hours']==1 and p['gap_rows']==1
                 assert p['gaps'][0]['secid']=='RIM6' and p['gaps'][0]['other_contracts_observed']==['RIH6']
                 assert book.writes==0 and not book.audit
-                applied=await month(dry_run=False,owner_confirmed=True,
-                    external_writer_exclusion_confirmed=True,expected_plan_sha256=p['plan_sha256'])
+                # Simulate a filled newer row from an older archive revision.
+                for name in OUTPUTS:
+                    book.rows[-1][index[name]] = values[name]
+                book.rows[-1][index['sbprox_source_sha256']] = 'previous-revision'
+                auto = await job('archive.sbprox_sync')
+                assert auto['last_filled_hour'] == latest[index['begin']]
+                assert auto['first_pending_hour'] == row[index['begin']] and auto['planned_cells'] == 24
+                applied=await job('archive.sbprox_sync', dry_run=False,owner_confirmed=True,
+                    external_writer_exclusion_confirmed=True,expected_plan_sha256=auto['plan_sha256'])
                 assert applied['confirmed_cells']==24 and book.writes==2
                 assert book.rows[3]==original[3] and all(r[:95]==old[:95] for r,old in zip(book.rows,original))
+                assert book.rows[-1][index['sbprox_source_sha256']] == 'previous-revision'
                 assert [e['status'] for e in book.audit]==['STARTED','PREPARED','COMMITTED']*2
-                assert (await month())['planned_cells']==0 and book.writes==2
+                assert (await job('archive.sbprox_sync'))['planned_cells']==0 and book.writes==2
     asyncio.run(check())
 
 
@@ -140,3 +167,33 @@ def test_month_lost_reply_keeps_pending_receipt_and_does_not_resend():
     result = recover(s)
     assert result['status']=='RECOVERED_COMMITTED' and result['confirmed_cells']==1
     assert book.writes==1 and book.rows[2][95]==150
+
+
+def test_range_bounds_accept_current_month_and_exclude_open_hour():
+    now = datetime.fromisoformat('2026-11-11T12:43:00+03:00')
+    p, a, b, automatic = sbprox_month.sync_window(now, '2026-11', None, '', '')
+    assert p == '2026-11' and a.day == 1 and b == now.replace(minute=0) and not automatic
+    _, _, b, automatic = sbprox_month.sync_window(now, '', None, '', '')
+    assert b == now.replace(minute=0) and automatic
+    _, a, b, _ = sbprox_month.sync_window(now, '', None, '2026-02-28', '2026-03-01')
+    assert a.isoformat() == '2026-02-28T00:00:00+03:00'
+    assert b.isoformat() == '2026-03-02T00:00:00+03:00'
+    with pytest.raises(sbprox_month.MirrorConflict, match='ARGUMENTS_CONFLICT'):
+        sbprox_month.sync_window(now, '2026-11', 2026, '', '')
+    with pytest.raises(sbprox_month.MirrorConflict, match='NO_COMPLETED_HOUR'):
+        sbprox_month.sync_window(now, '2026-12', None, '', '')
+
+
+def test_source_hour_without_canonical_row_is_reported(source):
+    book = Book(source)
+    book.read_m1 = lambda *args: None
+    s = service(book)
+    s.now = lambda: datetime.fromisoformat('2026-11-11T12:43:00+03:00')
+    book.rows[2][HEADER.index('begin')] = '2026-02-12T09:00:00+03:00'
+    book.rows[2][HEADER.index('timeframe')] = 'H1'
+    p = sbprox_month.make_plan(s, 'update',
+        datetime.fromisoformat('2026-01-01T00:00:00+03:00'), s.now(), automatic=True)[0]
+    assert p['source_last_hour'] == '2026-02-11T09:00:00+03:00'
+    assert p['source_without_target_rows'] == 1
+    assert p['gap_counts'] == {'NO_CANONICAL_INDICATOR_ROW': 1}
+    assert p['planned_cells'] == 0 and book.writes == 0

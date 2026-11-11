@@ -1,4 +1,4 @@
-"""Run one explicit RI SBProX month without a scheduler or local data store."""
+"""Run RI SBProX backfill inside the archive MCP."""
 
 from collections import Counter, defaultdict
 from copy import deepcopy
@@ -10,7 +10,9 @@ from birzha.application.canonical_market_mirror import MirrorConflict, digest
 from birzha.application.model3_indicator_coverage import RI_SBPROX_INDICATOR_COLUMNS
 from birzha.application.model3_write_audit import normalized, record, recover
 from birzha.application.sbprox_field_repair import OPERATION, SCHEMA_SHA256, verify_moex_references
-from birzha.application.sbprox_integration import aggregate, indexed_minute_reference, sheet_plan
+from birzha.application.sbprox_integration import (
+    OUTPUTS, aggregate_open_master, indexed_minute_reference, open_master, sheet_plan,
+)
 from birzha.application.sbprox_moex_comparison import moscow
 from birzha.providers.sbprox_ri import MOSCOW, SERIES
 
@@ -18,7 +20,7 @@ SHEET = 'H1_INDICATORS'
 ROWS_PER_BATCH = 100
 
 
-def month_window(month, now):
+def month_window(month, now, *, include_open_month=False):
     try:
         start = date.fromisoformat(month + '-01')
     except (TypeError, ValueError):
@@ -28,7 +30,12 @@ def month_window(month, now):
     stop = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
     a = datetime.combine(start, datetime.min.time(), MOSCOW)
     b = datetime.combine(stop, datetime.min.time(), MOSCOW)
-    if b > now.astimezone(MOSCOW):
+    closed = now.astimezone(MOSCOW).replace(minute=0, second=0, microsecond=0)
+    if include_open_month:
+        b = min(b, closed)
+        if a >= b:
+            raise MirrorConflict('SBPROX_NO_COMPLETED_HOUR_IN_RANGE')
+    elif b > closed:
         raise MirrorConflict('SBPROX_COMPLETED_MONTH_REQUIRED')
     return a, b
 
@@ -41,38 +48,103 @@ def read_indicators(transport):
     return rows
 
 
-def make_plan(service, month, a, b):
+def sync_window(now, month, year, from_date, till_date):
+    """Choose explicit inclusive dates or scan the source year for holes."""
+    first, limit = date(2026, 1, 1), date(2027, 1, 1)
+    closed = now.astimezone(MOSCOW).replace(minute=0, second=0, microsecond=0)
+    midnight = lambda day: datetime.combine(day, datetime.min.time(), MOSCOW)
+    if month:
+        if year is not None or from_date or till_date:
+            raise MirrorConflict('SBPROX_PERIOD_ARGUMENTS_CONFLICT')
+        a, b = month_window(month, now, include_open_month=True)
+        return month, a, b, False
+    if year is not None:
+        if from_date or till_date:
+            raise MirrorConflict('SBPROX_PERIOD_ARGUMENTS_CONFLICT')
+        if year != 2026:
+            raise MirrorConflict('SBPROX_SOURCE_YEAR_REQUIRED')
+        return str(year), midnight(first), min(midnight(limit), closed), False
+    if not from_date and not till_date:
+        return 'update', midnight(first), min(midnight(limit), closed), True
+    try:
+        start, finish = date.fromisoformat(from_date), date.fromisoformat(till_date)
+        if from_date != start.isoformat() or till_date != finish.isoformat():
+            raise ValueError
+    except (TypeError, ValueError):
+        raise MirrorConflict('SBPROX_EXPLICIT_DATE_RANGE_REQUIRED') from None
+    if not first <= start <= finish < limit:
+        raise MirrorConflict('SBPROX_DATE_RANGE_OUTSIDE_SOURCE_YEAR')
+    a, b = midnight(start), min(midnight(finish + timedelta(days=1)), closed)
+    if a >= b:
+        raise MirrorConflict('SBPROX_NO_COMPLETED_HOUR_IN_RANGE')
+    return f'{start}/{finish}', a, b, False
+
+
+def observed_hours(service, source, a, b, reference):
+    """Read one verified archive, with calendar bounds derived from its minute rows."""
+    now = service.now()
+    hours = []
+    with open_master(source) as master:
+        db, _ = master
+        if a >= b:
+            return hours
+        coverage = db.execute("""
+            SELECT secid, epoch(min(minute_start::TIMESTAMPTZ)), epoch(max(minute_start::TIMESTAMPTZ))
+            FROM M1_BARS
+            WHERE minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?
+            GROUP BY secid ORDER BY secid
+        """, [a, b]).fetchall()
+        for secid, first, last in coverage:
+            left = datetime.fromtimestamp(first, MOSCOW).replace(minute=0, second=0, microsecond=0)
+            stop = datetime.fromtimestamp(last, MOSCOW).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            while left < stop:
+                right = min(left + timedelta(days=7), stop)
+                result = aggregate_open_master(source, master, secid, 'H1', left.isoformat(),
+                                               right.isoformat(), now, reference_minutes=reference)
+                hours.extend(result['rows'])
+                left = right
+    return hours
+
+
+def make_plan(service, period, a, b, *, automatic=False):
     transport = service.transport
     candles = service._schemas('RI', 'H1')
     old = read_indicators(transport)
     header = {field: i for i, field in enumerate(old[0])}
+    source = transport.read_sbprox_master()
+    reference = indexed_minute_reference(transport)
+    observations = observed_hours(service, source, a, b, reference)
+    source_first = min((moscow(row['begin']) for row in observations), default=None)
+    source_last = max((moscow(row['begin']) for row in observations), default=None)
     targets = {}
+    complete = set()
+    latest_filled = None
     for row_number, row in enumerate(old[1:], 1):
-        if not str(row[header['begin']]).startswith(month + '-'):
+        value = str(row[header['begin']])
+        if not value.startswith('2026-'):
+            continue
+        begin = moscow(value)
+        if not a <= begin < b:
+            continue
+        filled = all(row[header[field]] != '' for field in OUTPUTS)
+        if filled and (latest_filled is None or begin > latest_filled):
+            latest_filled = begin
+        if automatic and (source_first is None or not source_first <= begin <= source_last):
             continue
         contract = row[header['secid']]
-        begin = moscow(row[header['begin']])
         if row[header['symbol']] != 'RI' or row[header['timeframe']] != 'H1' or contract not in SERIES.values():
             raise MirrorConflict('SBPROX_MONTH_TARGET_IDENTITY')
         key = contract, begin
         if key in targets:
             raise MirrorConflict('SBPROX_DUPLICATE_EXACT_CONTRACT_HOUR')
         targets[key] = row_number
-    if not targets:
-        raise MirrorConflict('SBPROX_MONTH_EXISTING_ROWS_REQUIRED')
+        if filled:
+            complete.add(key)
 
     contracts = sorted({key[0] for key in targets})
-    source = transport.read_sbprox_master()
-    reference = indexed_minute_reference(transport)
-    rows = []
-    left = a
-    while left < b:
-        right = min(left + timedelta(days=7), b)
-        for secid in contracts:
-            result = aggregate(source, secid, 'H1', left.isoformat(), right.isoformat(),
-                               service.now(), reference_minutes=reference)
-            rows.extend(r for r in result['rows'] if (r['secid'], moscow(r['begin'])) in targets)
-        left = right
+    observed = {(row['secid'], moscow(row['begin'])): row for row in observations}
+    without_target = observed.keys() - targets.keys()
+    rows = [row for key, row in observed.items() if key in targets and key not in complete]
     base = sheet_plan({'rows': rows, 'source_sha256': source['sha256']}, candles, old)
     by_key = {(r['secid'], moscow(r['begin'])): r for r in base['rows']}
     by_hour = defaultdict(set)
@@ -80,23 +152,40 @@ def make_plan(service, month, a, b):
         by_hour[begin].add(secid)
     gaps = []
     for (secid, begin), number in targets.items():
+        if (secid, begin) in complete:
+            continue
         candidate = by_key.get((secid, begin))
         reasons = candidate['reasons'] if candidate else ['NO_SBPROX_WINDOW']
         if reasons:
             other_observed = sorted(c for c in by_hour[begin]
-                                    if c != secid and (c, begin) in by_key)
+                                    if c != secid and (c, begin) in observed)
             gaps.append(dict(sheet_row=number+1, secid=secid, begin=begin.isoformat(),
                              reasons=reasons, other_contracts_observed=other_observed))
     selected = sorted((r for r in base['rows'] if r['cells']),
                       key=lambda r: r['cells'][0]['row_index'])
-    report = dict(month=month, sheet=SHEET, contracts=contracts, target_rows=len(targets),
+    write_rows = [r['cells'][0]['row_index'] + 1 for r in selected]
+    first_pending = min((moscow(r['begin']) for r in selected), default=None)
+    gaps.extend(dict(secid=secid, begin=begin.isoformat(), reasons=['NO_CANONICAL_INDICATOR_ROW'])
+                for secid, begin in sorted(without_target, key=lambda key: (key[1], key[0])))
+    report = dict(month=period, sheet=SHEET, contracts=contracts, target_rows=len(targets),
+                  from_time=a.isoformat(), before_time=b.isoformat(), automatic=automatic,
+                  source_first_hour=source_first.isoformat() if source_first else None,
+                  source_last_hour=source_last.isoformat() if source_last else None,
+                  last_filled_hour=latest_filled.isoformat() if latest_filled else None,
+                  first_pending_hour=first_pending.isoformat() if first_pending else None,
+                  already_filled_rows=len(complete), source_without_target_rows=len(without_target),
                   distinct_hours=len(by_hour), parallel_contract_hours=sum(len(c)>1 for c in by_hour.values()),
                   planned_rows=len(selected), planned_cells=sum(len(r['cells']) for r in selected),
+                  first_write_row=write_rows[0] if write_rows else None,
+                  last_write_row=write_rows[-1] if write_rows else None,
                   gap_rows=len(gaps), gap_counts=dict(Counter(x for g in gaps for x in g['reasons'])),
-                  other_contract_observed_gap_rows=sum(bool(g['other_contracts_observed']) for g in gaps),
+                  other_contract_observed_gap_rows=sum(bool(g.get('other_contracts_observed')) for g in gaps),
                   gaps=gaps, source_sha256=source['sha256'], forecast_admission='NOT_GRANTED')
-    report['plan_sha256'] = digest([[month, SCHEMA_SHA256, base['plan_sha256'], digest(candles), digest(old)]])
-    return report, selected, old, digest(candles)
+    candle_sha = digest(candles)
+    target_keys = [[secid, begin.isoformat()] for secid, begin in targets]
+    report['plan_sha256'] = digest([[period, a.isoformat(), SCHEMA_SHA256, source['sha256'],
+                                     base['plan_sha256'], target_keys, gaps, candle_sha, digest(old)]])
+    return report, selected, old, candle_sha
 
 
 def apply_batches(service, report, selected, old, candle_sha, progress):
@@ -219,13 +308,24 @@ class MonthlyJobs:
 
     def start(self, month, dry_run, owner_confirmed, external_writer_exclusion_confirmed,
               expected_plan_sha256):
-        a,b = month_window(month,self.service.now())
+        a, b = month_window(month, self.service.now())
+        return self._start(month, a, b, False, dry_run, owner_confirmed,
+                           external_writer_exclusion_confirmed, expected_plan_sha256)
+
+    def start_sync(self, month, year, from_date, till_date, dry_run, owner_confirmed,
+                   external_writer_exclusion_confirmed, expected_plan_sha256):
+        period, a, b, automatic = sync_window(self.service.now(), month, year, from_date, till_date)
+        return self._start(period, a, b, automatic, dry_run, owner_confirmed,
+                           external_writer_exclusion_confirmed, expected_plan_sha256)
+
+    def _start(self, period, a, b, automatic, dry_run, owner_confirmed,
+               external_writer_exclusion_confirmed, expected_plan_sha256):
         if any(type(v) is not bool for v in (dry_run, owner_confirmed, external_writer_exclusion_confirmed)):
             raise MirrorConflict('SBPROX_EXPLICIT_BOOLEANS_REQUIRED')
         if not dry_run and (not self.allow_write or not owner_confirmed
                             or not external_writer_exclusion_confirmed or not expected_plan_sha256):
             raise MirrorConflict('SBPROX_MONTH_OWNER_WRITER_EXCLUSION_PLAN_REQUIRED')
-        return self._launch(month, dry_run, self._run, (month,a,b,dry_run,expected_plan_sha256))
+        return self._launch(period, dry_run, self._run, (period, a, b, automatic, dry_run, expected_plan_sha256))
 
     def start_series(self, month):
         month_window(month, self.service.now())
@@ -266,14 +366,14 @@ class MonthlyJobs:
         with self.lock:
             self.jobs[job].update(fields)
 
-    def _run(self, job, month, a, b, dry_run, expected):
+    def _run(self, job, period, a, b, automatic, dry_run, expected):
         def update(**fields):
             with self.lock:
                 self.jobs[job].update(fields)
         s = self.service
         try:
             if dry_run:
-                report = make_plan(s, month, a, b)[0]
+                report = make_plan(s, period, a, b, automatic=automatic)[0]
                 result = dict(report, status='DRY_RUN', written=False)
             else:
                 with s.transport.writer_guard('RI'):
@@ -284,7 +384,7 @@ class MonthlyJobs:
                         if recovered is not None:
                             result = recovered
                         else:
-                            report, selected, old, candle_sha = make_plan(s, month, a, b)
+                            report, selected, old, candle_sha = make_plan(s, period, a, b, automatic=automatic)
                             if report['plan_sha256'] != expected:
                                 raise MirrorConflict('SBPROX_MONTH_PLAN_CHANGED')
                             result = apply_batches(s, report, selected, old, candle_sha, update)

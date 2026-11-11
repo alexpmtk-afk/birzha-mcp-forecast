@@ -132,17 +132,24 @@ def indexed_minute_reference(transport):
 
 
 def aggregate(source, secid, timeframe, start, end, now, *, reference_minutes=None):
+    with open_master(source) as master:
+        return aggregate_open_master(source, master, secid, timeframe, start, end, now,
+                                     reference_minutes=reference_minutes)
+
+
+def aggregate_open_master(source, master, secid, timeframe, start, end, now, *, reference_minutes=None):
+    """Aggregate a bounded window using an already verified source snapshot."""
     a, b = _window(secid, start, end, now)
     if timeframe not in ("M15", "H1", "D1"):
         raise ValueError("TIMEFRAME_REQUIRED")
-    with open_master(source) as (db, manifest):
-        all_rows = db.execute("""SELECT secid,minute_start,trade_session_date,session_quality,
-            open,high,low,close,volume,ask,bid,delta FROM M1_BARS
-            WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?
-            ORDER BY minute_start""", [secid, a, b]).fetchall()
-        levels = db.execute("""SELECT minute_start,price,volume FROM PRICE_LEVELS
-            WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?""",
-                            [secid, a, b]).fetchall()
+    db, manifest = master
+    all_rows = db.execute("""SELECT secid,minute_start,trade_session_date,session_quality,
+        open,high,low,close,volume,ask,bid,delta FROM M1_BARS
+        WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?
+        ORDER BY minute_start""", [secid, a, b]).fetchall()
+    levels = db.execute("""SELECT minute_start,price,volume FROM PRICE_LEVELS
+        WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?""",
+                        [secid, a, b]).fetchall()
     groups, minute_keys = {}, {}
     for row in all_rows:
         t = datetime.fromisoformat(row[1]).astimezone(MOSCOW)
