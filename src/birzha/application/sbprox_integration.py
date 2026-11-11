@@ -204,10 +204,12 @@ def verified_nonstandard_hour(row, candle, target):
     """Preserve MOEX's original hour while admitting corroborated observations."""
     proof = row.get("archived_moex_hour")
     ref = row.get("moex_m1_reference")
+    complete = proof.get("is_complete") if proof else None
+    matching_flags = (complete, str(complete).upper())
     if (row["timeframe"] != "H1" or not proof or not ref
-            or candle.get("is_complete") not in (False, "FALSE")
-            or target.get("source_complete_flag") not in (False, "FALSE")
-            or proof.get("is_complete") is not False
+            or type(complete) is not bool
+            or candle.get("is_complete") not in matching_flags
+            or target.get("source_complete_flag") not in matching_flags
             or proof.get("secid") != row["secid"]
             or not proof.get("normalized_sha256")
             or candle.get("normalized_sha256") != proof["normalized_sha256"]
@@ -218,6 +220,7 @@ def verified_nonstandard_hour(row, candle, target):
         start, finish = moscow(proof["begin"]), moscow(proof["end"])
         return (start == moscow(row["begin"])
                 and moscow(row["last_minute"]) <= finish < start + timedelta(hours=1)
+                and (not complete or finish != start + timedelta(minutes=59, seconds=59))
                 and finish == moscow(candle["bar_end_time"]) == moscow(target["end"]))
     except (KeyError, TypeError, ValueError):
         return False
