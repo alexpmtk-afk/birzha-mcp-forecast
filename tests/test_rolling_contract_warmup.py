@@ -6,6 +6,11 @@ from birzha.application.historical_data import (
     HistoricalDataIncompleteError,
     HistoricalDataService,
 )
+from birzha.application.warmup_session_evidence import (
+    WarmupSessionEvidenceOrigin,
+    read_verified_warmup_session_dates,
+    warmup_session_evidence_key,
+)
 from birzha.domain.market import Candle, CandleSeries, Instrument
 from birzha.storage.historical_store import DuckDBHistoricalCandleStore
 
@@ -132,6 +137,28 @@ def test_rolling_contract_warmup_is_stored_but_not_added_to_root_sessions(monkey
         till_date="2025-01-11",
     )
 
+    warmup_dates = (date(2025, 1, 8), date(2025, 1, 9))
+    evidence_key = warmup_session_evidence_key(
+        secid=GOLD_NEXT.secid,
+        expected_dates=warmup_dates,
+        origin=WarmupSessionEvidenceOrigin.CAPTURED_AT_SYNC,
+    )
+    assert store.is_session_range_verified(
+        evidence_key, "2025-01-08", "2025-01-09"
+    ) is True
+    assert store.stored_session_contracts(
+        evidence_key, "2025-01-08", "2025-01-09"
+    ) == (("2025-01-08", "GDM5"), ("2025-01-09", "GDM5"))
+    assert read_verified_warmup_session_dates(
+        store,
+        evidence_key=evidence_key,
+        secid="GDM5",
+        from_date="2025-01-08",
+        till_date="2025-01-09",
+    ) == warmup_dates
+    legacy_key = "GDM5#CONTRACT_WARMUP_V2_ACTIVITY"
+    assert store.stored_sessions(legacy_key, "2025-01-08", "2025-01-09") == ()
+
     assert market.fetches == [
         ("D1", "2025-01-08", "2025-01-09"),
         ("D1", "2025-01-10", "2025-01-11"),
@@ -160,8 +187,122 @@ def test_rolling_contract_warmup_is_stored_but_not_added_to_root_sessions(monkey
             "GOLD", from_date="2025-01-01", till_date="2025-01-12"
         )
     ) == ("2025-01-10", "2025-01-11", "2025-01-12")
+    assert store.stored_session_contracts(
+        evidence_key, "2025-01-08", "2025-01-09"
+    ) == (("2025-01-08", "GDM5"), ("2025-01-09", "GDM5"))
     store.close()
 
+
+class _ConfiguredCalendar:
+    expected_dates: tuple[date, ...] = ()
+
+    def __init__(self, provider):
+        pass
+
+    def dates(self, *, from_date, till_date, **kwargs):
+        return tuple(
+            day
+            for day in self.expected_dates
+            if from_date <= day <= till_date
+        )
+
+
+def test_warmup_date_change_creates_a_distinct_idempotent_generation(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _ConfiguredCalendar)
+    store = DuckDBHistoricalCandleStore()
+    service = HistoricalDataService(  # type: ignore[arg-type]
+        market_data=_Market(), store=store
+    )
+    _ConfiguredCalendar.expected_dates = (date(2025, 1, 8), date(2025, 1, 9))
+    service._sync_contract_warmup(
+        GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START
+    )
+    first_key = warmup_session_evidence_key(
+        secid="GDM5",
+        expected_dates=_ConfiguredCalendar.expected_dates,
+        origin=WarmupSessionEvidenceOrigin.CAPTURED_AT_SYNC,
+    )
+
+    _ConfiguredCalendar.expected_dates = (
+        date(2025, 1, 7),
+        date(2025, 1, 8),
+        date(2025, 1, 9),
+    )
+    service._sync_contract_warmup(
+        GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START
+    )
+    second_key = warmup_session_evidence_key(
+        secid="GDM5",
+        expected_dates=_ConfiguredCalendar.expected_dates,
+        origin=WarmupSessionEvidenceOrigin.CAPTURED_AT_SYNC,
+    )
+    assert first_key != second_key
+    assert store.stored_session_contracts(
+        first_key, "2025-01-08", "2025-01-09"
+    ) == (("2025-01-08", "GDM5"), ("2025-01-09", "GDM5"))
+    assert store.stored_session_contracts(
+        second_key, "2025-01-07", "2025-01-09"
+    ) == (
+        ("2025-01-07", "GDM5"),
+        ("2025-01-08", "GDM5"),
+        ("2025-01-09", "GDM5"),
+    )
+    assert store.is_session_range_verified(
+        first_key, "2025-01-08", "2025-01-09"
+    ) is True
+    assert store.is_session_range_verified(
+        second_key, "2025-01-07", "2025-01-09"
+    ) is True
+
+    service._sync_contract_warmup(
+        GOLD_NEXT, timeframe="D1", active_start=ACTIVE_START
+    )
+    assert store.stored_session_contracts(
+        second_key, "2025-01-07", "2025-01-09"
+    ) == (
+        ("2025-01-07", "GDM5"),
+        ("2025-01-08", "GDM5"),
+        ("2025-01-09", "GDM5"),
+    )
+    store.close()
+
+
+def test_legacy_warmup_marker_is_not_promoted_to_exact_session_evidence(monkeypatch) -> None:
+    import birzha.application.historical_data as module
+
+    monkeypatch.setattr(module, "MoexTradingCalendar", _Calendar)
+    store = DuckDBHistoricalCandleStore()
+    legacy_key = "GDM5#CONTRACT_WARMUP_V2_ACTIVITY"
+    store.mark_verified(legacy_key, "D1", "2025-01-08", "2025-01-09")
+    market = _Market()
+    service = _RollingHistory(
+        market_data=market, store=store
+    )  # type: ignore[arg-type]
+
+    service.sync(
+        "GOLD",
+        timeframe="D1",
+        from_date="2025-01-01",
+        till_date="2025-01-11",
+    )
+
+    assert market.fetches == [
+        ("D1", "2025-01-08", "2025-01-09"),
+        ("D1", "2025-01-10", "2025-01-11"),
+    ]
+    assert store.is_verified(legacy_key, "D1", "2025-01-08", "2025-01-09") is True
+    assert store.stored_sessions(legacy_key, "2025-01-08", "2025-01-09") == ()
+    evidence_key = warmup_session_evidence_key(
+        secid="GDM5",
+        expected_dates=(date(2025, 1, 8), date(2025, 1, 9)),
+        origin=WarmupSessionEvidenceOrigin.CAPTURED_AT_SYNC,
+    )
+    assert store.is_session_range_verified(
+        evidence_key, "2025-01-08", "2025-01-09"
+    ) is True
+    store.close()
 
 def test_incomplete_preroll_response_blocks_root_readiness(monkeypatch) -> None:
     import birzha.application.historical_data as module
@@ -190,4 +331,15 @@ def test_incomplete_preroll_response_blocks_root_readiness(monkeypatch) -> None:
         from_date="2025-01-01",
         till_date="2025-01-11",
     ) is False
+    evidence_key = warmup_session_evidence_key(
+        secid=GOLD_NEXT.secid,
+        expected_dates=(date(2025, 1, 8), date(2025, 1, 9)),
+        origin=WarmupSessionEvidenceOrigin.CAPTURED_AT_SYNC,
+    )
+    assert store.is_session_range_verified(
+        evidence_key, "2025-01-08", "2025-01-09"
+    ) is False
+    assert store.stored_session_contracts(
+        evidence_key, "2025-01-08", "2025-01-09"
+    ) == ()
     store.close()
