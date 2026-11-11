@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import asdict, dataclass
 
 from birzha.domain.flow import MarketFlowSnapshot
@@ -99,3 +101,16 @@ class MarketSnapshot:
             "quality_contract": self.quality_contract.to_dict() if self.quality_contract else None,
             "warnings": list(self.warnings),
         }
+
+
+def market_snapshot_id(snapshot: MarketSnapshot) -> str:
+    """Return the stable content identity used by Forecast and Market State."""
+    payload = json.dumps(
+        snapshot.to_dict(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+    return f"snap_{digest}"

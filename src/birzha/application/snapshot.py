@@ -50,6 +50,16 @@ class MarketSnapshotService:
         return cls(market_data=market_data, flow=flow)
 
     def build(self, symbol: str, *, as_of_date: str | None = None) -> MarketSnapshot:
+        snapshot, _ = self.build_with_instrument(symbol, as_of_date=as_of_date)
+        return snapshot
+
+    def build_with_instrument(
+        self,
+        symbol: str,
+        *,
+        as_of_date: str | None = None,
+    ) -> tuple[MarketSnapshot, Instrument]:
+        """Build a causal snapshot and return its exact resolved instrument."""
         till = date.fromisoformat(as_of_date) if as_of_date else datetime.now(MOEX_TIMEZONE).date()
         instrument = self.market_data.resolve(symbol, as_of=till)
 
@@ -125,17 +135,19 @@ class MarketSnapshotService:
             flow_status=flow_status,
             reasons=tuple(warnings),
         )
-        volume_profile = (
-            flow_snapshot.volume_profile
-            if flow_snapshot is not None and flow_snapshot.volume_profile is not None
-            else None
-        )
-        if volume_profile is None:
-            volume_profile = profile_from_candles(h1, bins=24)
-            if volume_profile is not None:
-                warnings.append("VOLUME_PROFILE:approximate_candle_proxy")
-        else:
-            warnings.append("VOLUME_PROFILE:public_trades_exact")
+        volume_profile = None
+        if "VOLUME" in instrument.data_capabilities:
+            volume_profile = (
+                flow_snapshot.volume_profile
+                if flow_snapshot is not None and flow_snapshot.volume_profile is not None
+                else None
+            )
+            if volume_profile is None:
+                volume_profile = profile_from_candles(h1, bins=24)
+                if volume_profile is not None:
+                    warnings.append("VOLUME_PROFILE:approximate_candle_proxy")
+            else:
+                warnings.append("VOLUME_PROFILE:public_trades_exact")
         source = (
             "MOEX_ISS"
             if flow_snapshot is None or flow_snapshot.source == "NOT_APPLICABLE_FOR_INDEX"
@@ -151,7 +163,7 @@ class MarketSnapshotService:
             flow=flow_snapshot,
             volume_profile=volume_profile,
         )
-        return MarketSnapshot(
+        snapshot = MarketSnapshot(
             symbol=symbol,
             secid=instrument.secid,
             as_of=causal_t0,
@@ -166,6 +178,7 @@ class MarketSnapshotService:
             quality_contract=quality_contract,
             warnings=tuple(warnings),
         )
+        return snapshot, instrument
 
 
 def _load_m15(

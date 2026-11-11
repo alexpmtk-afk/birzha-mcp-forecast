@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
+import birzha.application.snapshot as snapshot_module
 from birzha.application.snapshot import MarketSnapshotService, _cut_at
 from birzha.domain.market import Candle, CandleSeries, Instrument
 
@@ -91,6 +92,54 @@ def test_snapshot_t0_is_latest_completed_observation_not_oldest_timeframe_end() 
     assert snapshot.normalized_features.version == "NORMALIZED_FEATURES_V1"
     assert snapshot.to_dict()["normalized_features"]["version"] == "NORMALIZED_FEATURES_V1"
     assert any(reason.startswith("H1: insufficient_history") for reason in quality.reasons)
+
+
+def test_snapshot_does_not_build_profile_without_volume_capability(monkeypatch) -> None:
+    profile_calls: list[str] = []
+    profile_builder = snapshot_module.profile_from_candles
+
+    def tracked_profile_builder(series: CandleSeries, *, bins: int = 24):
+        profile_calls.append(series.instrument.asset_class)
+        return profile_builder(series, bins=bins)
+
+    monkeypatch.setattr(snapshot_module, "profile_from_candles", tracked_profile_builder)
+
+    for asset_class in ("index", "equity"):
+        instrument = replace(
+            INSTRUMENT,
+            symbol="TEST",
+            secid="TEST",
+            asset_class=asset_class,  # type: ignore[arg-type]
+            data_capabilities=("CANDLES", "TRADING_CALENDAR"),
+        )
+
+        class MarketDataWithoutVolume:
+            def resolve(self, symbol: str, *, as_of: date | None = None) -> Instrument:
+                assert symbol == "TEST"
+                assert as_of == date(2026, 8, 28)
+                return instrument
+
+            def candles_for_instrument(
+                self,
+                resolved: Instrument,
+                *,
+                timeframe: str,
+                **kwargs: object,
+            ) -> CandleSeries:
+                return FakeMarketData().candles_for_instrument(
+                    resolved, timeframe=timeframe, **kwargs
+                )
+
+        snapshot = MarketSnapshotService(
+            market_data=MarketDataWithoutVolume(), flow=None  # type: ignore[arg-type]
+        ).build("TEST", as_of_date="2026-08-28")
+
+        assert snapshot.volume_profile is None
+        assert snapshot.normalized_features is not None
+        assert snapshot.normalized_features.profile_method is None
+        assert not any(warning.startswith("VOLUME_PROFILE:") for warning in snapshot.warnings)
+
+    assert profile_calls == []
 
 
 
