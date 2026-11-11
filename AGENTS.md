@@ -1,3 +1,10 @@
+## Контроль чатов и Модель 3 — 29.10.2026
+При поручении контроля/аудита исполнения другим чатом обязательно прочитать и применить .agents/skills/birzha-chat-controller/SKILL.md.
+При данных Модели 3 Пурнова дополнительно прочитать .agents/skills/birzha-model3-data/SKILL.md.
+Если файл недоступен, явно сообщить; не утверждать применение. В отчёте различать прочитанные правила и фактически выполненные проверки.
+Перед новым поручением использовать предусмотренную навыком проверку состояния. Пауза владельца сохраняется; новые правила её не отменяют.
+Документы источников читать по ссылкам навыка, не заменять памятью чата. Не копировать канонические облачные документы и частные данные в публичный GitHub.
+
 # AGENTS.md — autonomous market-data work
 
 > **Owner decision 2026-10-31:** retire the `RTSI` cash index from all active workflows and archive routing. Work with `RI` RTS futures only, resolving exact contracts by session. `MOEX_HISTDATA_RI_MCP_CANONICAL` is an RI futures book, never an RTSI book. Preserve historical index data and immutable price rows; do not rewrite/delete history or assume GitHub edits are deployed to HOME.
