@@ -45,15 +45,10 @@ def test_month_mcp_fills_multiple_batches_and_preserves_parallel_contract(monkey
     values = {f:1 for f in OUTPUTS}
     values['sbprox_quality'] = CLOCK_WINDOW
 
-    def aggregate(source, secid, tf, left, right, now, **kwargs):
-        rows = [dict(secid=secid,timeframe=tf,begin=begin,ohlcv=[100,100,100,100,150],
-                     values=values,moex_m1_reference=None)
-                for begin in (row[index['begin']],later[index['begin']],latest[index['begin']])
-                if secid=='RIH6' and left<=begin<right]
-        return {'rows':rows}
-
-    def observed(service, source, a, b, reference):
-        return aggregate(source, 'RIH6', 'H1', a.isoformat(), b.isoformat(), service.now())['rows']
+    def observed(service, source, windows, reference):
+        return [dict(secid=secid,timeframe='H1',begin=begin.isoformat(),
+                     ohlcv=[100,100,100,100,150],values=values,moex_m1_reference=None)
+                for secid,begin in windows if secid=='RIH6']
 
     monkeypatch.setattr(sbprox_month, 'observed_hours', observed)
     monkeypatch.setattr(sbprox_month,'ROWS_PER_BATCH',1)
@@ -184,16 +179,16 @@ def test_range_bounds_accept_current_month_and_exclude_open_hour():
         sbprox_month.sync_window(now, '2026-12', None, '', '')
 
 
-def test_source_hour_without_canonical_row_is_reported(source):
+def test_source_beyond_canonical_window_is_not_read(source):
     book = Book(source)
-    book.read_m1 = lambda *args: None
+    book.read_sbprox_master = lambda: pytest.fail('no canonical target to read')
     s = service(book)
     s.now = lambda: datetime.fromisoformat('2026-11-11T12:43:00+03:00')
     book.rows[2][HEADER.index('begin')] = '2026-02-12T09:00:00+03:00'
     book.rows[2][HEADER.index('timeframe')] = 'H1'
     p = sbprox_month.make_plan(s, 'update',
         datetime.fromisoformat('2026-01-01T00:00:00+03:00'), s.now(), automatic=True)[0]
-    assert p['source_last_hour'] == '2026-02-11T09:00:00+03:00'
-    assert p['source_without_target_rows'] == 1
-    assert p['gap_counts'] == {'NO_CANONICAL_INDICATOR_ROW': 1}
+    assert p['source_last_hour'] is None and p['canonical_last_end'] is None
+    assert p['source_without_target_rows'] == 0
+    assert p['gap_counts'] == {'CANONICAL_WINDOW_UNVERIFIED': 1}
     assert p['planned_cells'] == 0 and book.writes == 0

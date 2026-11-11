@@ -221,3 +221,24 @@ def test_unverified_day_and_source_identity_do_not_plan_cells(source):
     assert not repair(service(b),**ARGS)['planned_cells']
     b=Book(source);b.rows[2][HEADER.index('source_record_sha256')]='other'
     assert not repair(service(b),**ARGS)['planned_cells']
+
+
+def test_moex_source_alias_is_checked_again_before_write():
+    from birzha.application.sbprox_field_repair import verify_moex_references
+
+    sha = 'a'*64
+    actual = {'indexed-file': sha, 'original-file': sha}
+    book = SimpleNamespace(
+        validate_service_target=lambda *args: None,
+        read_service_rows=lambda *args: [[], ['RIH6','2026-02','','','','','indexed-file','',sha]],
+    )
+    def metadata(method, url, **kwargs):
+        file_id = url.rsplit('/',1)[-1]
+        return {'id':file_id,'trashed':False,'sha256Checksum':actual[file_id]}
+    book._request = metadata
+    refs = [dict(secid='RIH6',month='2026-02',file_id='indexed-file',
+                 original_file_id='original-file',sha256=sha)]
+    verify_moex_references(book, refs)
+    actual['original-file'] = 'b'*64
+    with pytest.raises(MirrorConflict, match='REFERENCE_CHANGED_NO_WRITE'):
+        verify_moex_references(book, refs)

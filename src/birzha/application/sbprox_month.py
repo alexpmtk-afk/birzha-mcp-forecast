@@ -1,6 +1,7 @@
 """Run RI SBProX backfill inside the archive MCP."""
 
 from collections import Counter, defaultdict
+from functools import lru_cache
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from threading import Lock, Thread
@@ -9,7 +10,7 @@ import uuid
 from birzha.application.canonical_market_mirror import MirrorConflict, digest
 from birzha.application.model3_indicator_coverage import RI_SBPROX_INDICATOR_COLUMNS
 from birzha.application.model3_write_audit import normalized, record, recover
-from birzha.application.sbprox_field_repair import OPERATION, SCHEMA_SHA256, verify_moex_references
+from birzha.application.sbprox_field_repair import OPERATION, SCHEMA_SHA256, drive_archive_matches, verify_moex_references
 from birzha.application.sbprox_integration import (
     OUTPUTS, aggregate_open_master, indexed_minute_reference, open_master, sheet_plan,
 )
@@ -80,29 +81,33 @@ def sync_window(now, month, year, from_date, till_date):
     return f'{start}/{finish}', a, b, False
 
 
-def observed_hours(service, source, a, b, reference):
-    """Read one verified archive, with calendar bounds derived from its minute rows."""
-    now = service.now()
+def observed_hours(service, source, windows, reference):
+    """Attach observations only to exact intervals already stored in the RI book."""
     hours = []
+    if not windows:
+        return hours
+    by_contract = defaultdict(dict)
+    for (secid, start), finish in windows.items():
+        by_contract[secid][start] = finish
+    now = service.now()
     with open_master(source) as master:
-        db, _ = master
-        if a >= b:
-            return hours
-        coverage = db.execute("""
-            SELECT secid, epoch(min(minute_start::TIMESTAMPTZ)), epoch(max(minute_start::TIMESTAMPTZ))
-            FROM M1_BARS
-            WHERE minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?
-            GROUP BY secid ORDER BY secid
-        """, [a, b]).fetchall()
-        for secid, first, last in coverage:
-            left = datetime.fromtimestamp(first, MOSCOW).replace(minute=0, second=0, microsecond=0)
-            stop = datetime.fromtimestamp(last, MOSCOW).replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-            while left < stop:
-                right = min(left + timedelta(days=7), stop)
+        for secid, items in sorted(by_contract.items()):
+            starts = sorted(items)
+            i = 0
+            while i < len(starts):
+                left = starts[i].replace(second=0, microsecond=0)
+                batch = {}
+                while i < len(starts) and items[starts[i]] <= left + timedelta(days=7):
+                    batch[starts[i]] = items[starts[i]]
+                    i += 1
+                finish = max(batch.values())
+                right = finish.replace(second=0, microsecond=0)
+                if right < finish:
+                    right += timedelta(minutes=1)
                 result = aggregate_open_master(source, master, secid, 'H1', left.isoformat(),
-                                               right.isoformat(), now, reference_minutes=reference)
+                                               right.isoformat(), now, reference_minutes=reference,
+                                               canonical_windows=batch)
                 hours.extend(result['rows'])
-                left = right
     return hours
 
 
@@ -111,11 +116,29 @@ def make_plan(service, period, a, b, *, automatic=False):
     candles = service._schemas('RI', 'H1')
     old = read_indicators(transport)
     header = {field: i for i, field in enumerate(old[0])}
-    source = transport.read_sbprox_master()
-    reference = indexed_minute_reference(transport)
-    observations = observed_hours(service, source, a, b, reference)
-    source_first = min((moscow(row['begin']) for row in observations), default=None)
-    source_last = max((moscow(row['begin']) for row in observations), default=None)
+    candle_fields = {field: i for i, field in enumerate(candles[0])}
+    windows = {}
+    ambiguous = set()
+    for row in candles[1:]:
+        start = moscow(row[candle_fields['bar_start_time']])
+        if not a <= start < b:
+            continue
+        finish = moscow(row[candle_fields['bar_end_time']])
+        if not start < finish <= min(b, start + timedelta(hours=1)):
+            continue
+        key = row[candle_fields['contract_code']], start
+        if key in windows:
+            ambiguous.add(key)
+        windows[key] = finish
+
+    previous = {}
+    for (secid, start), finish in sorted(windows.items()):
+        prior = previous.get(secid)
+        if prior and start < prior[1]:
+            ambiguous.update(((secid, prior[0]), (secid, start)))
+        if not prior or finish > prior[1]:
+            previous[secid] = (start, finish)
+
     targets = {}
     complete = set()
     latest_filled = None
@@ -129,8 +152,6 @@ def make_plan(service, period, a, b, *, automatic=False):
         filled = all(row[header[field]] != '' for field in OUTPUTS)
         if filled and (latest_filled is None or begin > latest_filled):
             latest_filled = begin
-        if automatic and (source_first is None or not source_first <= begin <= source_last):
-            continue
         contract = row[header['secid']]
         if row[header['symbol']] != 'RI' or row[header['timeframe']] != 'H1' or contract not in SERIES.values():
             raise MirrorConflict('SBPROX_MONTH_TARGET_IDENTITY')
@@ -142,10 +163,27 @@ def make_plan(service, period, a, b, *, automatic=False):
             complete.add(key)
 
     contracts = sorted({key[0] for key in targets})
+    usable = {key: finish for key, finish in windows.items()
+              if key in targets and key not in ambiguous
+              and moscow(old[targets[key]][header['end']]) == finish}
+    source = transport.read_sbprox_master() if usable else {'sha256': None}
+    reference = indexed_minute_reference(transport)
+    observations = observed_hours(service, source, usable, reference)
+    source_first = min((moscow(row['begin']) for row in observations), default=None)
+    source_last = max((moscow(row['begin']) for row in observations), default=None)
     observed = {(row['secid'], moscow(row['begin'])): row for row in observations}
-    without_target = observed.keys() - targets.keys()
-    rows = [row for key, row in observed.items() if key in targets and key not in complete]
-    base = sheet_plan({'rows': rows, 'source_sha256': source['sha256']}, candles, old)
+    rows = [row for key, row in observed.items() if key not in complete]
+    @lru_cache(maxsize=None)
+    def archive_matches(file_id, checksum):
+        try:
+            return drive_archive_matches(transport, file_id, checksum)
+        except MirrorConflict as exc:
+            if str(exc) in ('Google request refused (HTTP 403); no fallback',
+                            'Google request refused (HTTP 404); no fallback'):
+                return False
+            raise
+    base = sheet_plan({'rows': rows, 'source_sha256': source['sha256']}, candles, old,
+                      archive_matches=archive_matches)
     by_key = {(r['secid'], moscow(r['begin'])): r for r in base['rows']}
     by_hour = defaultdict(set)
     for secid, begin in targets:
@@ -155,7 +193,10 @@ def make_plan(service, period, a, b, *, automatic=False):
         if (secid, begin) in complete:
             continue
         candidate = by_key.get((secid, begin))
-        reasons = candidate['reasons'] if candidate else ['NO_SBPROX_WINDOW']
+        if (secid, begin) not in usable:
+            reasons = ['CANONICAL_WINDOW_UNVERIFIED']
+        else:
+            reasons = candidate['reasons'] if candidate else ['NO_SBPROX_WINDOW']
         if reasons:
             other_observed = sorted(c for c in by_hour[begin]
                                     if c != secid and (c, begin) in observed)
@@ -165,15 +206,15 @@ def make_plan(service, period, a, b, *, automatic=False):
                       key=lambda r: r['cells'][0]['row_index'])
     write_rows = [r['cells'][0]['row_index'] + 1 for r in selected]
     first_pending = min((moscow(r['begin']) for r in selected), default=None)
-    gaps.extend(dict(secid=secid, begin=begin.isoformat(), reasons=['NO_CANONICAL_INDICATOR_ROW'])
-                for secid, begin in sorted(without_target, key=lambda key: (key[1], key[0])))
+    canonical_end = max(usable.values(), default=None)
     report = dict(month=period, sheet=SHEET, contracts=contracts, target_rows=len(targets),
                   from_time=a.isoformat(), before_time=b.isoformat(), automatic=automatic,
                   source_first_hour=source_first.isoformat() if source_first else None,
                   source_last_hour=source_last.isoformat() if source_last else None,
                   last_filled_hour=latest_filled.isoformat() if latest_filled else None,
                   first_pending_hour=first_pending.isoformat() if first_pending else None,
-                  already_filled_rows=len(complete), source_without_target_rows=len(without_target),
+                  already_filled_rows=len(complete), source_without_target_rows=0,
+                  canonical_last_end=canonical_end.isoformat() if canonical_end else None,
                   distinct_hours=len(by_hour), parallel_contract_hours=sum(len(c)>1 for c in by_hour.values()),
                   planned_rows=len(selected), planned_cells=sum(len(r['cells']) for r in selected),
                   first_write_row=write_rows[0] if write_rows else None,
@@ -198,7 +239,7 @@ def apply_batches(service, report, selected, old, candle_sha, progress):
         for row in selected[start:start+ROWS_PER_BATCH]:
             ref = row['moex_m1_reference']
             if ref:
-                references[(ref['secid'], ref['month'])] = ref
+                references[(ref['secid'], ref['month'], ref.get('original_file_id'))] = ref
             for cell in row['cells']:
                 r, c, v = cell['row_index'], cell['column_index'], cell['value']
                 if c < 95 or expected[r][c] != '':

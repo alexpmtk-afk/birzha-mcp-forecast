@@ -15,6 +15,16 @@ SCHEMA_SHA256 = digest([list(RI_SBPROX_INDICATOR_COLUMNS)])
 OPERATION = 'SBPROX_BLANK_CELL_REPAIR'
 
 
+def drive_archive_matches(transport, file_id, sha256):
+    if not isinstance(file_id, str) or not file_id or not file_id.replace("-", "").replace("_", "").isalnum():
+        return False
+    metadata = transport._request(
+        'GET', f'https://www.googleapis.com/drive/v3/files/{file_id}',
+        params={'fields': 'id,sha256Checksum,trashed'})
+    return (metadata.get('id') == file_id and metadata.get('trashed') is False
+            and metadata.get('sha256Checksum') == sha256)
+
+
 def verify_moex_references(transport, reference_evidence):
     if reference_evidence:
         transport.validate_service_target('RI', 'M1_SOURCE_INDEX')
@@ -23,11 +33,10 @@ def verify_moex_references(transport, reference_evidence):
             hits = [r for r in index[1:] if r[:2] == [ref['secid'], ref['month']]]
             if len(hits) != 1 or hits[0][6] != ref['file_id'] or hits[0][8] != ref['sha256']:
                 raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
-            metadata = transport._request(
-                'GET', f"https://www.googleapis.com/drive/v3/files/{ref['file_id']}",
-                params={'fields':'id,sha256Checksum,trashed'})
-            if (metadata.get('id') != ref['file_id'] or metadata.get('trashed') is not False
-                    or metadata.get('sha256Checksum') != ref['sha256']):
+            files = [ref['file_id']]
+            if ref.get('original_file_id'):
+                files.append(ref['original_file_id'])
+            if not all(drive_archive_matches(transport, file_id, ref['sha256']) for file_id in files):
                 raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
 
 

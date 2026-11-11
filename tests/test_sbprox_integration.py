@@ -185,3 +185,23 @@ def test_nonstandard_hour_needs_original_indexed_h1_proof(source, changed, compl
         assert raw[9] is complete and raw[3] == finish
     else:
         assert planned["cells"]==[]
+        if changed == "file":
+            rechecked = sheet_plan(got,[header,raw],[ih,target],
+                archive_matches=lambda original, checksum: (original, checksum) == ("other", "1"*64))["rows"][0]
+            assert len(rechecked["cells"]) == 12
+            assert rechecked["moex_m1_reference"]["original_file_id"] == "other"
+
+
+def test_aggregation_uses_exact_canonical_interval(source):
+    from birzha.application.sbprox_integration import aggregate_open_master, open_master
+    start = datetime.fromisoformat('2026-02-11T09:03:00+03:00')
+    end = datetime.fromisoformat('2026-02-11T09:10:30+03:00')
+    with open_master(source) as master:
+        got = aggregate_open_master(source, master, 'RIH6','H1',
+            '2026-02-11T09:00:00+03:00','2026-02-11T10:00:00+03:00',NOW,
+            canonical_windows={start:end})['rows']
+    assert len(got) == 1
+    assert got[0]['begin'] == start.isoformat()
+    assert got[0]['last_minute'] == '2026-02-11T09:10:00+03:00'
+    assert got[0]['minutes'] == 8 and got[0]['ohlcv'][-1] == 80
+    assert got[0]['values']['sbprox_volume_contracts'] == 80
