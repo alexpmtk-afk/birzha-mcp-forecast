@@ -8,7 +8,6 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import duckdb
 
 from birzha.application.sbprox_archive_reader import profile_stats
 from birzha.application.sbprox_moex_comparison import FIELDS, key_for, moscow
@@ -33,6 +32,8 @@ def source_contract():
 
 @contextmanager
 def open_master(source):
+    import duckdb
+
     body = source["body"]
     if len(body) > 128 * 1024 * 1024 or hashlib.sha256(body).hexdigest() != source["sha256"]:
         raise ValueError("SBPROX_SOURCE_HASH_OR_SIZE")
@@ -81,7 +82,7 @@ def _window(secid, start, end, now):
     if a.tzinfo is None or b.tzinfo is None:
         raise ValueError("EXPLICIT_TIMEZONE_REQUIRED")
     a, b = a.astimezone(MOSCOW), b.astimezone(MOSCOW)
-    if a.year != 2026 or b.year != 2026 or not a < b or b-a > timedelta(days=7):
+    if a.year != 2026 or b > datetime(2027, 1, 1, tzinfo=MOSCOW) or not a < b or b-a > timedelta(days=7):
         raise ValueError("BOUNDED_2026_WINDOW_REQUIRED")
     if b > now.astimezone(MOSCOW):
         raise ValueError("FUTURE_WINDOW_REJECTED")

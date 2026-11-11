@@ -15,6 +15,22 @@ SCHEMA_SHA256 = digest([list(RI_SBPROX_INDICATOR_COLUMNS)])
 OPERATION = 'SBPROX_BLANK_CELL_REPAIR'
 
 
+def verify_moex_references(transport, reference_evidence):
+    if reference_evidence:
+        transport.validate_service_target('RI', 'M1_SOURCE_INDEX')
+        index = transport.read_service_rows('RI', 'M1_SOURCE_INDEX')
+        for ref in reference_evidence:
+            hits = [r for r in index[1:] if r[:2] == [ref['secid'], ref['month']]]
+            if len(hits) != 1 or hits[0][6] != ref['file_id'] or hits[0][8] != ref['sha256']:
+                raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
+            metadata = transport._request(
+                'GET', f"https://www.googleapis.com/drive/v3/files/{ref['file_id']}",
+                params={'fields':'id,sha256Checksum,trashed'})
+            if (metadata.get('id') != ref['file_id'] or metadata.get('trashed') is not False
+                    or metadata.get('sha256Checksum') != ref['sha256']):
+                raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
+
+
 def prepare(service, *, exact_secid, timeframe, start, end, max_cells=12):
     if timeframe not in ('D1', 'H1', 'M15'):
         raise MirrorConflict('SBPROX_TIMEFRAME')
@@ -91,19 +107,7 @@ def repair(service, *, exact_secid, timeframe, start, end, max_cells=12,
                     or digest(service._schemas('RI',timeframe)) != digest(candles)
                     or service.transport.read_sbprox_master()['sha256'] != plan['source_sha256']):
                 raise MirrorConflict('SBPROX_CONCURRENT_CHANGE_NO_WRITE')
-            if reference_evidence:
-                service.transport.validate_service_target('RI', 'M1_SOURCE_INDEX')
-                index = service.transport.read_service_rows('RI', 'M1_SOURCE_INDEX')
-                for ref in reference_evidence:
-                    hits = [r for r in index[1:] if r[:2] == [ref['secid'], ref['month']]]
-                    if len(hits) != 1 or hits[0][6] != ref['file_id'] or hits[0][8] != ref['sha256']:
-                        raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
-                    metadata = service.transport._request(
-                        'GET', f"https://www.googleapis.com/drive/v3/files/{ref['file_id']}",
-                        params={'fields':'id,sha256Checksum,trashed'})
-                    if (metadata.get('id') != ref['file_id'] or metadata.get('trashed') is not False
-                            or metadata.get('sha256Checksum') != ref['sha256']):
-                        raise MirrorConflict('SBPROX_MOEX_REFERENCE_CHANGED_NO_WRITE')
+            verify_moex_references(service.transport, reference_evidence)
             try:
                 service.transport.model3_write_cells('RI',sheet,edits,existing_only=True,sbprox_only=True)
             except Exception:

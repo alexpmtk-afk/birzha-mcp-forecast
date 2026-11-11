@@ -3,7 +3,7 @@ import json
 import uuid
 from birzha.application.canonical_market_mirror import MirrorConflict, digest
 
-CLOSED = {'COMMITTED', 'RECOVERED_COMMITTED'}
+CLOSED = {'COMMITTED', 'RECOVERED_COMMITTED', 'ABORTED_NO_WRITE'}
 
 def normalized(rows):
     from birzha.application.model3_indicator_coverage import COMPACT_HEADERS
