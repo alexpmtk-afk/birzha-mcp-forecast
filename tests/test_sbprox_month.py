@@ -115,32 +115,64 @@ def test_month_mcp_fills_multiple_batches_and_preserves_parallel_contract(monkey
     asyncio.run(check())
 
 
-def test_hourly_view_keeps_causal_selection_even_when_other_contract_has_sbprox():
+def test_hourly_view_shares_archive_choice_across_moscow_expiry():
     from types import SimpleNamespace
+    from birzha.application.google_first_archive import GoogleFirstArchive
+    from birzha.domain.market import Instrument
+    from birzha.providers.moex_history import ARCHIVE_EXPIRY_POLICY
+
     book = Book({'sha256':'a'*64})
     idx = {f:i for i,f in enumerate(HEADER)}
-    book.rows[2][idx['timeframe']] = 'H1'
-    book.rows[2][idx['sbprox_volume_contracts']] = 150
-    parallel = list(book.rows[2])
-    parallel[idx['secid']] = 'RIM6'
-    parallel[idx['source_record_key']] = 'parallel-raw'
-    parallel[idx['sbprox_volume_contracts']] = ''
-    book.rows.append(parallel)
-    book.raw[0].append('trade_session_date')
-    book.raw[1].append('2026-02-12')
-    r = list(book.raw[1]);r[0]='parallel-raw';r[1]='RIM6';book.raw.append(r)
-    s = service(book)
+    template = book.rows[2]
+    book.rows = book.rows[:2]
+    book.raw = [book.raw[0] + ['trade_session_date']]
+    for secid, day, hour, trade_date, volume in (
+        ('RIH6', '2026-03-19', '19', '2026-03-20', 100),
+        ('RIM6', '2026-03-19', '19', '2026-03-20', 900),
+        ('RIM6', '2026-03-20', '09', '', 700),
+        ('RIH6', '2026-03-20', '10', '2026-03-20', 500),
+    ):
+        begin, end = f'{day}T{hour}:00:00+03:00', f'{day}T{hour}:59:59+03:00'
+        key = f'RI|H1|{secid}|{begin}'
+        row = list(template)
+        for field, value in dict(begin=begin, end=end, timeframe='H1', secid=secid,
+                                 source_record_key=key, sbprox_volume_contracts=volume).items():
+            row[idx[field]] = value
+        book.rows.append(row)
+        book.raw.append([key,secid,begin,100,100,100,100,volume,True,'raw-sha',end,trade_date])
+
+    def contract(secid, expiry):
+        return Instrument(symbol='RI', secid=secid, board='RFUD', engine='futures',
+                          market='forts', asset_class='future', last_trade_date=expiry,
+                          roll_policy=ARCHIVE_EXPIRY_POLICY)
+
+    s = GoogleFirstArchive(book, SimpleNamespace(), 'a'*40)
+    s._schemas = lambda *args: deepcopy(book.raw)
+    s._status = lambda symbol: {
+        'google_first_contract|2026-03-19': json.dumps(contract('RIM6','2026-06-18').to_dict()),
+        f'google_first_contract|2026-03-20|{ARCHIVE_EXPIRY_POLICY}':
+            json.dumps(contract('RIM6','2026-06-18').to_dict()),
+    }
     calls = []
-    def resolve(symbol,day):
-        calls.append((symbol,day.isoformat()))
-        return SimpleNamespace(secid='RIM6',source='MOEX_ISS_HISTORY_T_MINUS_1_RECONSTRUCTED')
-    s.market = SimpleNamespace(historical_future_resolver=SimpleNamespace(resolve=resolve))
-    result = sbprox_month.hourly_series(s,'2026-02')
-    assert calls==[('RI','2026-02-12')]
-    assert result['distinct_hours']==1 and result['forecast_admission']=='NOT_GRANTED'
-    row = result['rows'][0]
-    assert row['selected_contract']=='RIM6' and row['sheet_row']==4 and row['status']=='SBPROX_MISSING'
-    assert row['values']=={} and not book.writes
+
+    def resolve(symbol, *, as_of):
+        calls.append((symbol, as_of.isoformat()))
+        return contract('RIH6', '2026-03-19')
+
+    s.market.resolve_archive_contract = resolve
+    result = sbprox_month.hourly_series(s, '2026-03')
+    assert calls == [('RI', '2026-03-19')]
+    assert result['futures_archive_roll_policy'] == ARCHIVE_EXPIRY_POLICY
+    assert result['forecast_admission'] == 'NOT_GRANTED'
+    expiry, following, missing = result['rows']
+    assert (expiry['selected_contract'], expiry['trade_session_date']) == ('RIH6', '2026-03-20')
+    assert expiry['values']['sbprox_volume_contracts'] == 100
+    assert following['selected_contract'] == 'RIM6'
+    assert following['values']['sbprox_volume_contracts'] == 700
+    assert missing['status'] == 'SELECTED_CONTRACT_MISSING'
+    assert missing['selected_contract'] == 'RIM6' and 'values' not in missing
+    assert not book.writes
+
 
 def test_month_lost_reply_keeps_pending_receipt_and_does_not_resend():
     import pytest

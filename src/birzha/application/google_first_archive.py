@@ -46,6 +46,21 @@ class GoogleFirstArchive:
         self.transport.validate_service_target(symbol,'SYNC_STATUS')
         return dict(self.transport.read_status(symbol)[1:])
 
+    def archive_contract_for_day(self, *, symbol, timeframe, target, state):
+        """Resolve the same official series for archive collection and views."""
+        day = target.isoformat()
+        decision_key = f'google_first_contract|{day}|{ARCHIVE_EXPIRY_POLICY}'
+        saved = state.get(decision_key)
+        market_symbol = 'Si' if symbol == 'SI' else symbol
+        contract = (Instrument(**json.loads(saved)) if saved else
+                    self.market.resolve_archive_contract(market_symbol, as_of=target))
+        identity(symbol, contract.secid, timeframe)
+        if (contract.roll_policy != ARCHIVE_EXPIRY_POLICY
+                or (contract.engine, contract.market) != ('futures', 'forts')
+                or not contract.last_trade_date or contract.last_trade_date < day):
+            raise MirrorConflict('ARCHIVE_EXPIRY_CONTRACT_EVIDENCE_INVALID')
+        return decision_key, contract
+
     def _audit(self,symbol,run,scope,status,count=0):
         # Fixed codes only; upstream exception text, arguments and credentials never enter audit.
         self.transport.append_quality(symbol,{'audit_id':run+'|'+status,'scope':scope,'status':status,
@@ -68,15 +83,8 @@ class GoogleFirstArchive:
             archive_contract = None
             decision_key=f'google_first_contract|{day}'
             if is_futures_root_symbol(symbol):
-                decision_key+=f'|{ARCHIVE_EXPIRY_POLICY}'
-                saved=state.get(decision_key)
-                archive_contract=(Instrument(**json.loads(saved)) if saved else
-                                  self.market.resolve_archive_contract(market_symbol,as_of=target))
-                identity(symbol,archive_contract.secid,timeframe)
-                if (archive_contract.roll_policy!=ARCHIVE_EXPIRY_POLICY
-                        or (archive_contract.engine,archive_contract.market)!=('futures','forts')
-                        or not archive_contract.last_trade_date or archive_contract.last_trade_date<day):
-                    raise MirrorConflict('ARCHIVE_EXPIRY_CONTRACT_EVIDENCE_INVALID')
+                decision_key, archive_contract = self.archive_contract_for_day(
+                    symbol=symbol, timeframe=timeframe, target=target, state=state)
             key=f'google_first|{symbol}|{timeframe}|{day}'
             receipt=json.loads(state[key]) if state.get(key) else None
             if archive_contract is not None:

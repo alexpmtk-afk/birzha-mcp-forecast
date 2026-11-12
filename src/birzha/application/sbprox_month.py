@@ -15,6 +15,7 @@ from birzha.application.sbprox_integration import (
     OUTPUTS, aggregate_open_master, indexed_minute_reference, open_master, sheet_plan,
 )
 from birzha.application.sbprox_moex_comparison import moscow
+from birzha.providers.moex_history import ARCHIVE_EXPIRY_POLICY
 from birzha.providers.sbprox_ri import MOSCOW, SERIES
 
 SHEET = 'H1_INDICATORS'
@@ -286,11 +287,9 @@ def apply_batches(service, report, selected, old, candle_sha, progress):
 
 
 def hourly_series(service, month):
-    """Read one research row per hour using the historical MOEX resolver."""
-    resolver = getattr(service.market, 'historical_future_resolver', None)
-    if resolver is None:
-        raise MirrorConflict('RI_HISTORICAL_RESOLVER_REQUIRED')
+    """Read one research row per hour using the archive expiry policy."""
     candles = service._schemas('RI', 'H1')
+    state = service._status('RI')
     fields = candles[0]
     source = {r[fields.index('record_key')]: dict(zip(fields,r)) for r in candles[1:]}
     rows = read_indicators(service.transport)
@@ -311,30 +310,30 @@ def hourly_series(service, month):
     decisions = {}
     result = []
     for begin, candidates in sorted(groups.items()):
-        dates = {c.get('trade_session_date') for _,_,c in candidates.values()}
-        output = dict(begin=begin.isoformat(), available_contracts=sorted(candidates))
-        if len(dates) != 1 or not next(iter(dates)):
-            result.append(dict(output,status='TRADE_SESSION_UNVERIFIED'))
-            continue
-        session = next(iter(dates))
-        if session not in decisions:
+        day = begin.date()
+        if day not in decisions:
             try:
-                instrument = resolver.resolve('RI',date.fromisoformat(str(session)))
-                decisions[session] = (instrument.secid
-                    if instrument.source == 'MOEX_ISS_HISTORY_T_MINUS_1_RECONSTRUCTED' else None)
+                _, contract = service.archive_contract_for_day(
+                    symbol='RI', timeframe='H1', target=day, state=state)
+                decisions[day] = contract.secid
             except (ValueError, RuntimeError):
-                decisions[session] = None
-        secid = decisions[session]
-        output.update(trade_session_date=session, selected_contract=secid)
-        if secid is None or secid not in candidates:
-            result.append(dict(output,status='T_MINUS_1_UNVERIFIED' if secid is None else 'SELECTED_CONTRACT_MISSING'))
+                decisions[day] = None
+        secid = decisions[day]
+        candidate = candidates.get(secid)
+        output = dict(begin=begin.isoformat(), calendar_date=day.isoformat(),
+                      available_contracts=sorted(candidates), selected_contract=secid,
+                      trade_session_date=candidate[2].get('trade_session_date') if candidate else None)
+        if candidate is None:
+            status = 'ARCHIVE_CONTRACT_UNVERIFIED' if secid is None else 'SELECTED_CONTRACT_MISSING'
+            result.append(dict(output, status=status))
             continue
-        number,row,candle = candidates[secid]
+        number, row, _ = candidate
         values = {f:row[f] for f in RI_SBPROX_INDICATOR_COLUMNS[95:] if row[f] not in ('',None)}
         result.append(dict(output, sheet_row=number, end=row['end'],
                            status='RESEARCH_ONLY' if values else 'SBPROX_MISSING', values=values))
     return dict(month=month, status='RESEARCH_SERIES', written=False, rows=result,
                 distinct_hours=len(groups), counts=dict(Counter(r['status'] for r in result)),
+                futures_archive_roll_policy=ARCHIVE_EXPIRY_POLICY,
                 forecast_admission='NOT_GRANTED', historical_session_attestation='UNVERIFIED')
 
 
