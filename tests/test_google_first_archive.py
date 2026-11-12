@@ -1,11 +1,12 @@
 from copy import deepcopy
 from dataclasses import asdict
-from datetime import datetime,timedelta
+from datetime import date,datetime,timedelta
 import json
 from types import SimpleNamespace
 import pytest
 from birzha.application.archive_schema import D1_COLUMNS
-from birzha.application.google_first_archive import GoogleFirstArchive,MSK
+from birzha.application.google_first_archive import ARCHIVE_EXPIRY_POLICY,GoogleFirstArchive,MSK
+from birzha.providers.moex_history import MoexHistoricalFutureResolver
 from birzha.application.canonical_market_mirror import MirrorConflict,digest
 from birzha.domain.market import Candle,CandleSeries,Instrument
 from birzha.storage.google_m1_bytes import merge_zip
@@ -29,7 +30,6 @@ class Book:
     def validate_target(self,s,t):assert t in self.data
     def validate_service_target(self,s,t):assert t in ('CONTRACTS','SYNC_STATUS','QUALITY_AUDIT')
     def read_rows(self,s,t):return deepcopy(self.data[t])
-    def read_service_rows(self,s,t):return deepcopy(RI_CONTRACTS) if t=='CONTRACTS' else self.read_rows(s,t)
     def read_status(self,s):return [['key','value'],*[[k,v] for k,v in self.status.items()]]
     def update_status(self,s,u):self.status.update(u)
     def append_quality(self,s,v):self.audit.append(deepcopy(v))
@@ -47,6 +47,16 @@ class Market:
     def resolve(self,s,as_of):
         self.resolves.append((s,as_of));key=s.upper()
         return Instrument(s,CODES[key],'RFUD' if key not in ('SBER','IMOEX') else 'TQBR','futures' if key not in ('SBER','IMOEX') else 'stock','forts' if key not in ('SBER','IMOEX') else 'shares','future' if key not in ('SBER','IMOEX') else ('index' if key=='IMOEX' else 'equity'))
+    def resolve_archive_contract(self,s,*,as_of):
+        key=s.upper()
+        if key=='RI':
+            valid=[r for r in RI_CONTRACTS[1:] if date.fromisoformat(r[6])<=as_of<=date.fromisoformat(r[8])]
+            selected=min(valid,key=lambda r:r[8])
+            secid,expiry=selected[1],selected[8]
+        else:
+            secid,expiry=CODES[key],'2026-12-31'
+        return Instrument(s,secid,'RFUD','futures','forts','future',
+                          last_trade_date=expiry,roll_policy=ARCHIVE_EXPIRY_POLICY)
     def candles_for_instrument(self,ins,**kw):
         self.calls.append((ins.secid,kw))
         if self.fail:raise RuntimeError('private-upstream-value')
@@ -104,7 +114,7 @@ def test_corrupt_cloud_receipt_and_wrong_contract_refused():
     b,m,s=setup();call(s);b.data['D1'][1][12]=100.5
     with pytest.raises(MirrorConflict,match='RECEIPT_CONFLICT'):call(s)
     b,m,s=setup()
-    with pytest.raises(MirrorConflict,match='RI_EXPIRY_SELECTION'):call(s,exact_secid='RIU6')
+    with pytest.raises(MirrorConflict,match='ARCHIVE_EXPIRY_SELECTION'):call(s,exact_secid='RIU6')
     assert not m.calls
 
 @pytest.mark.parametrize('bad',[{'symbol':'RTSI'},{'tf':'W1'},{'day':'2026-10-31'}])
@@ -141,7 +151,7 @@ def test_empty_response_is_not_a_permanent_completed_receipt():
 
 def test_committed_receipt_does_not_bypass_explicit_contract_check():
     b,m,s=setup();call(s)
-    with pytest.raises(MirrorConflict,match='RI_EXPIRY_SELECTION'):call(s,exact_secid='RIU6')
+    with pytest.raises(MirrorConflict,match='ARCHIVE_EXPIRY_SELECTION'):call(s,exact_secid='RIU6')
     assert len(m.calls)==1
 
 def test_semantic_duplicate_keys_fail_before_source():
@@ -221,10 +231,7 @@ class Model3Book(Book):
     from test_model3_google_backfill import Book as IndicatorBook
     from birzha.application.model3_indicator_coverage import COMPACT_RI_INDICATOR_COLUMNS
     writer_guard = IndicatorBook.writer_guard
-    def read_service_rows(self, symbol, sheet):
-        if sheet == 'CONTRACTS':
-            return super().read_service_rows(symbol, sheet)
-        return self.IndicatorBook.read_service_rows(self, symbol, sheet)
+    read_service_rows = IndicatorBook.read_service_rows
     model3_append_rows = IndicatorBook.model3_append_rows
     def __init__(self, timeframe='D1'):
         super().__init__()
@@ -351,3 +358,19 @@ def test_ri_uses_one_quarterly_contract_through_expiry_for_all_frames(tf):
     assert {x['timeframe'] for _,x in market.calls}=={'M1' if tf=='M15' else tf}
     assert json.loads(book.status[key])['secid']=='RIU6'
     assert not market.resolves
+
+
+@pytest.mark.parametrize('root,old,new,asset',[
+    ('RI','RIH6','RIM6','RTS'),('Si','SiH6','SiM6','Si'),
+    ('BR','BRH6','BRJ6','BR'),('GOLD','GDH6','GDM6','GOLD'),
+])
+def test_archive_expiry_resolver_keeps_old_series_even_if_next_volume_is_higher(root,old,new,asset):
+    def row(code, expiry, volume):
+        return dict(SECID=code,ASSETCODE=asset,BOARDID='RFUD',VOLUME=volume,LASTTRADEDATE=expiry)
+    rows=[row(old,'2026-03-19',2),row(new,'2026-04-20',10000),
+          row(old+'-'+new,'2026-03-19',900000),row('OTHERH6','2026-03-18',1000000)]
+    resolver=MoexHistoricalFutureResolver(None)
+    resolver._previous_observed_session=lambda symbol,day:(day-timedelta(days=1),rows)
+    assert resolver.resolve_archive_expiry(root,date(2026,3,19)).secid==old
+    result=resolver.resolve_archive_expiry(root,date(2026,3,20))
+    assert result.secid==new and result.roll_policy==ARCHIVE_EXPIRY_POLICY

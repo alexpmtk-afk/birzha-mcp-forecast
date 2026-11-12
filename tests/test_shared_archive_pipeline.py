@@ -85,7 +85,7 @@ class GoogleREST:
     def __init__(self,symbol,tf,compact=False):
         self.symbol,self.target=GoogleSheetsBridge.target_for_symbol(symbol)
         self.rows=(compact_rows(Book(),compact=="source_count") if compact else Book()).data
-        self.rows.update({'SYNC_STATUS':[['key','value'],['google_first_scan_cursor|'+tf,'2025-01-15']],'QUALITY_AUDIT':[AUDIT],'CONTRACTS':[['symbol','secid','board','engine','market','asset_class','valid_from','valid_to','expiration'],['RI','RIH5','RFUD','futures','forts','FUTURES','2023-03-10','2025-03-20','2025-03-20']]})
+        self.rows.update({'SYNC_STATUS':[['key','value'],['google_first_scan_cursor|'+tf,'2025-01-15']],'QUALITY_AUDIT':[AUDIT],'CONTRACTS':[['symbol']]})
         self.sids={name:i for i,name in enumerate(self.rows,1)}
         self.calls=[]
     def __call__(self,request):

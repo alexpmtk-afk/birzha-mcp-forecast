@@ -4,7 +4,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
-from birzha.application.google_first_archive import GoogleFirstArchive,SYMBOLS
+from birzha.application.google_first_archive import GoogleFirstArchive,SYMBOLS,ARCHIVE_EXPIRY_POLICY
 from birzha.application.market_data import MarketDataService
 from birzha.storage.google_archive_transport import GoogleArchiveTransport
 from birzha.storage.google_mirror_auth import GoogleRefreshToken
@@ -21,15 +21,15 @@ def build_app(service,token,*,sbprox_month_writer=False):
     read=ToolAnnotations(read_only_hint=True,destructive_hint=False,idempotent_hint=True,open_world_hint=False)
     @mcp.tool(name='archive.status',annotations=read)
     def status()->dict:
-        return {'runtime':'GOOGLE_FIRST','canonical_storage':'GOOGLE_SHEETS','m1_storage':'GOOGLE_DRIVE_ZIP','local_candle_store':False,'local_journal':False,'source_sha':service.source_sha,'sole_writer':service.sole_writer,'sbprox_month_writer':monthly.allow_write,'instruments':list(SYMBOLS)}
+        return {'runtime':'GOOGLE_FIRST','canonical_storage':'GOOGLE_SHEETS','m1_storage':'GOOGLE_DRIVE_ZIP','local_candle_store':False,'local_journal':False,'source_sha':service.source_sha,'sole_writer':service.sole_writer,'sbprox_month_writer':monthly.allow_write,'instruments':list(SYMBOLS),'futures_archive_roll_policy':ARCHIVE_EXPIRY_POLICY}
     @mcp.tool(name='archive.coverage',annotations=read)
     def coverage(symbol:str,timeframes:list[str]|None=None)->dict:
         return service.coverage(symbol=symbol,timeframes=tuple(timeframes if timeframes is not None else ('D1','H1','M15')))
-    @mcp.tool(name='archive.collect',description='Google-first one completed Moscow civil day; RI stays in the nearest quarterly contract through expiration, other futures use historical T-1. Preview by default. No local history or source files. Existing rows and formulas preserved.')
+    @mcp.tool(name='archive.collect',description='Google-first one completed Moscow civil day; All futures stay in the nearest series through its official last trading date, then roll the next Moscow date. Preview by default. No local history or source files. Existing rows and formulas preserved.')
     def collect(symbol:str,timeframe:str,day:str,exact_secid:str|None=None,dry_run:bool=True)->dict:
         try:return service.collect(symbol=symbol,timeframe=timeframe,day=day,exact_secid=exact_secid,dry_run=dry_run)
         except Exception:return {'status':'BLOCKED','code':'RECONCILE_CLOUD_STATUS_BEFORE_RETRY','written':'UNKNOWN' if not dry_run else False}
-    @mcp.tool(name='archive.sync',description='Bounded Google-first candle sync. RI Model 3 preview by default. Explicit apply can append missing indicator rows after candle readback. Old indicator cells require a separately approved repair plan.')
+    @mcp.tool(name='archive.sync',description='Bounded Google-first candle sync. D1, H1 and M15 use the same futures expiry policy as archive.collect. RI Model 3 preview by default. Explicit apply can append missing indicator rows after candle readback. Old indicator cells require a separately approved repair plan.')
     def sync(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,
              dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False,
              model3_mode:str='preview',owner_confirmed:bool=False,
