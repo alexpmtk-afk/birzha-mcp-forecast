@@ -25,7 +25,7 @@ def build_app(service,token,*,sbprox_month_writer=False):
     @mcp.tool(name='archive.coverage',annotations=read)
     def coverage(symbol:str,timeframes:list[str]|None=None)->dict:
         return service.coverage(symbol=symbol,timeframes=tuple(timeframes if timeframes is not None else ('D1','H1','M15')))
-    @mcp.tool(name='archive.collect',description='Google-first one completed civil day, exact historical T-1 contract; preview by default. No local history or source files. Existing rows and formulas preserved.')
+    @mcp.tool(name='archive.collect',description='Google-first one completed Moscow civil day; RI stays in the nearest quarterly contract through expiration, other futures use historical T-1. Preview by default. No local history or source files. Existing rows and formulas preserved.')
     def collect(symbol:str,timeframe:str,day:str,exact_secid:str|None=None,dry_run:bool=True)->dict:
         try:return service.collect(symbol=symbol,timeframe=timeframe,day=day,exact_secid=exact_secid,dry_run=dry_run)
         except Exception:return {'status':'BLOCKED','code':'RECONCILE_CLOUD_STATUS_BEFORE_RETRY','written':'UNKNOWN' if not dry_run else False}

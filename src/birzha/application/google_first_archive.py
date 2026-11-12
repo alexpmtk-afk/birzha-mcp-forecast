@@ -18,6 +18,42 @@ def packed(v):return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_asc
 def identity(symbol,secid,tf):
     validate_identity([['record_key','bar_start_time','contract_code'],[f'{symbol}|{tf}|{secid}|2000-01-01','2000-01-01',secid]],symbol,tf,incoming=False)
 
+
+RI_ARCHIVE_ROLL = 'RI_MOSCOW_DAY_AFTER_EXPIRY_V1'
+
+
+def ri_archive_contract(contract_rows, day):
+    """Choose the nearest listed RI quarterly contract through its expiry date."""
+    required = {'symbol','secid','board','engine','market','asset_class','valid_from','valid_to','expiration'}
+    if not contract_rows or not required.issubset(contract_rows[0]):
+        raise MirrorConflict('RI_CONTRACT_REGISTER_SCHEMA')
+    candidates = []
+    seen = set()
+    for values in contract_rows[1:]:
+        row = dict(zip(contract_rows[0], values))
+        secid = row.get('secid')
+        if row.get('symbol') != 'RI' or not isinstance(secid,str) or not re.fullmatch(r'RI[HMUZ][0-9]{1,2}',secid):
+            continue
+        if secid in seen or (str(row.get('board','')).upper(),row.get('engine'),row.get('market'),row.get('asset_class')) != ('RFUD','futures','forts','FUTURES'):
+            raise MirrorConflict('RI_CONTRACT_REGISTER_IDENTITY')
+        seen.add(secid)
+        try:
+            first, last, expiry = (date.fromisoformat(row[k]) for k in ('valid_from','valid_to','expiration'))
+        except (TypeError,ValueError,KeyError):
+            raise MirrorConflict('RI_CONTRACT_REGISTER_DATES') from None
+        if not first <= last == expiry:
+            raise MirrorConflict('RI_CONTRACT_REGISTER_DATES')
+        if first <= day <= last:
+            candidates.append((last, secid))
+    if not candidates:
+        raise MirrorConflict('RI_CONTRACT_REGISTER_NO_ELIGIBLE_SERIES')
+    last,secid = min(candidates)
+    if sum(expiry == last for expiry,_ in candidates) != 1:
+        raise MirrorConflict('RI_CONTRACT_REGISTER_AMBIGUOUS_EXPIRY')
+    return Instrument('RI',secid,'RFUD','futures','forts','future',root_symbol='RI',
+                      last_trade_date=last.isoformat(),expiration_date=last.isoformat(),
+                      roll_policy=RI_ARCHIVE_ROLL,source='CANONICAL_RI_CONTRACTS')
+
 @dataclass
 class GoogleFirstArchive:
     transport: object
@@ -61,9 +97,23 @@ class GoogleFirstArchive:
         run=uuid.uuid4().hex;started=False
         try:
             old=self._schemas(symbol,timeframe);h=old[0];state=self._status(symbol)
+            ri_contract = (ri_archive_contract(self.transport.read_service_rows('RI','CONTRACTS'),target)
+                           if symbol=='RI' else None)
             key=f'google_first|{symbol}|{timeframe}|{day}'
             receipt=json.loads(state[key]) if state.get(key) else None
-            if receipt and exact_secid is not None and receipt.get('secid')!=exact_secid:raise MirrorConflict('EXACT_CONTRACT_NOT_T_MINUS_1_SELECTION')
+            if ri_contract is not None:
+                if exact_secid is not None and exact_secid!=ri_contract.secid:
+                    raise MirrorConflict('EXACT_CONTRACT_NOT_RI_EXPIRY_SELECTION')
+                if receipt and receipt.get('secid')!=ri_contract.secid:
+                    if receipt.get('phase') not in ('COMMITTED','EMPTY'):
+                        raise MirrorConflict('LEGACY_RI_RECEIPT_RECONCILIATION_REQUIRED')
+                    # Preserve the legacy receipt when it belongs to the other contract.
+                    key+=f'|{RI_ARCHIVE_ROLL}'
+                    receipt=json.loads(state[key]) if state.get(key) else None
+                    if receipt and receipt.get('secid')!=ri_contract.secid:
+                        raise MirrorConflict('RECEIPT_CONFLICT')
+            elif receipt and exact_secid is not None and receipt.get('secid')!=exact_secid:
+                raise MirrorConflict('EXACT_CONTRACT_NOT_T_MINUS_1_SELECTION')
             if receipt and receipt.get('phase')=='COMMITTED':
                 secid=receipt['secid'];identity(symbol,secid,timeframe)
                 selected=[r for r in old[1:] if r[h.index('contract_code')]==secid and stamp(r[h.index('bar_start_time')]).date()==target]
@@ -75,13 +125,22 @@ class GoogleFirstArchive:
             if receipt and receipt.get('phase')=='EMPTY' and self.now()-datetime.fromisoformat(receipt['observed_at'])<timedelta(hours=1):
                 return {'status':'SOURCE_NOT_AVAILABLE_RETRY_LATER','written':False,'source_requests':0}
             if dry_run:
-                return {'status':'PLANNED','written':False,'source_requests':0,'symbol':symbol,'timeframe':timeframe,'day':day,'existing_rows':sum(stamp(r[h.index('bar_start_time')]).date()==target for r in old[1:])}
+                plan={'status':'PLANNED','written':False,'source_requests':0,'symbol':symbol,'timeframe':timeframe,'day':day,
+                      'existing_rows':sum(stamp(r[h.index('bar_start_time')]).date()==target
+                          and (ri_contract is None or r[h.index('contract_code')]==ri_contract.secid) for r in old[1:])}
+                if ri_contract is not None:
+                    plan.update(secid=ri_contract.secid,roll_policy=ri_contract.roll_policy)
+                return plan
             started=True
             self.transport.update_status(symbol,{'google_first_status':'RUNNING','google_first_run':run,'primary_store':'GOOGLE_SHEETS'})
             self._audit(symbol,run,timeframe,'RUNNING')
-            # Persist and reuse the T-1 exact-contract decision; never substitute index RTSI.
             decision_key=f'google_first_contract|{day}'
-            if state.get(decision_key):
+            if ri_contract is not None:
+                instrument=ri_contract
+                decision_key+=f'|{RI_ARCHIVE_ROLL}'
+                if state.get(decision_key)!=packed(asdict(instrument)):
+                    self.transport.update_status(symbol,{decision_key:packed(asdict(instrument))})
+            elif state.get(decision_key):
                 instrument=Instrument(**json.loads(state[decision_key]))
             else:
                 instrument=self.market.resolve({'SI':'Si'}.get(symbol,symbol),as_of=target)

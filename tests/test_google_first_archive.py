@@ -1,6 +1,7 @@
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import datetime,timedelta
+import json
 from types import SimpleNamespace
 import pytest
 from birzha.application.archive_schema import D1_COLUMNS
@@ -11,6 +12,16 @@ from birzha.storage.google_m1_bytes import merge_zip
 
 NOW=lambda:datetime(2026,10,31,tzinfo=MSK)
 CODES={'RI':'RIZ6','SI':'SiZ6','BR':'BRX6','GOLD':'GDZ6','SBER':'SBER','IMOEX':'IMOEX'}
+RI_CONTRACTS = [
+    ['symbol','secid','board','engine','market','asset_class','valid_from','valid_to','expiration'],
+    ['RI','RIH5','rfud','futures','forts','FUTURES','2023-03-10','2025-03-20','2025-03-20'],
+    ['RI','RIZ5','rfud','futures','forts','FUTURES','2023-12-15','2025-12-18','2025-12-18'],
+    ['RI','RIH6','rfud','futures','forts','FUTURES','2024-03-15','2026-03-19','2026-03-19'],
+    ['RI','RIM6','rfud','futures','forts','FUTURES','2024-06-14','2026-06-18','2026-06-18'],
+    ['RI','RIU6','rfud','futures','forts','FUTURES','2024-09-13','2026-09-17','2026-09-17'],
+    ['RI','RIZ6','rfud','futures','forts','FUTURES','2024-12-13','2026-12-17','2026-12-17'],
+]
+
 class Book:
     def __init__(self):
         self.data={tf:[D1_COLUMNS+['research_status','normalized_sha256','source_archive_sha256','capture_day_status','source_kind','caveat','source_capture_label','source_file_id']] for tf in ('D1','H1','M15')};self.status={};self.audit=[];self.m1={};self.appends=0;self.fail_append=False
@@ -18,6 +29,7 @@ class Book:
     def validate_target(self,s,t):assert t in self.data
     def validate_service_target(self,s,t):assert t in ('CONTRACTS','SYNC_STATUS','QUALITY_AUDIT')
     def read_rows(self,s,t):return deepcopy(self.data[t])
+    def read_service_rows(self,s,t):return deepcopy(RI_CONTRACTS) if t=='CONTRACTS' else self.read_rows(s,t)
     def read_status(self,s):return [['key','value'],*[[k,v] for k,v in self.status.items()]]
     def update_status(self,s,u):self.status.update(u)
     def append_quality(self,s,v):self.audit.append(deepcopy(v))
@@ -92,7 +104,7 @@ def test_corrupt_cloud_receipt_and_wrong_contract_refused():
     b,m,s=setup();call(s);b.data['D1'][1][12]=100.5
     with pytest.raises(MirrorConflict,match='RECEIPT_CONFLICT'):call(s)
     b,m,s=setup()
-    with pytest.raises(MirrorConflict,match='T_MINUS_1'):call(s,exact_secid='RIU6')
+    with pytest.raises(MirrorConflict,match='RI_EXPIRY_SELECTION'):call(s,exact_secid='RIU6')
     assert not m.calls
 
 @pytest.mark.parametrize('bad',[{'symbol':'RTSI'},{'tf':'W1'},{'day':'2026-10-31'}])
@@ -112,7 +124,7 @@ def test_new_day_resolves_contract_at_that_date_and_sole_writer_required():
     b,m,s=setup();s.sole_writer=False
     with pytest.raises(MirrorConflict,match='SOLE_WRITER'):call(s)
     s.sole_writer=True;call(s)
-    assert str(m.resolves[0][1])=='2026-10-29'
+    assert not m.resolves and m.calls[0][1]['from_date']=='2026-10-29'
     assert s.coverage(symbol='RI',timeframes=('D1',))['timeframes']['D1']['last_date']=='2026-10-29'
 
 
@@ -129,7 +141,7 @@ def test_empty_response_is_not_a_permanent_completed_receipt():
 
 def test_committed_receipt_does_not_bypass_explicit_contract_check():
     b,m,s=setup();call(s)
-    with pytest.raises(MirrorConflict,match='T_MINUS_1'):call(s,exact_secid='RIU6')
+    with pytest.raises(MirrorConflict,match='RI_EXPIRY_SELECTION'):call(s,exact_secid='RIU6')
     assert len(m.calls)==1
 
 def test_semantic_duplicate_keys_fail_before_source():
@@ -209,7 +221,10 @@ class Model3Book(Book):
     from test_model3_google_backfill import Book as IndicatorBook
     from birzha.application.model3_indicator_coverage import COMPACT_RI_INDICATOR_COLUMNS
     writer_guard = IndicatorBook.writer_guard
-    read_service_rows = IndicatorBook.read_service_rows
+    def read_service_rows(self, symbol, sheet):
+        if sheet == 'CONTRACTS':
+            return super().read_service_rows(symbol, sheet)
+        return self.IndicatorBook.read_service_rows(self, symbol, sheet)
     model3_append_rows = IndicatorBook.model3_append_rows
     def __init__(self, timeframe='D1'):
         super().__init__()
@@ -318,3 +333,21 @@ def test_sync_uses_december_candle_for_january_field_plan():
                                           till_date='2026-01-05', fields=['p3_prior_high'])
     assert report['gaps'][0]['value'] == 149
     assert book.features == before and not book.writes and not book.audit
+
+
+@pytest.mark.parametrize('tf', ['D1','H1','M15'])
+def test_ri_uses_one_quarterly_contract_through_expiry_for_all_frames(tf):
+    book,market,service=setup()
+    expiry='2026-06-18'
+    key=f'google_first|RI|{tf}|{expiry}'
+    book.status[key]=json.dumps({'phase':'COMMITTED','secid':'RIU6','rows_sha256':'legacy'})
+    for day,secid in [('2026-06-17','RIM6'),(expiry,'RIM6'),('2026-06-19','RIU6')]:
+        preview=service.collect(symbol='RI',timeframe=tf,day=day)
+        assert preview['secid']==secid
+        result=service.collect(symbol='RI',timeframe=tf,day=day,dry_run=False)
+        assert result['secid']==secid
+        assert service.collect(symbol='RI',timeframe=tf,day=day,dry_run=False)['status']=='REUSED'
+    assert [secid for secid,_ in market.calls]==['RIM6','RIM6','RIU6']
+    assert {x['timeframe'] for _,x in market.calls}=={'M1' if tf=='M15' else tf}
+    assert json.loads(book.status[key])['secid']=='RIU6'
+    assert not market.resolves
