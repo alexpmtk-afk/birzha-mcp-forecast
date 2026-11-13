@@ -4,11 +4,11 @@ import io
 import json
 import tempfile
 import zipfile
+from bisect import bisect_right
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import duckdb
 
 from birzha.application.sbprox_archive_reader import profile_stats
 from birzha.application.sbprox_moex_comparison import FIELDS, key_for, moscow
@@ -33,6 +33,8 @@ def source_contract():
 
 @contextmanager
 def open_master(source):
+    import duckdb
+
     body = source["body"]
     if len(body) > 128 * 1024 * 1024 or hashlib.sha256(body).hexdigest() != source["sha256"]:
         raise ValueError("SBPROX_SOURCE_HASH_OR_SIZE")
@@ -81,7 +83,7 @@ def _window(secid, start, end, now):
     if a.tzinfo is None or b.tzinfo is None:
         raise ValueError("EXPLICIT_TIMEZONE_REQUIRED")
     a, b = a.astimezone(MOSCOW), b.astimezone(MOSCOW)
-    if a.year != 2026 or b.year != 2026 or not a < b or b-a > timedelta(days=7):
+    if a.year != 2026 or b > datetime(2027, 1, 1, tzinfo=MOSCOW) or not a < b or b-a > timedelta(days=7):
         raise ValueError("BOUNDED_2026_WINDOW_REQUIRED")
     if b > now.astimezone(MOSCOW):
         raise ValueError("FUTURE_WINDOW_REJECTED")
@@ -99,7 +101,7 @@ def indexed_minute_reference(transport):
     from birzha.storage.monthly_m1_source import _read_zip_bytes
     months = {}
 
-    def load(secid, month, timeframe, begin):
+    def load(secid, month, timeframe, begin, end=None):
         key = (secid, month, timeframe)
         if key not in months:
             archive = transport.read_m1("RI", secid, month)
@@ -125,31 +127,51 @@ def indexed_minute_reference(transport):
                         hourly[start] = row
             months[key] = (windows, evidence, hourly)
         windows, evidence, hourly = months[key]
-        return windows.get(begin, {}), evidence, hourly.get(begin)
+        if end is None:
+            return windows.get(begin, {}), evidence, hourly.get(begin)
+        start = moscow(begin)
+        buckets = {key_for(timeframe, start), key_for(timeframe, end-timedelta(microseconds=1))}
+        clipped = {minute: values for bucket in buckets for minute, values in windows.get(bucket, {}).items()
+                   if start <= minute < end}
+        return clipped, evidence, hourly.get(begin)
 
     return load
 
 
 def aggregate(source, secid, timeframe, start, end, now, *, reference_minutes=None):
+    with open_master(source) as master:
+        return aggregate_open_master(source, master, secid, timeframe, start, end, now,
+                                     reference_minutes=reference_minutes)
+
+
+def aggregate_open_master(source, master, secid, timeframe, start, end, now, *,
+                          reference_minutes=None, canonical_windows=None):
+    """Aggregate a bounded window using an already verified source snapshot."""
     a, b = _window(secid, start, end, now)
     if timeframe not in ("M15", "H1", "D1"):
         raise ValueError("TIMEFRAME_REQUIRED")
-    with open_master(source) as (db, manifest):
-        all_rows = db.execute("""SELECT secid,minute_start,trade_session_date,session_quality,
-            open,high,low,close,volume,ask,bid,delta FROM M1_BARS
-            WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?
-            ORDER BY minute_start""", [secid, a, b]).fetchall()
-        levels = db.execute("""SELECT minute_start,price,volume FROM PRICE_LEVELS
-            WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?""",
-                            [secid, a, b]).fetchall()
+    db, manifest = master
+    all_rows = db.execute("""SELECT secid,minute_start,trade_session_date,session_quality,
+        open,high,low,close,volume,ask,bid,delta FROM M1_BARS
+        WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?
+        ORDER BY minute_start""", [secid, a, b]).fetchall()
+    levels = db.execute("""SELECT minute_start,price,volume FROM PRICE_LEVELS
+        WHERE secid=? AND minute_start::TIMESTAMPTZ >= ? AND minute_start::TIMESTAMPTZ < ?""",
+                        [secid, a, b]).fetchall()
     groups, minute_keys = {}, {}
+    starts = sorted(canonical_windows) if canonical_windows is not None else []
     for row in all_rows:
         t = datetime.fromisoformat(row[1]).astimezone(MOSCOW)
         if t.second or t.microsecond:
             raise ValueError("MINUTE_ALIGNMENT_REQUIRED")
         if t + timedelta(minutes=1) > b:
             continue
-        if timeframe == "D1":
+        if canonical_windows is not None:
+            index = bisect_right(starts, t) - 1
+            if index < 0 or t >= canonical_windows[starts[index]]:
+                continue
+            key = starts[index].isoformat()
+        elif timeframe == "D1":
             key = str(row[2]) if row[2] else None
         else:
             step = 15 if timeframe == "M15" else 60
@@ -171,17 +193,25 @@ def aggregate(source, secid, timeframe, start, end, now, *, reference_minutes=No
         if bars[4] != ask+bid or delta != ask-bid or sum(profile.values()) != bars[4]:
             raise ValueError("SBPROX_AGGREGATE_TOTALS")
         expected = 15 if timeframe == "M15" else 60
-        complete = timeframe != "D1" and len(rows) == expected
+        canonical_end = canonical_windows[moscow(key)] if canonical_windows is not None else None
+        regular = canonical_end is None or canonical_end in (
+            moscow(key)+timedelta(minutes=expected), moscow(key)+timedelta(minutes=expected, seconds=-1))
+        complete = timeframe != "D1" and regular and len(rows) == expected
         quality = CLOCK_WINDOW if complete else "PARTIAL_OR_SESSION_UNVERIFIED"
         reference = None
         archived_hour = None
         if timeframe != "D1" and not complete and reference_minutes:
             begin = datetime.fromisoformat(key)
             # A request clipped inside a clock window cannot attest that window.
-            if a <= begin and begin + timedelta(minutes=expected) <= b:
+            if canonical_end is not None:
+                ref_rows, evidence, archived_hour = reference_minutes(secid, key[:7], timeframe, key, canonical_end)
+            elif a <= begin and begin + timedelta(minutes=expected) <= b:
                 ref_rows, evidence, archived_hour = reference_minutes(secid, key[:7], timeframe, key)
+            else:
+                ref_rows, evidence = {}, None
+            if evidence and ref_rows:
                 observed = {moscow(r[1]): tuple(r[4:9]) for r in rows}
-                if evidence and ref_rows and observed == ref_rows:
+                if observed == ref_rows:
                     quality, reference = MATCHED_SPARSE_WINDOW, evidence
         stats = profile_stats(profile) if bars[4] > 0 else None
         values = [bars[4], ask, bid, delta,
@@ -199,29 +229,34 @@ def aggregate(source, secid, timeframe, start, end, now, *, reference_minutes=No
 
 
 
-def verified_nonstandard_hour(row, candle, target):
+def verified_nonstandard_hour(row, candle, target, archive_matches=None):
     """Preserve MOEX's original hour while admitting corroborated observations."""
     proof = row.get("archived_moex_hour")
     ref = row.get("moex_m1_reference")
+    complete = proof.get("is_complete") if proof else None
+    matching_flags = (complete, str(complete).upper())
     if (row["timeframe"] != "H1" or not proof or not ref
-            or candle.get("is_complete") not in (False, "FALSE")
-            or target.get("source_complete_flag") not in (False, "FALSE")
-            or proof.get("is_complete") is not False
+            or type(complete) is not bool
+            or candle.get("is_complete") not in matching_flags
+            or target.get("source_complete_flag") not in matching_flags
             or proof.get("secid") != row["secid"]
             or not proof.get("normalized_sha256")
             or candle.get("normalized_sha256") != proof["normalized_sha256"]
-            or candle.get("source_file_id") != ref["file_id"]
             or [proof.get(k) for k in FIELDS] != row["ohlcv"]):
         return False
     try:
         start, finish = moscow(proof["begin"]), moscow(proof["end"])
-        return (start == moscow(row["begin"])
+        valid = (start == moscow(row["begin"])
                 and moscow(row["last_minute"]) <= finish < start + timedelta(hours=1)
+                and (not complete or finish != start + timedelta(minutes=59, seconds=59))
                 and finish == moscow(candle["bar_end_time"]) == moscow(target["end"]))
     except (KeyError, TypeError, ValueError):
         return False
+    original = candle.get("source_file_id")
+    return valid and (original == ref["file_id"] or
+                      bool(archive_matches and archive_matches(original, ref["sha256"])))
 
-def sheet_plan(result, candle_rows, indicator_rows):
+def sheet_plan(result, candle_rows, indicator_rows, *, archive_matches=None):
     """A bounded review plan. No source or indicator writes."""
     if not candle_rows or not indicator_rows:
         raise ValueError("EXISTING_SHEETS_REQUIRED")
@@ -248,8 +283,11 @@ def sheet_plan(result, candle_rows, indicator_rows):
         reasons = []
         values = dict(row["values"])
         nonstandard = (len(raw) == len(target) == 1
-                       and verified_nonstandard_hour(row, raw[0], target[0]))
+                       and verified_nonstandard_hour(row, raw[0], target[0], archive_matches))
+        ref = row.get("moex_m1_reference")
         if nonstandard:
+            if raw[0]["source_file_id"] != ref["file_id"]:
+                ref = dict(ref, original_file_id=raw[0]["source_file_id"])
             values["sbprox_quality"] = MATCHED_NONSTANDARD_WINDOW
         if len(raw) != 1 or len(target) != 1:
             reasons.append("UNIQUE_EXISTING_SOURCE_AND_INDICATOR_ROW_REQUIRED")
@@ -291,7 +329,7 @@ def sheet_plan(result, candle_rows, indicator_rows):
             return hashlib.sha256(json.dumps(value, sort_keys=True, default=str,
                                              separators=(",", ":")).encode()).hexdigest()
         plans.append(dict(secid=row["secid"],begin=row["begin"],cells=cells,reasons=reasons,
-                          moex_m1_reference=row.get("moex_m1_reference"), source_row_sha256=checksum(raw),
+                          moex_m1_reference=ref, source_row_sha256=checksum(raw),
                           indicator_row_sha256=checksum(target)))
     return dict(written=False, mode="REVIEW_ONLY", source_sha256=result["source_sha256"],
                 proposed_columns=missing_columns, rows=plans,

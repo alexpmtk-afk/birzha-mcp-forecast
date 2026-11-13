@@ -147,34 +147,61 @@ def test_sparse_hour_requires_exact_indexed_minute_match(source, difference):
         assert not sheet_plan(result,candles,indicators)["rows"][0]["cells"]
 
 
-@pytest.mark.parametrize("changed", [None, "end", "hash", "file", "volume", "last_minute"])
-def test_nonstandard_hour_needs_original_indexed_h1_proof(source, changed):
+@pytest.mark.parametrize("complete", [False, True])
+@pytest.mark.parametrize("changed", [None, "end", "hash", "file", "volume", "last_minute", "complete_flag", "standard_end"])
+def test_nonstandard_hour_needs_original_indexed_h1_proof(source, changed, complete):
     from datetime import timedelta
     from birzha.application.sbprox_integration import MATCHED_NONSTANDARD_WINDOW
     start = datetime(2026, 2, 11, 9, tzinfo=MOSCOW)
     begin = start.isoformat()
     finish = (start + timedelta(minutes=59,seconds=20)).isoformat()
+    if changed == "standard_end":
+        finish = (start + timedelta(minutes=59, seconds=59)).isoformat()
     minutes = {start+timedelta(minutes=i): (100,100,100,100,10) for i in range(15)}
     evidence = dict(secid="RIH6", month="2026-02",file_id="indexed-moex",sha256="1"*64)
-    proof = dict(secid="RIH6",begin=begin,end=finish,is_complete=False,normalized_sha256="source-hash",
+    proof = dict(secid="RIH6",begin=begin,end=finish,is_complete=complete,normalized_sha256="source-hash",
                  open=100,high=100,low=100,close=100,volume=150)
     got = aggregate(source,"RIH6","H1",begin,(start+timedelta(hours=1)).isoformat(),NOW,
                     reference_minutes=lambda *args:(minutes,evidence,proof))
     header = ["record_key","contract_code","bar_start_time","bar_end_time","open","high","low",
               "close","volume","is_complete","normalized_sha256","source_file_id"]
-    raw = ["raw-key","RIH6",begin,finish,100,100,100,100,150,False,"source-hash","indexed-moex"]
+    raw = ["raw-key","RIH6",begin,finish,100,100,100,100,150,complete,"source-hash","indexed-moex"]
     ih = ["symbol","secid","timeframe","begin","end","source_record_key","source_record_sha256",
           "source_complete_flag",*OUTPUTS]
-    target = ["RI","RIH6","H1",begin,finish,"raw-key","source-hash",False]
+    target = ["RI","RIH6","H1",begin,finish,"raw-key","source-hash",complete]
     if changed == "end": target[4] = begin
     if changed == "hash": raw[10] = "other"
     if changed == "file": raw[11] = "other"
     if changed == "volume": proof["volume"] = 151
     if changed == "last_minute": got["rows"][0]["last_minute"] = (start+timedelta(hours=1)).isoformat()
+    if changed == "complete_flag": proof["is_complete"] = not complete
     planned = sheet_plan(got,[header,raw],[ih,target])["rows"][0]
-    if changed is None:
+    if changed in (None, "standard_end"):
         assert len(planned["cells"])==12
-        assert {c["field"]:c["value"] for c in planned["cells"]}["sbprox_quality"]==MATCHED_NONSTANDARD_WINDOW
-        assert raw[9] is False and raw[3] == finish
+        expected_quality = MATCHED_NONSTANDARD_WINDOW
+        if changed == "standard_end" and complete:
+            expected_quality = "MATCHED_INDEXED_MOEX_M1_RESEARCH"
+        assert {c["field"]:c["value"] for c in planned["cells"]}["sbprox_quality"]==expected_quality
+        assert raw[9] is complete and raw[3] == finish
     else:
         assert planned["cells"]==[]
+        if changed == "file":
+            rechecked = sheet_plan(got,[header,raw],[ih,target],
+                archive_matches=lambda original, checksum: (original, checksum) == ("other", "1"*64))["rows"][0]
+            assert len(rechecked["cells"]) == 12
+            assert rechecked["moex_m1_reference"]["original_file_id"] == "other"
+
+
+def test_aggregation_uses_exact_canonical_interval(source):
+    from birzha.application.sbprox_integration import aggregate_open_master, open_master
+    start = datetime.fromisoformat('2026-02-11T09:03:00+03:00')
+    end = datetime.fromisoformat('2026-02-11T09:10:30+03:00')
+    with open_master(source) as master:
+        got = aggregate_open_master(source, master, 'RIH6','H1',
+            '2026-02-11T09:00:00+03:00','2026-02-11T10:00:00+03:00',NOW,
+            canonical_windows={start:end})['rows']
+    assert len(got) == 1
+    assert got[0]['begin'] == start.isoformat()
+    assert got[0]['last_minute'] == '2026-02-11T09:10:00+03:00'
+    assert got[0]['minutes'] == 8 and got[0]['ohlcv'][-1] == 80
+    assert got[0]['values']['sbprox_volume_contracts'] == 80

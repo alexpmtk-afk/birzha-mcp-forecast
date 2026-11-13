@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+import re
 from typing import Any
 
 from birzha.providers.continuous_futures import (
@@ -23,6 +24,10 @@ from birzha.providers.moex_instrument_contract import (
 )
 
 
+ARCHIVE_EXPIRY_POLICY = "MOEX_MOSCOW_DAY_AFTER_EXPIRY_V1"
+_ARCHIVE_PREFIXES = {"RI": "RI", "SI": "SI", "BR": "BR", "GOLD": "GD"}
+
+
 class MoexHistoricalFutureResolver:
     """One T-1 volume-based decision policy for historical futures roots.
 
@@ -35,6 +40,7 @@ class MoexHistoricalFutureResolver:
         self._client = client
         self._day_cache: dict[tuple[str, date], list[dict[str, Any]]] = {}
         self._decision_cache: dict[tuple[str, date], Instrument] = {}
+        self._archive_cache: dict[tuple[str, date], Instrument] = {}
         self._expiry_cache: dict[str, str] = {}
 
     def _official_expiry(self, secid: str) -> str:
@@ -151,6 +157,40 @@ class MoexHistoricalFutureResolver:
                 }
             )
         return self._decision_cache[key]
+
+    def resolve_archive_expiry(self, root_symbol: str, as_of: date) -> Instrument:
+        """Archive one listed outright per Moscow date through its last trade day."""
+        root = root_symbol.strip()
+        prefix = _ARCHIVE_PREFIXES.get(root.upper())
+        if prefix is None:
+            raise ValueError("Archive expiry policy requires a supported futures root")
+        key = (root.casefold(), as_of)
+        if key not in self._archive_cache:
+            _, rows = self._previous_observed_session(root, as_of)
+            candidates = []
+            for row in rows:
+                secid = _text(row, "SECID")
+                if not re.fullmatch(prefix + r"[FGHJKMNQUVXZ][0-9]{1,2}", secid.upper()):
+                    continue
+                try:
+                    expiry = date.fromisoformat(_text(row, "LASTTRADEDATE")[:10])
+                except ValueError as exc:
+                    raise MoexIssError("Archive contract has no official last trade date") from exc
+                if expiry >= as_of:
+                    candidates.append((expiry, row))
+            if not candidates:
+                raise MoexIssError("No eligible official outright for archive expiry selection")
+            earliest = min(expiry for expiry, _ in candidates)
+            matches = [row for expiry, row in candidates if expiry == earliest]
+            if len(matches) != 1:
+                raise MoexIssError("Ambiguous nearest archive contract expiry")
+            instrument = _pick_instrument(root, as_of, matches)
+            self._archive_cache[key] = Instrument(**{
+                **instrument.to_dict(),
+                "roll_policy": ARCHIVE_EXPIRY_POLICY,
+                "source": "MOEX_ISS_ARCHIVE_CONTRACT_EXPIRY",
+            })
+        return self._archive_cache[key]
 
     def timeline(
         self, root_symbol: str, from_date: date, till_date: date

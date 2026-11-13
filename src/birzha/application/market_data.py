@@ -70,6 +70,11 @@ class MarketDataService:
             return self.provider.resolve_active_future(symbol)
         return self.provider.resolve_active_future(symbol, as_of=as_of)
 
+    def resolve_archive_contract(self, symbol: str, *, as_of: date) -> Instrument:
+        if self.historical_future_resolver is None:
+            raise ValueError("Official historical resolver required for archive expiry policy")
+        return self.historical_future_resolver.resolve_archive_expiry(symbol, as_of)
+
     def candles_for_instrument(
         self,
         instrument: Instrument,

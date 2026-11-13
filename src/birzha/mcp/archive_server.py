@@ -4,30 +4,32 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
-from birzha.application.google_first_archive import GoogleFirstArchive,SYMBOLS
+from birzha.application.google_first_archive import GoogleFirstArchive,SYMBOLS,ARCHIVE_EXPIRY_POLICY
 from birzha.application.market_data import MarketDataService
 from birzha.storage.google_archive_transport import GoogleArchiveTransport
 from birzha.storage.google_mirror_auth import GoogleRefreshToken
 from birzha.security import McpBearerAuthMiddleware
 from birzha.application.canonical_market_mirror import MirrorConflict
+from birzha.application.sbprox_month import MonthlyJobs
 
 SCOPES=('https://www.googleapis.com/auth/spreadsheets','https://www.googleapis.com/auth/drive')
 
-def build_app(service,token):
+def build_app(service,token,*,sbprox_month_writer=False):
     if not token:raise ValueError('ARCHIVE_MCP_AUTH_REQUIRED')
     mcp=MCPServer(name='BIRZHA GOOGLE ARCHIVE',version='1.0')
+    monthly = MonthlyJobs(service,allow_write=sbprox_month_writer)
     read=ToolAnnotations(read_only_hint=True,destructive_hint=False,idempotent_hint=True,open_world_hint=False)
     @mcp.tool(name='archive.status',annotations=read)
     def status()->dict:
-        return {'runtime':'GOOGLE_FIRST','canonical_storage':'GOOGLE_SHEETS','m1_storage':'GOOGLE_DRIVE_ZIP','local_candle_store':False,'local_journal':False,'source_sha':service.source_sha,'sole_writer':service.sole_writer,'instruments':list(SYMBOLS)}
+        return {'runtime':'GOOGLE_FIRST','canonical_storage':'GOOGLE_SHEETS','m1_storage':'GOOGLE_DRIVE_ZIP','local_candle_store':False,'local_journal':False,'source_sha':service.source_sha,'sole_writer':service.sole_writer,'sbprox_month_writer':monthly.allow_write,'instruments':list(SYMBOLS),'futures_archive_roll_policy':ARCHIVE_EXPIRY_POLICY}
     @mcp.tool(name='archive.coverage',annotations=read)
     def coverage(symbol:str,timeframes:list[str]|None=None)->dict:
         return service.coverage(symbol=symbol,timeframes=tuple(timeframes if timeframes is not None else ('D1','H1','M15')))
-    @mcp.tool(name='archive.collect',description='Google-first one completed civil day, exact historical T-1 contract; preview by default. No local history or source files. Existing rows and formulas preserved.')
+    @mcp.tool(name='archive.collect',description='Google-first one completed Moscow civil day; All futures stay in the nearest series through its official last trading date, then roll the next Moscow date. Preview by default. No local history or source files. Existing rows and formulas preserved.')
     def collect(symbol:str,timeframe:str,day:str,exact_secid:str|None=None,dry_run:bool=True)->dict:
         try:return service.collect(symbol=symbol,timeframe=timeframe,day=day,exact_secid=exact_secid,dry_run=dry_run)
         except Exception:return {'status':'BLOCKED','code':'RECONCILE_CLOUD_STATUS_BEFORE_RETRY','written':'UNKNOWN' if not dry_run else False}
-    @mcp.tool(name='archive.sync',description='Bounded Google-first candle sync. RI Model 3 preview by default. Explicit apply can append missing indicator rows after candle readback. Old indicator cells require a separately approved repair plan.')
+    @mcp.tool(name='archive.sync',description='Bounded Google-first candle sync. D1, H1 and M15 use the same futures expiry policy as archive.collect. RI Model 3 preview by default. Explicit apply can append missing indicator rows after candle readback. Old indicator cells require a separately approved repair plan.')
     def sync(symbol:str,from_date:str,till_date:str,timeframes:list[str]|None=None,
              dry_run:bool=True,max_source_windows:int=6,scan_mode:bool=False,
              model3_mode:str='preview',owner_confirmed:bool=False,
@@ -68,7 +70,7 @@ def build_app(service,token):
             expected_plan_sha256=expected_plan_sha256)
         except Exception:return {'status':'BLOCKED','code':'MODEL3_REPAIR_RECONCILE_BEFORE_RETRY','written':False if dry_run else 'UNKNOWN'}
 
-    @mcp.tool(name='archive.model3_backfill',description='RI-only bounded research indicator preview (default); apply requires explicit ownership, OS workbook guard and QUALITY_AUDIT recovery; appends only, never shifts existing rows. Existing 95-column D1/H1/M15 indicator sheets only. No signal admission, no automatic retries.')
+    @mcp.tool(name='archive.model3_backfill',description='RI-only bounded research indicator preview (default); apply requires explicit ownership, OS workbook guard and QUALITY_AUDIT recovery; appends only, never shifts existing rows. Existing 95- or 107-column D1/H1/M15 indicator sheets only. No signal admission, no automatic retries.')
     def model3_backfill(timeframe:str,from_date:str,till_date:str,
                         max_rows:int=50,dry_run:bool=True,
                         owner_confirmed:bool=False,
@@ -120,6 +122,39 @@ def build_app(service,token):
             return {'status':'BLOCKED','code':'SBPROX_RECONCILE_BEFORE_RETRY',
                     'written':False if dry_run else 'UNKNOWN'}
 
+    @mcp.tool(name='archive.sbprox_fill_month',
+              description='Start a bounded RI H1 month in the background. Preview by default. Apply the reviewed plan hash with an authorized sole writer. Poll archive.sbprox_month_status.')
+    def sbprox_fill_month(month:str,dry_run:bool=True,owner_confirmed:bool=False,
+                          external_writer_exclusion_confirmed:bool=False,expected_plan_sha256:str='')->dict:
+        try:
+            return monthly.start(month,dry_run,owner_confirmed,external_writer_exclusion_confirmed,expected_plan_sha256)
+        except MirrorConflict as exc:
+            return {'job_state':'BLOCKED','code':str(exc),'written':False}
+
+    @mcp.tool(name='archive.sbprox_sync',
+              description='Plan or apply RI H1 SBProX from saved Drive data into existing Google rows. Supply month, year, inclusive from_date/till_date, or no dates to discover the current source range and fill holes. Dry-run by default. Poll archive.sbprox_month_status.')
+    def sbprox_sync(month:str='',year:int|None=None,from_date:str='',till_date:str='',
+                    dry_run:bool=True,owner_confirmed:bool=False,
+                    external_writer_exclusion_confirmed:bool=False,expected_plan_sha256:str='')->dict:
+        try:
+            return monthly.start_sync(month,year,from_date,till_date,dry_run,owner_confirmed,
+                                      external_writer_exclusion_confirmed,expected_plan_sha256)
+        except MirrorConflict as exc:
+            return {'job_state':'BLOCKED','code':str(exc),'written':False}
+
+    @mcp.tool(name='archive.sbprox_month_status',annotations=read,
+              description='Read progress, confirmed batches and exact RI month gaps. This call does not start a write.')
+    def sbprox_month_status(job_id:str,offset:int=0,limit:int=50)->dict:
+        return monthly.status(job_id,offset,limit)
+
+    @mcp.tool(name='archive.ri_hourly_series',annotations=read,
+              description='Start a read-only RI research view with at most one selected contract per H1. Uses the same official expiry rollover as archive.collect on the Moscow calendar date. Reports missing data for the selected contract. Poll archive.sbprox_month_status.')
+    def ri_hourly_series(month:str)->dict:
+        try:
+            return monthly.start_series(month)
+        except MirrorConflict as exc:
+            return {'job_state':'BLOCKED','code':str(exc),'written':False}
+
     @mcp.custom_route('/healthz',methods=['GET'])
     async def health(request):return JSONResponse({'status':'ok','runtime':'GOOGLE_FIRST','source_sha':service.source_sha})
     app=mcp.streamable_http_app(json_response=True,transport_security=TransportSecuritySettings(allowed_hosts=['127.0.0.1','127.0.0.1:*','localhost','localhost:*'],allowed_origins=[]))
@@ -134,7 +169,7 @@ def configured_app():
     if os.getenv('BIRZHA_NATIVE_MIRROR_ENABLED','false').lower()=='true':raise ValueError('LEGACY_AND_GOOGLE_FIRST_WRITERS_CONFLICT')
     transport=GoogleArchiveTransport(GoogleRefreshToken(credential,scopes=SCOPES))
     service=GoogleFirstArchive(transport,MarketDataService.default(),sha,sole_writer=os.getenv('BIRZHA_ARCHIVE_SOLE_WRITER','false').lower()=='true')
-    return build_app(service,token)
+    return build_app(service,token,sbprox_month_writer=os.getenv('BIRZHA_ARCHIVE_SBPROX_MONTH_WRITER')=='true')
 
 def main():
     import uvicorn

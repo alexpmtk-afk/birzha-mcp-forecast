@@ -6,6 +6,8 @@ from zoneinfo import ZoneInfo
 from birzha.application.canonical_market_mirror import MirrorConflict,CanonicalMirrorPublisher,rectangular,digest,index_rows,sheet_timestamp,validate_identity
 from birzha.storage.google_sheets_bridge import GoogleSheetsBridge
 from birzha.domain.market import Instrument,Candle
+from birzha.application.market_data import is_futures_root_symbol
+from birzha.providers.moex_history import ARCHIVE_EXPIRY_POLICY
 from birzha.providers.moex_iss import MoexIssClient
 from birzha.storage.google_m1_bytes import validate_zip
 
@@ -17,6 +19,7 @@ def stamp(v):
 def packed(v):return json.dumps(v,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)
 def identity(symbol,secid,tf):
     validate_identity([['record_key','bar_start_time','contract_code'],[f'{symbol}|{tf}|{secid}|2000-01-01','2000-01-01',secid]],symbol,tf,incoming=False)
+
 
 @dataclass
 class GoogleFirstArchive:
@@ -43,6 +46,21 @@ class GoogleFirstArchive:
         self.transport.validate_service_target(symbol,'SYNC_STATUS')
         return dict(self.transport.read_status(symbol)[1:])
 
+    def archive_contract_for_day(self, *, symbol, timeframe, target, state):
+        """Resolve the same official series for archive collection and views."""
+        day = target.isoformat()
+        decision_key = f'google_first_contract|{day}|{ARCHIVE_EXPIRY_POLICY}'
+        saved = state.get(decision_key)
+        market_symbol = 'Si' if symbol == 'SI' else symbol
+        contract = (Instrument(**json.loads(saved)) if saved else
+                    self.market.resolve_archive_contract(market_symbol, as_of=target))
+        identity(symbol, contract.secid, timeframe)
+        if (contract.roll_policy != ARCHIVE_EXPIRY_POLICY
+                or (contract.engine, contract.market) != ('futures', 'forts')
+                or not contract.last_trade_date or contract.last_trade_date < day):
+            raise MirrorConflict('ARCHIVE_EXPIRY_CONTRACT_EVIDENCE_INVALID')
+        return decision_key, contract
+
     def _audit(self,symbol,run,scope,status,count=0):
         # Fixed codes only; upstream exception text, arguments and credentials never enter audit.
         self.transport.append_quality(symbol,{'audit_id':run+'|'+status,'scope':scope,'status':status,
@@ -61,9 +79,27 @@ class GoogleFirstArchive:
         run=uuid.uuid4().hex;started=False
         try:
             old=self._schemas(symbol,timeframe);h=old[0];state=self._status(symbol)
+            market_symbol = 'Si' if symbol=='SI' else symbol
+            archive_contract = None
+            decision_key=f'google_first_contract|{day}'
+            if is_futures_root_symbol(symbol):
+                decision_key, archive_contract = self.archive_contract_for_day(
+                    symbol=symbol, timeframe=timeframe, target=target, state=state)
             key=f'google_first|{symbol}|{timeframe}|{day}'
             receipt=json.loads(state[key]) if state.get(key) else None
-            if receipt and exact_secid is not None and receipt.get('secid')!=exact_secid:raise MirrorConflict('EXACT_CONTRACT_NOT_T_MINUS_1_SELECTION')
+            if archive_contract is not None:
+                if exact_secid is not None and exact_secid!=archive_contract.secid:
+                    raise MirrorConflict('EXACT_CONTRACT_NOT_ARCHIVE_EXPIRY_SELECTION')
+                if receipt and receipt.get('secid')!=archive_contract.secid:
+                    if receipt.get('phase') not in ('COMMITTED','EMPTY'):
+                        raise MirrorConflict('LEGACY_FUTURES_RECEIPT_RECONCILIATION_REQUIRED')
+                    # Preserve the legacy receipt when it belongs to the other contract.
+                    key+=f'|{ARCHIVE_EXPIRY_POLICY}'
+                    receipt=json.loads(state[key]) if state.get(key) else None
+                    if receipt and receipt.get('secid')!=archive_contract.secid:
+                        raise MirrorConflict('RECEIPT_CONFLICT')
+            elif receipt and exact_secid is not None and receipt.get('secid')!=exact_secid:
+                raise MirrorConflict('EXACT_CONTRACT_NOT_T_MINUS_1_SELECTION')
             if receipt and receipt.get('phase')=='COMMITTED':
                 secid=receipt['secid'];identity(symbol,secid,timeframe)
                 selected=[r for r in old[1:] if r[h.index('contract_code')]==secid and stamp(r[h.index('bar_start_time')]).date()==target]
@@ -75,16 +111,23 @@ class GoogleFirstArchive:
             if receipt and receipt.get('phase')=='EMPTY' and self.now()-datetime.fromisoformat(receipt['observed_at'])<timedelta(hours=1):
                 return {'status':'SOURCE_NOT_AVAILABLE_RETRY_LATER','written':False,'source_requests':0}
             if dry_run:
-                return {'status':'PLANNED','written':False,'source_requests':0,'symbol':symbol,'timeframe':timeframe,'day':day,'existing_rows':sum(stamp(r[h.index('bar_start_time')]).date()==target for r in old[1:])}
+                plan={'status':'PLANNED','written':False,'source_requests':0,'symbol':symbol,'timeframe':timeframe,'day':day,
+                      'existing_rows':sum(stamp(r[h.index('bar_start_time')]).date()==target
+                          and (archive_contract is None or r[h.index('contract_code')]==archive_contract.secid) for r in old[1:])}
+                if archive_contract is not None:
+                    plan.update(secid=archive_contract.secid,roll_policy=archive_contract.roll_policy)
+                return plan
             started=True
             self.transport.update_status(symbol,{'google_first_status':'RUNNING','google_first_run':run,'primary_store':'GOOGLE_SHEETS'})
             self._audit(symbol,run,timeframe,'RUNNING')
-            # Persist and reuse the T-1 exact-contract decision; never substitute index RTSI.
-            decision_key=f'google_first_contract|{day}'
-            if state.get(decision_key):
+            if archive_contract is not None:
+                instrument=archive_contract
+                if not state.get(decision_key):
+                    self.transport.update_status(symbol,{decision_key:packed(asdict(instrument))})
+            elif state.get(decision_key):
                 instrument=Instrument(**json.loads(state[decision_key]))
             else:
-                instrument=self.market.resolve({'SI':'Si'}.get(symbol,symbol),as_of=target)
+                instrument=self.market.resolve(market_symbol,as_of=target)
                 identity(symbol,instrument.secid,timeframe)
                 if symbol in ('RI','SI','BR','GOLD') and (instrument.engine,instrument.market)!=('futures','forts'):raise MirrorConflict('FUTURES_ROUTE_REQUIRED')
                 self.transport.update_status(symbol,{decision_key:packed(asdict(instrument))})
